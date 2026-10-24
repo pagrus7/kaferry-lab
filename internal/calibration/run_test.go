@@ -80,6 +80,9 @@ func TestControllerDetectsActualStandinFault(t *testing.T) {
 	if len(got) != 2 || got[0].Result.Verdict != evidence.Pass || got[1].Result.Verdict != evidence.Violation {
 		t.Fatalf("unexpected sensitivity results: %+v", got)
 	}
+	if got[0].Result.RunID == got[1].Result.RunID {
+		t.Fatal("separate calibration histories reused a run ID")
+	}
 	for _, outcome := range got {
 		if outcome.Result.ReleaseQualified {
 			t.Fatal("stand-in calibration qualified a release")
@@ -87,7 +90,9 @@ func TestControllerDetectsActualStandinFault(t *testing.T) {
 		if !reflect.DeepEqual(outcome.Result, evidence.LoadAndCheck(outcome.Bundle)) {
 			t.Fatal("offline recheck changed the observed verdict")
 		}
-		assertOwnership(t, filepath.Dir(outcome.Bundle), 2)
+		if runID := assertOwnership(t, filepath.Dir(outcome.Bundle), 2); runID != outcome.Result.RunID {
+			t.Fatalf("bundle run ID differs from observed ownership: %q / %q", outcome.Result.RunID, runID)
+		}
 	}
 	found := map[string]bool{}
 	for _, finding := range got[1].Result.Findings {
@@ -174,7 +179,7 @@ func childLog(t *testing.T, control string) string {
 	return path
 }
 
-func assertOwnership(t *testing.T, dir string, wantChildren int) {
+func assertOwnership(t *testing.T, dir string, wantChildren int) string {
 	t.Helper()
 	work := filepath.Join(dir, "work")
 	raw, err := os.ReadFile(filepath.Join(work, "ownership.json"))
@@ -189,8 +194,7 @@ func assertOwnership(t *testing.T, dir string, wantChildren int) {
 	if err := json.Unmarshal(raw, &ownership); err != nil {
 		t.Fatal(err)
 	}
-	wantRunID := filepath.Base(filepath.Dir(dir)) + "-" + filepath.Base(dir)
-	if ownership.RunID != wantRunID || ownership.Owner != "kaferry-lab" || ownership.Resources["checkpoint"] != filepath.Join(work, "saved.json") {
+	if strings.TrimSpace(ownership.RunID) == "" || ownership.Owner != "kaferry-lab" || ownership.Resources["checkpoint"] != filepath.Join(work, "saved.json") {
 		t.Fatalf("missing run-scoped ownership: %s", raw)
 	}
 	f, err := os.Open(filepath.Join(work, "processes.jsonl"))
@@ -221,6 +225,7 @@ func assertOwnership(t *testing.T, dir string, wantChildren int) {
 	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected extra process ownership evidence: %v/%v", extra, err)
 	}
+	return ownership.RunID
 }
 
 func readPIDs(path string) []string {

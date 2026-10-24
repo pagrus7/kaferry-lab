@@ -3,7 +3,7 @@
 ## Current step
 
 - M0 accepted at `9d3231a7a314a29c7b91d58bee8c186befb98df1`, pushed on `codex/adversarial-release-lab`. Main remote unchanged. User requests PR **after entire required roadmap is done**, not an interim PR.
-- M1 in progress: artifact verifier/checker/CLI/actual calibration stand-in integrated; controller controls and operating docs/CI added. Initial frozen review at `1c55a1a` found four checker gaps; fixes and control tests are ready for affected follow-ups, then native final-head CI. M2–M6 not implemented.
+- M1 in progress: artifact verifier/checker/CLI/actual calibration stand-in integrated; controller controls and operating docs/CI added. Initial frozen review at `1c55a1a` found four checker gaps; checker fixes passed affected source inspection at `8566332`, which found one ownership-test expectation mismatch; that assertion is corrected for the next frozen follow-up. Native final-head CI remains pending. M2–M6 not implemented.
 - Target v0.6.0 / `d7d485b96a52b711cb10d76dca09aa9b155dec5e`. Kaferry sibling stays read-only. No qualification campaign has run.
 
 ## Acceptance and evidence
@@ -11,7 +11,7 @@
 | Milestone | State | Evidence / remaining |
 | --- | --- | --- |
 | M0 | Accepted | Three independent source follow-ups + final-CI oracle approval at `.cache/reviews/9d3231a7a314a29c7b91d58bee8c186befb98df1/`; native Ubuntu24 AMD64 CI [40139173038](https://github.com/pagrus7/kaferry-lab/actions/runs/40139173038), unit+observer success. Download `.cache/ci/40139173038/`. |
-| M1 | In progress | Prior integrated suite and actual calibration retained. Resume offline rechecks retain healthy PASS / faulty VIOLATION at `.cache/m1/resume-recheck-*.json`. Controller/CLI controls and ownership records integrated. Initial docs/simplicity passed; oracle found two P1/two P2 gaps. Fixed tail omission, stale triggers, conflicting positions and destination identity; targeted controls, test framing simplification and CI coverage now await follow-up reviews and final-head CI. Local verifier remains UNVERIFIED after platform denial. |
+| M1 | In progress | Prior integrated suite and actual calibration retained. Resume offline rechecks retain healthy PASS / faulty VIOLATION at `.cache/m1/resume-recheck-*.json`. Controller/CLI controls and ownership records integrated. Initial docs/simplicity passed; oracle found two P1/two P2 gaps. Fixed tail omission, stale triggers, conflicting positions and destination identity; targeted controls, test framing simplification and CI coverage passed affected source inspection at `8566332`; random-ID ownership assertion needed correction. Fresh exact-SHA reviews and final CI remain. Local verifier remains UNVERIFIED after platform denial. |
 | M2–M6 | Not started | All required real fault scenarios/campaigns/operating delivery remain; no product verdict. |
 
 - M0 P1 initial review found kafka-go decoder successful-prefix suppression. Resolved with strict raw fixed-v11 admission + literal malformed multi-batch controls; old reviews and a–h observations retained under `.cache/reviews/` / `.cache/m0/`.
@@ -28,7 +28,7 @@
 
 ## Ownership, resources, and environment
 
-- Coordinator owns integration, PROGRESS and git. GPT-6.1 Sol/high bounded implementation/research delegates are complete. Independent reviewers `m1_docs_review`, `m1_oracle_review`, `m1_simplicity_review` completed initial source reports; affected follow-ups pending on next freeze. No live delegated edits. No pushes during source reviews.
+- Coordinator owns integration, PROGRESS and git. GPT-6.1 Sol/high bounded implementation/research delegates are complete. Independent reviewers `m1_docs_review`, `m1_oracle_review`, `m1_simplicity_review` completed initial source reports; follow-ups at `8566332` resolved initial findings and identified the ownership-test mismatch; corrected test asserts unique histories and matching bundle/ownership/process IDs, without mirroring ID generation. New exact-SHA follow-ups pending. No live delegated edits. No pushes during source reviews.
 - Original staged module preserved at `/Users/pg/Documents/Codex/2026-10-24-work-in-users-pg-documents-codex/kaferry-lab-handoff/staged/` because resumed workers had stale sandbox roots. Parent has repaired full permissions.
 - No live lab containers/networks/processes. Resume label inventory empty. Prior fixtures cleaned and calibration children reaped; retained bundles `.cache/calibration/cal-20261024a/{healthy-pause,faulty}/bundle`. New test retry reported all owned children absent/reaped. No version container started: verifier stopped at trust initialization.
 - Host Go1.27.2 macOS ARM64, Docker Linux ARM64. AMD64 emulation is development evidence only; final release campaign requires native AMD64 runner. M0 native evidence is actual GitHub hosted Ubuntu24.
