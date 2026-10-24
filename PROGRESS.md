@@ -32,5 +32,7 @@
 - No implementation blocker investigated yet.
 - No lab containers, workers, or fault processes started.
 - No delegated implementation owners active.
-- Setup review and validation: pending initial repository publication.
+- Setup docs/test-oracle/simplicity reviews: all passed for `78f2274` and launcher follow-up `665afef`; reports in `.cache/reviews/`. No harness CI or product qualification exists yet.
+- Setup validation passed: TOML settings, local Markdown links, shell syntax, launcher smoke from an external directory with exact prompt/parent/sub-agent flags, and Codex configuration load with explicit model overrides. No implementation task was launched.
+- Launch implementation with `./scripts/start-codex.sh`; permissions and subscription login remain host-controlled.
 - Raw design discussions are local-only under `.cache/brainstorm/`; they contain superseded proposals and are not requirements.
