@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"sort"
 	"time"
 
@@ -17,33 +18,51 @@ import (
 	fetchAPI "github.com/segmentio/kafka-go/protocol/fetch"
 )
 
-func (o *Observer) fetchProtocol(ctx context.Context, transport *kafka.Transport, topic string, partition int32, offset int64, isolation sarama.IsolationLevel) (*fetchAPI.ResponsePartition, error) {
-	response, e := transport.RoundTrip(ctx, kafka.TCP(o.address), &fetchAPI.Request{ReplicaID: -1, MaxWaitTime: 100, MinBytes: 1, MaxBytes: 4 << 20, IsolationLevel: int8(isolation), SessionID: -1, SessionEpoch: -1, Topics: []fetchAPI.RequestTopic{{Topic: topic, Partitions: []fetchAPI.RequestPartition{{Partition: partition, CurrentLeaderEpoch: -1, FetchOffset: offset, LogStartOffset: -1, PartitionMaxBytes: 4 << 20}}}}})
+func (o *Observer) fetchProtocol(ctx context.Context, topic string, partition int32, offset int64, isolation sarama.IsolationLevel) (*admittedFetch, error) {
+	leader, e := o.client.Leader(topic, partition)
 	if e != nil {
 		return nil, e
 	}
-	r, ok := response.(*fetchAPI.Response)
-	if !ok {
-		return nil, errors.New("unexpected protocol fetch response")
+	conn, e := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", leader.Addr())
+	if e != nil {
+		return nil, e
 	}
-	if r.ErrorCode != 0 {
-		return nil, kafka.Error(r.ErrorCode)
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	deadline := time.Now().Add(3 * time.Second)
+	if parent, ok := ctx.Deadline(); ok && parent.Before(deadline) {
+		deadline = parent
 	}
-	if len(r.Topics) != 1 || r.Topics[0].Topic != topic || len(r.Topics[0].Partitions) != 1 || r.Topics[0].Partitions[0].Partition != partition {
-		return nil, errors.New("missing/ambiguous protocol partition response")
+	if e = conn.SetDeadline(deadline); e != nil {
+		return nil, e
 	}
-	b := &r.Topics[0].Partitions[0]
-	if b.ErrorCode != 0 {
-		return nil, kafka.Error(b.ErrorCode)
+	request := &fetchAPI.Request{ReplicaID: -1, MaxWaitTime: 100, MinBytes: 1, MaxBytes: 4 << 20, IsolationLevel: int8(isolation), SessionID: -1, SessionEpoch: -1, Topics: []fetchAPI.RequestTopic{{Topic: topic, Partitions: []fetchAPI.RequestPartition{{Partition: partition, CurrentLeaderEpoch: -1, FetchOffset: offset, LogStartOffset: -1, PartitionMaxBytes: 4 << 20}}}}}
+	const correlation int32 = 1
+	if e = protocol.WriteRequest(conn, 11, correlation, "kaferry-lab-admitted-fetch", request); e != nil {
+		return nil, e
 	}
-	return b, nil
+	prefix := make([]byte, 4)
+	if _, e = io.ReadFull(conn, prefix); e != nil {
+		return nil, e
+	}
+	size := int32(binary.BigEndian.Uint32(prefix))
+	if size < 0 || size > maxFetchFrame-4 {
+		return nil, errors.New("invalid/oversized Fetch-v11 response")
+	}
+	frame := make([]byte, 4+int(size))
+	copy(frame, prefix)
+	if _, e = io.ReadFull(conn, frame[4:]); e != nil {
+		return nil, e
+	}
+	return decodeFetchV11(frame, correlation, topic, partition)
 }
 
 // ScanPartition uses kafka-go's protocol decoder rather than its high-level
-// Reader, which loses empty-byte and timestamp information. Explicit cursors are
-// advanced through all decoded wire records, including control records. An empty
-// or compacted tail whose final offset cannot be observed is an error; neither
-// high watermark nor silence can manufacture a successful scan.
+// Reader, which loses empty-byte and timestamp information. Before decoding,
+// strict Fetch-v11 admission validates all raw records and retains declared batch
+// ends. Cursors include validated control/compacted spans; neither high watermark
+// nor silence can manufacture a successful scan.
 func (o *Observer) ScanPartition(ctx context.Context, topic string, partition int32, start, end int64, isolation sarama.IsolationLevel) (Scan, error) {
 	result := Scan{Topic: topic, Partition: partition, Start: start, End: end, Next: start, Spans: []Span{}, Records: []Observed{}}
 	if topic == "" || partition < 0 || start < 0 || end < start {
@@ -61,16 +80,15 @@ func (o *Observer) ScanPartition(ctx context.Context, topic string, partition in
 	}
 	result.Cluster = cluster
 	result.TopicID = topicID
-	transport := &kafka.Transport{DialTimeout: 2 * time.Second, ClientID: "kaferry-lab-protocol-observer", MetadataTopics: []string{topic}}
-	defer transport.CloseIdleConnections()
 	for {
 		if e = ctx.Err(); e != nil {
 			return result, e
 		}
-		block, e := o.fetchProtocol(ctx, transport, topic, partition, result.Next, isolation)
+		admitted, e := o.fetchProtocol(ctx, topic, partition, result.Next, isolation)
 		if e != nil {
 			return result, e
 		}
+		block := admitted.partition
 		b := Boundary{Oldest: block.LogStartOffset, HighWatermark: block.HighWatermark, LastStable: block.LastStableOffset}
 		result.Boundary = b
 		if b.Oldest < 0 || b.HighWatermark < b.Oldest || isolation == sarama.ReadCommitted && (b.LastStable < b.Oldest || b.LastStable > b.HighWatermark) {
@@ -90,7 +108,7 @@ func (o *Observer) ScanPartition(ctx context.Context, topic string, partition in
 			return result, nil
 		}
 		previous := result.Next
-		records, spans, next, e := readProtocolBlock(block, partition, previous, end, isolation)
+		records, spans, next, e := readProtocolBlock(admitted, partition, previous, end, isolation)
 		if e != nil {
 			return result, e
 		}
@@ -101,18 +119,28 @@ func (o *Observer) ScanPartition(ctx context.Context, topic string, partition in
 		result.Spans = append(result.Spans, spans...)
 		result.Next = next
 		if next <= previous {
-			return result, fmt.Errorf("protocol fetch made no proven progress at %d before end %d; compacted/truncated tails are unsupported", previous, end)
+			return result, fmt.Errorf("protocol fetch made no proven progress at %d before end %d; no admitted batch proves the remaining tail", previous, end)
 		}
 	}
 }
 
-func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start, end int64, isolation sarama.IsolationLevel) ([]Observed, []Span, int64, error) {
+func readProtocolBlock(admitted *admittedFetch, partition int32, start, end int64, isolation sarama.IsolationLevel) ([]Observed, []Span, int64, error) {
+	if admitted == nil || admitted.partition == nil {
+		return nil, nil, start, errors.New("missing raw Fetch admission")
+	}
+	block := admitted.partition
 	if block.RecordSet.Records == nil {
+		if len(admitted.batches) != 0 {
+			return nil, nil, start, errors.New("client omitted admitted batches")
+		}
 		return nil, nil, start, nil
 	}
 	stream, ok := block.RecordSet.Records.(*protocol.RecordStream)
 	if !ok {
 		return nil, nil, start, errors.New("unsupported protocol record stream")
+	}
+	if len(stream.Records) != len(admitted.batches) {
+		return nil, nil, start, errors.New("client decoded batch count differs from strict admission")
 	}
 	txs := append([]fetchAPI.ResponseTransaction(nil), block.AbortedTransactions...)
 	sort.Slice(txs, func(i, j int) bool { return txs[i].FirstOffset < txs[j].FirstOffset })
@@ -121,7 +149,8 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 	next := start
 	var output []Observed
 	var spans []Span
-	for _, reader := range stream.Records {
+	for batchIndex, reader := range stream.Records {
+		metadata := admitted.batches[batchIndex]
 		var first, pid int64
 		var attributes protocol.Attributes
 		control := false
@@ -139,6 +168,9 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 			control = true
 		default:
 			return nil, nil, start, errors.New("unsupported legacy protocol record batch")
+		}
+		if first != metadata.first || int16(attributes) != metadata.attributes || pid != metadata.producerID {
+			return nil, nil, start, errors.New("decoded batch metadata differs from raw admission")
 		}
 		if first < 0 {
 			return nil, nil, start, errors.New("negative protocol batch offset")
@@ -161,6 +193,9 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 			if r == nil || r.Offset < first || r.Offset <= last || r.Offset == math.MaxInt64 {
 				return nil, nil, start, errors.New("invalid/nonmonotonic protocol record offsets")
 			}
+			if count >= len(metadata.offsets) || r.Offset != metadata.offsets[count] {
+				return nil, nil, start, errors.New("decoded offsets differ from raw admission")
+			}
 			last = r.Offset
 			count++
 			key, e := kafka.ReadAll(r.Key)
@@ -178,7 +213,7 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 				return nil, nil, start, e
 			}
 			if control {
-				if count != 1 || len(key) != 4 || binary.BigEndian.Uint16(key[:2]) != 0 || binary.BigEndian.Uint16(key[2:]) > 1 {
+				if count != 1 || !attributes.Transactional() || len(key) != 4 || binary.BigEndian.Uint16(key[:2]) != 0 || binary.BigEndian.Uint16(key[2:]) > 1 || len(value) != 6 || binary.BigEndian.Uint16(value[:2]) != 0 {
 					return nil, nil, start, errors.New("invalid protocol control record")
 				}
 				controlKind = binary.BigEndian.Uint16(key[2:])
@@ -194,10 +229,10 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 			}
 			batchRecords = append(batchRecords, Observed{Partition: partition, Offset: identity.Int64(r.Offset), Record: record})
 		}
-		if count == 0 {
-			return nil, nil, start, errors.New("empty protocol batch has no retained last-offset delta; completeness unsupported")
+		if int32(count) != metadata.count {
+			return nil, nil, start, errors.New("client returned successful prefix of admitted record count")
 		}
-		for txIndex < len(txs) && txs[txIndex].FirstOffset <= last {
+		for txIndex < len(txs) && txs[txIndex].FirstOffset < metadata.end {
 			aborted[txs[txIndex].ProducerID] = true
 			txIndex++
 		}
@@ -205,7 +240,7 @@ func readProtocolBlock(block *fetchAPI.ResponsePartition, partition int32, start
 		if control && controlKind == 0 {
 			delete(aborted, pid)
 		}
-		batchEnd := last + 1
+		batchEnd := metadata.end
 		if batchEnd <= next {
 			continue
 		}

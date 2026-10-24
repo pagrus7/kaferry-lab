@@ -2,7 +2,7 @@
 
 ## Current step
 
-- M0 source ready for frozen-commit review: integrated inventory, module, CI, identities, fixture and measured observer. M0 is not accepted until independent reviews and native AMD64 final-commit CI. M1 artifact/checker slices are staged only; M2–M6 unimplemented.
+- M0 follow-up source ready to freeze: P1 strict Fetch batch admission fix integrated and tested; initial review at `0af3e7b` retained. NOT pushed. M0 incomplete until affected follow-ups and native AMD64 final-commit CI. M1 staged only; M2–M6 unimplemented.
 - Base commit `49ee1487c5730d8eec6bafed4af4757b18938689`; target v0.6.0 resolves to `d7d485b96a52b711cb10d76dca09aa9b155dec5e`.
 - Permissions and TLS repaired by user. Coordinator can write repo/.git; `SSL_CERT_FILE=/etc/ssl/cert.pem gh api repos/pagrus7/kaferry-lab` reports push=true. Resumed agents retain old sandbox and stage authorized files in external workspace; coordinator integrates.
 - No Kaferry qualification or milestone completion yet. Local live observer attempt f passed on actual Linux ARM64 brokers; do not call it native AMD64 qualification.
@@ -17,18 +17,19 @@
 
 ## Ownership and resources
 
-- Coordinator: PROGRESS.md, runtime fixture scripts, CI, integration and git.
-- `observer_research`: completed module/observer implementation (integrated). Effective primary protocol scanner plus Sarama admin/producer helpers; no duplicate scanner retained.
+- Coordinator: PROGRESS.md, runtime fixture/CI/integration/git; staged `internal/calibration/{standin,run}.go` M1 actual child-process control (not compiled/tested yet; cmd/lab not written).
+- `observer_research`: owns staged observer fix + module deps. P1: kafka-go v0.4.49 (also .51) can suppress malformed trailing records/batches; strict raw v11 Fetch frame/batch admission needed before codec output can establish completeness. No custom proxy/general protocol stack; keep API, remove redundant secondary test reader.
 - `archive_audit`: completed identity/docs slice (integrated); now owns staged `internal/evidence/` M1 offline-checker slice, held until M0 reviewed increment.
 - `coverage_audit`: completed coverage inventory (integrated; 44 cited tests verified); now owns staged `internal/artifact/` M1 verification slice, held until M0 reviewed increment.
 - Shared staging root: `/Users/pg/Documents/Codex/2026-10-24-work-in-users-pg-documents-codex/kaferry-lab-handoff/staged/`. Preserve disjoint ownership; copy only completed files.
-- No live lab resources. Fixtures a and b cleaned after retaining logs/state; `.cache/m0/fixture-b-cleanup.json` records final cleanup and container enumeration was empty. Retry cleanup if needed: `go run ./cmd/fixture down m0-local-20261024b`.
+- No live lab resources. Fixtures a/b/c cleaned with broker logs retained; c cleanup `.cache/m0/fixture-c-cleanup.json`. State retained for idempotent cleanup: `go run ./cmd/fixture down m0-local-20261024c`. Actual local Docker Linux ARM64; native CI pending.
 - Original fixture a exposed identical Apache default cluster IDs; failed topology observation retained, logs captured and all a resources cleaned. New fixture b records crypto-random distinct cluster IDs. Add regression control; do not relabel initial run as pass.
-- Format/vet/race unit suite passed `.cache/m0/final-unit.log`; final integrated live attempt f passed `.cache/m0/m0-observer-20261024f.log`. Failed b–d logs and attempt-a summary retained. Explicit unsupported: LogAppendTime, unobservable compacted tails; scenarios must configure validated CreateTime. No source reviews/native CI complete yet.
+- Initial review reports `.cache/reviews/0af3e7b0dd4e46a8c968323954657ddb2cfa01c7/`: docs passed; simplicity no blockers (optional redundant test reader); test/oracle requests P1 strict batch admission plus malformed multi-record/multi-batch sensitivity control. Source healthy runs do not discharge that defect. Native AMD64 CI pending; no pass claimed.
+- After P1 fix, format/vet/race passed `.cache/m0/strict-final-unit.log`; live integrated h passed `.cache/m0/m0-observer-20261024h.log` (g staging passed). New literal controls reproduce decoder [0,2] successful-prefix loss then reject malformed raw evidence. Old b–f results retained. Unsupported LAT/unknown tails stay fail-closed; no native CI yet.
 
 ## Next actions
 
-1. Freeze M0 source (`git add` scoped source/docs/CI then commit) and request independent docs/test-oracle/simplicity reviews of that exact commit. Reports in `.cache/reviews/<commit>/`. Do not push during source reviews.
+1. Commit integrated P1 fix/docs/handoff, then obtain affected docs/test-oracle/simplicity follow-ups on exact SHA. No push during source reviews; then push only after blockers resolved.
 2. Resolve review findings, push reviewed increment, inspect native `Harness CI` final-commit checks and retain artifact; test reviewer must inspect actual CI evidence before M0 accepted.
 3. Integrate held M1 artifact/checker slices, implement actual trusted `gh attestation verify` boundary, offline check CLI and killed commit-before-produce calibration stand-in. Contract root: `df2f5b7965ed15e7f434f2b06e16b2982c86b63a34dd48cd52ae918a7384eb46` (sorted source doc hashes in `.cache/m0/tagged-contract.sha256`).
 4. Complete M0 acceptance, continue M1–M6 without routine confirmation; update this handoff before long boundaries.

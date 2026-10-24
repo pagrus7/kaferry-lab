@@ -19,8 +19,8 @@ compacted tails without an observable final cursor fail closed. These limits
 must block any affected qualification; they cannot become skipped passing
 assertions. Full signed-int64 timestamp interoperability is not claimed.
 
-Local integrated evidence: `.cache/m0/m0-observer-20261024f.log` (all five live
-subtests passed), `.cache/m0/final-unit.log` (format/vet/race controls). This
+Local integrated evidence: `.cache/m0/m0-observer-20261024h.log` (all five live
+subtests passed), `.cache/m0/strict-final-unit.log` (format/vet/race controls). This
 measured macOS ARM64 orchestration with Linux ARM64 brokers, not native AMD64
 release behavior. Native AMD64 CI and independent reviews are required before
 M0 is accepted. No Kaferry release has been qualified. See [coverage](coverage.md),
@@ -96,7 +96,15 @@ offset cursor. An empty channel, a quiet interval, or the last data record's
 offset cannot prove that the tail was consumed. Control/aborted/compacted offsets
 are gaps, not counts of missing records. The low-level observer must retain
 batch spans, control/aborted decisions, last stable offset and high watermark
-where available, and reject truncated/partial/no-progress fetch evidence.
+where available, and reject truncated/partial/no-progress fetch evidence. A
+fixed-v11 plaintext Fetch admission gate validates frame bounds/correlation,
+requested topic/partition, batch lengths/CRCs, declared record counts, record
+extents and offsets, bounded decompression, and complete consumption before the
+client decoder is used. Declared spans admit legitimate sparse/empty batches;
+visible application records alone never prove a complete batch. This narrow
+gate is needed because kafka-go v0.4.49 (also .51) can suppress malformed
+successful-prefix data. Literal multi-record/multi-batch failure controls
+reproduce that defect and require rejection before scan completion.
 Read-committed scans must not cross the independently supported stable boundary
 while claiming to have read an open-transaction tail. Retention passing the
 cursor invalidates the original availability assumptions.
@@ -140,4 +148,8 @@ Full failed attempts b–d are retained separately: b caught identical default
 cluster IDs, c caught metadata caching and epoch-producer restamping, d caught
 new-topic visibility. The controller now generates distinct cluster IDs, and
 tests use bounded metadata readiness predicates. Attempt e passed in staging;
-f passed after integration. Retries are separate observations, never replacements.
+f passed after integration but a source review then found the decoder admission
+defect; f alone could not discharge that missing sensitivity. After the fix,
+g passed in staging and h after integration. The exact CRC-valid successful-prefix
+counterexample is reproduced and rejected by committed unit controls. Retries
+are separate observations, never replacements.
