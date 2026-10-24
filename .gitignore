@@ -1,0 +1,8 @@
+.cache/
+artifacts/
+bin/
+.env
+.env.*
+!.env.example
+*.local.toml
+.DS_Store
