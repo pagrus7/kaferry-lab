@@ -8,11 +8,11 @@ The purpose is additional evidence beyond Kaferry's core suite: adverse timing, 
 
 ## Implement with Codex
 
-Use Codex with your subscription login, GitHub access, and a disposable Linux Docker environment for integration work. The project config selects **GPT-6.1 Sol, high effort**, including delegated agents. Project configuration requires a trusted checkout; the command below explicitly selects the parent model and effort. Permissions remain your host settings.
+Use Codex with your subscription login, GitHub access, and a disposable Linux Docker environment for integration work. The project config selects **GPT-6.1 Sol, high effort**, including delegated agents. Project configuration requires a trusted checkout; the launcher below explicitly selects both parent and sub-agent settings even before trust is configured. Permissions remain your host settings.
 
 ```sh
 cd /path/to/kaferry-lab
-codex --model gpt-6.1-sol -c 'model_reasoning_effort="high"' "$(cat CODEX_PROMPT.md)"
+./scripts/start-codex.sh
 ```
 
 Start with [AGENTS.md](AGENTS.md), [ROADMAP.md](ROADMAP.md), and [PROGRESS.md](PROGRESS.md). The [execution guide](docs/execution.md) explains delegation, reviews, evidence, and continuation across context limits. [Evidence rules](docs/evidence.md) define what a result can establish; [v0.6 contract notes](docs/contract-v0.6.md) constrain the checker.

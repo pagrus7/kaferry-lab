@@ -2,7 +2,7 @@
 
 ## Entry and environment
 
-Read AGENTS.md, PROGRESS.md, and the current milestone. Inspect the worktree before editing. The project config selects `gpt-6.1-sol` and `high` for the parent and sub-agents. Use a trusted checkout; the README command explicitly selects the parent's settings. If the model is unavailable, report that rather than silently changing it. Host permissions and subscription login remain outside the repository config.
+Read AGENTS.md, PROGRESS.md, and the current milestone. Inspect the worktree before editing. The project config selects `gpt-6.1-sol` and `high` for the parent and sub-agents. Use a trusted checkout; `scripts/start-codex.sh` also supplies these settings explicitly for both. If the model is unavailable, report that rather than silently changing it. Host permissions and subscription login remain outside the repository config.
 
 M0 establishes Go, Docker/Compose, GitHub CLI, a Linux runtime for the release executable, and network access for pinned dependencies/artifacts. Do not assume the setup repository already has these or that harness commands exist. Pin exact resolved versions in implementation. Use local Docker where suitable, otherwise GitHub Linux runners in this repository. A real Docker/image/storage limitation is a prerequisite to resolve or document, not a passing skipped scenario.
 
