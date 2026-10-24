@@ -1,0 +1,70 @@
+name: Harness CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Format, vet, and unit controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          go vet ./...
+          go test -race -count=1 -timeout=3m ./...
+  observer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      LAB_RUN_ID: m0-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Start two digest-pinned Kafka 3.9.2 clusters
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/m0
+          go run ./cmd/fixture up "$LAB_RUN_ID" | tee .cache/m0/fixture-up.log
+      - name: Measure independent observer capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          eval "$(go run ./cmd/fixture env "$LAB_RUN_ID")"
+          go test -v -count=1 -timeout=4m ./internal/observer -run Live 2>&1 | tee .cache/m0/capabilities.log
+      - name: Retain broker logs and clean owned resources
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .cache/m0
+          for role in source dest; do
+            docker logs "kaferry-lab-$LAB_RUN_ID-$role" > ".cache/m0/$role.log" 2>&1 || true
+          done
+          go run ./cmd/fixture down "$LAB_RUN_ID" 2>&1 | tee .cache/m0/cleanup.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: m0-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/m0/
+            .cache/fixtures/
+          retention-days: 14
+          if-no-files-found: error
