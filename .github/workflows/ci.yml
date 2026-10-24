@@ -35,6 +35,8 @@ jobs:
   m1:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      GOCOVERDIR: ${{ github.workspace }}/.cache/m1/coverage
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -46,13 +48,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .cache/bin .cache/m1
+          mkdir -p .cache/bin .cache/m1/coverage
           {
             uname -sm
             test "$(uname -sm)" = "Linux x86_64"
             go version
             gh --version
-            go build -o .cache/bin/lab ./cmd/lab
+            go build -cover -coverpkg=./... -o .cache/bin/lab ./cmd/lab
           } 2>&1 | tee .cache/m1/build.log
       - name: Check golden histories without network access
         shell: bash
@@ -61,7 +63,7 @@ jobs:
           while read -r fixture expected verdict; do
             for attempt in 1 2; do
               status=0
-              sudo unshare --net -- .cache/bin/lab check "internal/evidence/testdata/$fixture" > ".cache/m1/$fixture-$attempt.json" 2> ".cache/m1/$fixture-$attempt.stderr" || status=$?
+              sudo unshare --net -- env GOCOVERDIR="$GOCOVERDIR" .cache/bin/lab check "internal/evidence/testdata/$fixture" > ".cache/m1/$fixture-$attempt.json" 2> ".cache/m1/$fixture-$attempt.stderr" || status=$?
               printf '%s\n' "$status" > ".cache/m1/$fixture-$attempt.exit"
               test "$status" -eq "$expected"
             done
@@ -110,7 +112,7 @@ jobs:
             if [ "$mode" = faulty ]; then expected=1; fi
             for attempt in 1 2; do
               status=0
-              sudo unshare --net -- .cache/bin/lab check ".cache/m1/calibration/$mode/bundle" > ".cache/m1/$mode-recheck-$attempt.json" 2> ".cache/m1/$mode-recheck-$attempt.stderr" || status=$?
+              sudo unshare --net -- env GOCOVERDIR="$GOCOVERDIR" .cache/bin/lab check ".cache/m1/calibration/$mode/bundle" > ".cache/m1/$mode-recheck-$attempt.json" 2> ".cache/m1/$mode-recheck-$attempt.stderr" || status=$?
               printf '%s\n' "$status" > ".cache/m1/$mode-recheck-$attempt.exit"
               test "$status" -eq "$expected"
             done
@@ -132,6 +134,11 @@ jobs:
           assert result["tag"] == "v0.6.0", result
           assert result["commit"] == "d7d485b96a52b711cb10d76dca09aa9b155dec5e", result
           PY
+      - name: Retain statement coverage from the actual M1 executions
+        if: always()
+        shell: bash
+        run: |
+          go tool covdata textfmt -i=.cache/m1/coverage -o=.cache/m1/coverage.out
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

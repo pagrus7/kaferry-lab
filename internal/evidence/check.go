@@ -19,9 +19,10 @@ func key(p identity.SourcePosition) partitionKey {
 }
 
 type checkedAudit struct {
-	audit   Audit
-	outputs []Output
-	seq     identity.Int64
+	audit    Audit
+	outputs  []Output
+	seq      identity.Int64
+	complete bool
 }
 type faultState struct {
 	spec                                   FaultSpec
@@ -91,8 +92,10 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 		faults[spec.ID] = &faultState{spec: spec}
 	}
 	pendingOutputs := map[string][]Output{}
+	observed := map[identity.SourcePosition]string{}
 	audits := map[string]checkedAudit{}
 	auditOrder := []string{}
+	var latestOutput identity.Int64
 	verified, finished := false, false
 	finals := 0
 	for index, e := range events {
@@ -115,6 +118,7 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 			}
 		case "output":
 			o := *e.Output
+			latestOutput = e.Seq
 			if !verified {
 				return invalid("unverified_output", "output observation precedes prepared-input verification")
 			}
@@ -152,9 +156,16 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 			if err := validateAudit(a, outputs, ledger, m.Group); err != nil {
 				return invalid("audit_invalid", err.Error())
 			}
+			for _, output := range outputs {
+				sig, _ := recordSignature(output.Record)
+				if previous, exists := observed[output.Destination]; exists && previous != sig {
+					return invalid("output_conflict", "audits report different record bytes at the same full destination position")
+				}
+				observed[output.Destination] = sig
+			}
 			complete := true
 			for _, scan := range a.Scans {
-				if !scan.Complete || scan.Reached != scan.End || scan.StableEnd < scan.End || strings.TrimSpace(scan.Proof) == "" {
+				if !scan.Complete || scan.Reached != scan.End || scan.StableEnd < scan.End || ((a.Kind == "quiescent" || a.Final) && scan.StableEnd != scan.End) || strings.TrimSpace(scan.Proof) == "" {
 					complete = false
 				}
 			}
@@ -181,7 +192,7 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 			if a.Final && a.Kind != "quiescent" {
 				addMissing("final_not_quiescent", "final audit must stop/reap workers and resolve pending output")
 			}
-			audits[a.ID] = checkedAudit{a, outputs, e.Seq}
+			audits[a.ID] = checkedAudit{audit: a, outputs: outputs, seq: e.Seq, complete: complete}
 			auditOrder = append(auditOrder, a.ID)
 		case "trigger":
 			t := e.Trigger
@@ -193,15 +204,25 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 			if !exists || a.seq >= e.Seq || a.audit.Final {
 				return invalid("trigger_audit", "trigger must cite a previously finalized non-final scan")
 			}
+			if auditOrder[len(auditOrder)-1] != t.AuditID {
+				addMissing("trigger_audit_stale", "fault "+t.FaultID+" does not cite the latest finalized audit")
+			}
+			if latestOutput > a.seq {
+				addMissing("trigger_changed", "output observations are newer than fault "+t.FaultID+" trigger audit")
+			}
 			if t.Predicate != f.spec.TriggerPredicate || t.Observer == "" || t.Proof == "" {
 				addMissing("trigger_proof", "fault "+t.FaultID+" lacks independent trigger proof")
 			}
 			if len(unmatchedRequired(ledger.Entries, a.outputs, nil)) == 0 {
 				addMissing("trigger_unreached", "no independently observed required output lag at fault "+t.FaultID)
 			}
+			if !a.complete {
+				addMissing("trigger_scan_incomplete", "trigger audit lacks confirmed scan boundaries")
+			}
 			for _, scan := range a.audit.Scans {
-				if !scan.Complete || scan.Reached != scan.End || scan.StableEnd < scan.End || scan.Proof == "" {
-					addMissing("trigger_scan_incomplete", "trigger audit lacks confirmed scan boundaries")
+				if scan.End != scan.StableEnd {
+					addMissing("trigger_scan_incomplete", "trigger audit omits an observed destination tail that may contain required output")
+					break
 				}
 			}
 			f.trigger = e.Seq
@@ -224,6 +245,8 @@ func checkHistory(m Manifest, events []Event, r Result) Result {
 				}
 				if f.trigger == 0 {
 					addMissing("trigger_missing", "fault "+o.ID+" was requested without a reached trigger")
+				} else if latestOutput > f.trigger || audits[auditOrder[len(auditOrder)-1]].seq > f.trigger {
+					addMissing("trigger_changed", "output or audit observations changed after the trigger and before fault "+o.ID+" request")
 				}
 				if o.PID <= 0 || (o.Signal != "SIGKILL" && o.Signal != "SIGTERM") || o.ExitCode != nil || o.RecoveryPID != 0 {
 					return invalid("fault_request_invalid", "process-kill request requires PID and signal only")
@@ -432,6 +455,10 @@ func validateLedger(l Ledger) error {
 	for _, p := range l.Destinations {
 		if err := validatePosition(p); err != nil {
 			return err
+		}
+		fixed := l.Destinations[0]
+		if p.Cluster != fixed.Cluster || p.Topic != fixed.Topic || p.TopicID != fixed.TopicID {
+			return fmt.Errorf("v1 destination partitions must share one fixed cluster/topic/topic-ID")
 		}
 		if destinations[key(p)] {
 			return fmt.Errorf("duplicate prepared destination partition")

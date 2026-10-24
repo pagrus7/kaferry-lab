@@ -3,6 +3,7 @@ package calibration
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -138,7 +139,11 @@ func one(ctx context.Context, dir, exe, exeSHA, mode string) (Outcome, error) {
 	if e = json.Unmarshal(actualSource, &verified); e != nil || !reflect.DeepEqual(verified, records) {
 		return outcome, fmt.Errorf("prepared ledger readback failed: %w", e)
 	}
-	runID := filepath.Base(filepath.Dir(dir)) + "-" + mode
+	var runNonce [16]byte
+	if _, e = rand.Read(runNonce[:]); e != nil {
+		return outcome, e
+	}
+	runID := "cal-" + hex.EncodeToString(runNonce[:]) + "-" + mode
 	group := "calibration-" + runID
 	ownership, e := jsonBytes(map[string]any{
 		"schema_version": 1, "run_id": runID, "owner": "kaferry-lab", "namespace": "calibration", "mode": mode,

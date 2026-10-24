@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry-lab/internal/evidence"
+	"github.com/pagrus7/kaferry-lab/internal/identity"
 )
 
 func TestLiteralControlHistories(t *testing.T) {
@@ -345,16 +346,21 @@ func mutateBundle(t *testing.T, dir string, mutate func(map[string]any, map[stri
 	}
 	manifest["artifact"].(map[string]any)["sha256"] = sum(artifactRaw)
 	manifest["artifact"].(map[string]any)["bytes"] = jsonInt(len(artifactRaw))
-	manifest["events"].(map[string]any)["sha256"] = sum(stream.Bytes())
-	manifest["events"].(map[string]any)["bytes"] = jsonInt(stream.Len())
-	manifest["event_count"] = jsonInt(len(events))
+	write(t, filepath.Join(dir, evidence.ArtifactName), artifactRaw)
+	writeFraming(t, dir, manifest, stream.Bytes(), len(events))
+}
+
+func writeFraming(t *testing.T, dir string, manifest map[string]any, stream []byte, count int) {
+	t.Helper()
+	manifest["events"].(map[string]any)["sha256"] = sum(stream)
+	manifest["events"].(map[string]any)["bytes"] = jsonInt(len(stream))
+	manifest["event_count"] = jsonInt(count)
 	manifestRaw, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	completion := map[string]any{"schema_version": 1, "run_id": manifest["run_id"], "manifest_sha256": sum(manifestRaw), "events_sha256": sum(stream.Bytes()), "event_count": jsonInt(len(events))}
-	write(t, filepath.Join(dir, evidence.ArtifactName), artifactRaw)
-	write(t, filepath.Join(dir, evidence.EventsName), stream.Bytes())
+	completion := map[string]any{"schema_version": 1, "run_id": manifest["run_id"], "manifest_sha256": sum(manifestRaw), "events_sha256": sum(stream), "event_count": jsonInt(count)}
+	write(t, filepath.Join(dir, evidence.EventsName), stream)
 	write(t, filepath.Join(dir, evidence.ManifestName), manifestRaw)
 	writeJSON(t, filepath.Join(dir, evidence.CompleteName), completion)
 }
@@ -367,6 +373,189 @@ func TestNormalExitDoesNotProveRequestedKillReached(t *testing.T) {
 	})
 	if result := evidence.LoadAndCheck(dir); result.Verdict != evidence.Inconclusive || !hasCode(result, "fault_not_reached") {
 		t.Fatalf("unrelated exit proved kill: %+v", result)
+	}
+}
+
+func TestAuditHistoryControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, fixture, code string
+		verdict             evidence.Verdict
+		mutate              func([]evidence.Event) []evidence.Event
+	}{
+		{"unscanned-final-tail", "aborted-leak", "scan_incomplete", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			// Omit forbidden output at offset 2, but retain its observed stable
+			// end. Required a/b are present, so only boundary checking catches it.
+			events[10].Audit.Scans[0].End = 2
+			events[10].Audit.Scans[0].Reached = 2
+			return append(events[:9:9], events[10:]...)
+		}},
+		{"unscanned-quiescent-tail", "valid", "scan_incomplete", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			snapshot := finalSnapshot(events, "stopped")
+			a := snapshot[2].Audit
+			a.Kind, a.PendingOutputResolved = "quiescent", true
+			a.Saved = events[9].Audit.Saved
+			a.QuiescenceMethod, a.QuiescenceProof = "workers_stopped", "literal stopped-worker observation"
+			a.Scans[0].StableEnd = 3
+			return insertEvents(events, 7, snapshot)
+		}},
+		{"unscanned-quiescent-trigger-tail", "valid", "trigger_scan_incomplete", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			a := events[2].Audit
+			a.Kind, a.PendingOutputResolved = "quiescent", true
+			a.QuiescenceMethod, a.QuiescenceProof = "workers_stopped", "literal stopped-worker observation"
+			a.Scans[0].StableEnd = 1
+			return events
+		}},
+		{"unscanned-snapshot-trigger-tail", "valid", "trigger_scan_incomplete", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			// A sampled empty prefix cannot prove lag when required output
+			// may already occupy the independently observed unscanned tail.
+			events[2].Audit.Scans[0].StableEnd = 2
+			return events
+		}},
+		{"stale-trigger", "valid", "trigger_audit_stale", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			return insertEvents(events, 3, finalSnapshot(events, "caught-up"))
+		}},
+		{"resolved-before-request", "valid", "trigger_changed", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			return insertEvents(events, 4, finalSnapshot(events, "caught-up"))
+		}},
+		{"audit-before-request", "valid", "trigger_changed", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			a := *events[2].Audit
+			a.ID = "later-empty-sample"
+			return insertEvents(events, 4, []evidence.Event{{RunID: events[2].RunID, Kind: "audit", Audit: &a}})
+		}},
+		{"unfinalized-output-before-trigger", "valid", "trigger_changed", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			snapshot := finalSnapshot(events, "in-progress")
+			withOutputs := insertEvents(events, 3, snapshot[:2])
+			return insertEvents(withOutputs, 7, snapshot[2:])
+		}},
+		{"unfinalized-output-before-request", "valid", "trigger_changed", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			// Observe complete required output before requesting the fault,
+			// but finalize that observation's audit only after the request.
+			snapshot := finalSnapshot(events, "in-progress")
+			withOutputs := insertEvents(events, 4, snapshot[:2])
+			return insertEvents(withOutputs, 7, snapshot[2:])
+		}},
+		{"resolved-then-sampled-lag", "valid", "trigger_changed", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			resolved := finalSnapshot(events, "caught-up")
+			lag := finalSnapshot(events, "sampled-lag")
+			lag[2].Audit.Scans[0].End, lag[2].Audit.Scans[0].Reached = 1, 1
+			lag = append(lag[:1:1], lag[2])
+			return insertEvents(events, 4, append(resolved, lag...))
+		}},
+		{"cross-audit-conflict", "valid", "output_conflict", evidence.HarnessError, func(events []evidence.Event) []evidence.Event {
+			snapshot := finalSnapshot(events, "conflicting")
+			snapshot[0].Output.Record, snapshot[1].Output.Record = snapshot[1].Output.Record, snapshot[0].Output.Record
+			return insertEvents(events, 7, snapshot)
+		}},
+		{"unchanged-repeat-scans", "valid", "", evidence.Pass, func(events []evidence.Event) []evidence.Event {
+			repeated := append(finalSnapshot(events, "repeat-a"), finalSnapshot(events, "repeat-b")...)
+			return insertEvents(events, 7, repeated)
+		}},
+		{"sampled-snapshot", "valid", "", evidence.Pass, func(events []evidence.Event) []evidence.Event {
+			snapshot := finalSnapshot(events, "sampled")
+			snapshot[2].Audit.Scans[0].End, snapshot[2].Audit.Scans[0].Reached = 1, 1
+			snapshot = append(snapshot[:1:1], snapshot[2])
+			return insertEvents(events, 7, snapshot)
+		}},
+		{"latest-trigger-audit", "valid", "", evidence.Pass, func(events []evidence.Event) []evidence.Event {
+			a := *events[2].Audit
+			a.ID = "latest"
+			events[3].Trigger.AuditID = a.ID
+			return insertEvents(events, 3, []evidence.Event{{RunID: events[2].RunID, Kind: "audit", Audit: &a}})
+		}},
+		{"other-destination-satisfies-required", "valid", "ledger_invalid", evidence.HarnessError, func(events []evidence.Event) []evidence.Event {
+			// Both endpoints have the same topic name and partition. Only the
+			// second cluster/topic-ID contains the required bytes.
+			other := events[0].Ledger.Destinations[0]
+			other.Cluster, other.TopicID = "other-cluster", strings.Repeat("3", 32)
+			events[0].Ledger.Destinations = append(events[0].Ledger.Destinations, other)
+			for _, index := range []int{2, 9} {
+				a := events[index].Audit
+				scan := a.Scans[0]
+				scan.Source = other
+				a.Scans = append(a.Scans, scan)
+				a.Scans[0].End, a.Scans[0].Reached, a.Scans[0].StableEnd = 0, 0, 0
+			}
+			for _, index := range []int{7, 8} {
+				position := &events[index].Output.Destination
+				position.Cluster, position.TopicID = other.Cluster, other.TopicID
+			}
+			return events
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given independently authored obligations and a framed observation
+			// history, change only the named observation or identity condition.
+			dir := copyFixture(t, tc.fixture)
+			var manifest map[string]any
+			decode(t, read(t, filepath.Join(dir, evidence.ManifestName)), &manifest)
+			lines := bytes.Split(bytes.TrimSuffix(read(t, filepath.Join(dir, evidence.EventsName)), []byte{'\n'}), []byte{'\n'})
+			events := make([]evidence.Event, len(lines))
+			for i, line := range lines {
+				decode(t, line, &events[i])
+			}
+			events = tc.mutate(events)
+			var stream bytes.Buffer
+			for i, event := range events {
+				event.Seq, event.ElapsedMS = identity.Int64(i+1), identity.Int64(i+1)
+				if err := json.NewEncoder(&stream).Encode(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeFraming(t, dir, manifest, stream.Bytes(), len(events))
+			// When the offline checker evaluates that history, then the exact
+			// verdict and sensitivity finding must match the independent case.
+			got := evidence.LoadAndCheck(dir)
+			if got.Verdict != tc.verdict || (tc.code != "" && !hasCode(got, tc.code)) {
+				t.Fatalf("got %+v; want %s %s", got, tc.verdict, tc.code)
+			}
+			if got.ReleaseQualified || !reflect.DeepEqual(got, evidence.LoadAndCheck(dir)) {
+				t.Fatal("partial history qualified a release or changed on identical offline recheck")
+			}
+		})
+	}
+}
+
+// Copies the valid literal's final observations into a separate snapshot. Its
+// records and expected obligations remain authored fixture bytes.
+func finalSnapshot(events []evidence.Event, id string) []evidence.Event {
+	a := *events[9].Audit
+	a.ID, a.Kind, a.Final = id, "snapshot", false
+	a.Scans = append([]evidence.Scan{}, a.Scans...)
+	a.Saved = []evidence.SavedPosition{}
+	a.PendingOutputResolved, a.QuiescenceMethod, a.QuiescenceProof = false, "", ""
+	first, second := *events[7].Output, *events[8].Output
+	first.AuditID, second.AuditID = id, id
+	return []evidence.Event{
+		{RunID: events[7].RunID, Kind: "output", Output: &first},
+		{RunID: events[8].RunID, Kind: "output", Output: &second},
+		{RunID: events[9].RunID, Kind: "audit", Audit: &a},
+	}
+}
+
+func insertEvents(events []evidence.Event, at int, added []evidence.Event) []evidence.Event {
+	out := append([]evidence.Event{}, events[:at]...)
+	out = append(out, added...)
+	return append(out, events[at:]...)
+}
+
+func TestPreparedDestinationIdentityIsFixed(t *testing.T) {
+	for _, field := range []string{"cluster", "topic", "topic_id"} {
+		t.Run(field, func(t *testing.T) {
+			// Given prepared partitions in one destination, when any identity
+			// component differs, then v1 refuses the ambiguous target ledger.
+			dir := copyFixture(t, "valid")
+			mutateBundle(t, dir, func(m, a map[string]any, events []map[string]any) {
+				destinations := events[0]["ledger"].(map[string]any)["destinations"].([]any)
+				value := "other"
+				if field == "topic_id" {
+					value = strings.Repeat("3", 32)
+				}
+				destinations[1].(map[string]any)[field] = value
+			})
+			if got := evidence.LoadAndCheck(dir); got.Verdict != evidence.HarnessError || !hasCode(got, "ledger_invalid") {
+				t.Fatalf("mixed destination %s admitted: %+v", field, got)
+			}
+		})
 	}
 }
 
@@ -506,17 +695,7 @@ func removeEvent(t *testing.T, dir, kind string) {
 	if !removed {
 		t.Fatalf("fixture has no %s event", kind)
 	}
-	manifest["events"].(map[string]any)["sha256"] = sum(stream.Bytes())
-	manifest["events"].(map[string]any)["bytes"] = jsonInt(stream.Len())
-	manifest["event_count"] = jsonInt(count)
-	raw, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	complete := map[string]any{"schema_version": 1, "run_id": manifest["run_id"], "manifest_sha256": sum(raw), "events_sha256": sum(stream.Bytes()), "event_count": jsonInt(count)}
-	write(t, filepath.Join(dir, evidence.ManifestName), raw)
-	write(t, filepath.Join(dir, evidence.EventsName), stream.Bytes())
-	writeJSON(t, filepath.Join(dir, evidence.CompleteName), complete)
+	writeFraming(t, dir, manifest, stream.Bytes(), count)
 }
 
 func TestExecutionAndSourceMetadataCannotBeOmittedOrInvented(t *testing.T) {

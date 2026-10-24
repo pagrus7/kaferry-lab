@@ -37,6 +37,9 @@ gaps, fixed destination cluster/topic-ID/partition/initial positions, exact byte
 records, required/permitted/forbidden dispositions and supported reasons, and
 allowed topic/partition routes. Source offsets plus explicit proved gaps must
 cover each source interval completely. No offset difference is a record count.
+V1 admits destination partitions from exactly one fixed cluster, topic name and
+topic ID. A ledger mixing any of those identities is a HARNESS_ERROR; matching
+topic names in another cluster or topic incarnation cannot satisfy its routes.
 
 For each audit, append `output` events before its `audit` event. Each output is a
 physical destination position plus independently observed bytes, not a trusted
@@ -45,6 +48,9 @@ retaining sampled end, reached cursor, stable boundary and gap proofs. Record
 positions plus proved gaps must cover the entire declared scan interval without
 duplicates or omissions. An audit is a fixed snapshot: later output cannot be
 appended to it, and repeated scans are never summed as extra output.
+Repeated observations of the same full destination cluster/topic/topic-ID,
+partition and offset must have identical record bytes, headers and timestamps.
+Conflicting observations across audits are a HARNESS_ERROR.
 
 A `snapshot` audit can support sampled output lag. A `quiescent` audit also
 requires independently observed `workers_stopped`, or `standin_barrier` in a
@@ -52,12 +58,24 @@ stand-in calibration, and resolved pending output. It records source saved next
 offsets and group identity. Missing quiescence or incomplete stable boundaries
 is INCONCLUSIVE. Each saved required prefix must have corresponding output in
 that same audit; later recovery cannot repair an earlier unsafe save finding.
-The manifest's final audit is quiescent and checks full required membership.
+Quiescent and final scans require `end == reached == stable_end`; a declared
+stable tail beyond the scanned end is INCONCLUSIVE. A snapshot may scan a
+sampled prefix with `end == reached <= stable_end`. The manifest's final audit
+is quiescent and checks full required membership.
 
 Initial faults are deliberately narrow: `process_kill` with trigger predicate
-`required_output_outstanding`. `trigger` cites an earlier finalized non-final
+`required_output_outstanding`. `trigger` cites the latest finalized non-final
 audit; the checker computes that required records are still absent, rather than
-trusting a claimed count. The required lifecycle is `fault_requested`,
+trusting a claimed count. A trigger audit must scan through every observed
+destination end: an unscanned tail could contain the required output. A stale
+audit reference or unscanned trigger tail is INCONCLUSIVE. Any output
+observation newer than the cited audit and before the fault request invalidates
+the trigger as INCONCLUSIVE, including output whose audit is still being
+collected. A finalized audit between trigger and request also invalidates it.
+Record a fresh history with a current trigger observation.
+Snapshot lag describes its sampled interval; it does not prove work remained
+unresolved at the actual signal without an independent timing/barrier proof.
+The required lifecycle is `fault_requested`,
 `fault_reached`, `fault_recovered`. Record the requested PID/signal, independently
 observed matching signal and wait exit code -1, then a distinct recovered PID,
 with observer identity and actual proof detail at every step. Normal nonzero
