@@ -11,6 +11,10 @@ Comparison source is [v0.6.0 commit `d7d485b`](https://github.com/pagrus7/kaferr
 
 Every row requires a healthy control, finite independently verified input, recorded budgets/configuration, Given/When/Then, requested/reached/recovered fault evidence and an offline-recheckable bundle under [the evidence rules](evidence.md). “Kafka audit” means complete membership/bytes/routing scans to fixed recorded ends, and saved-next-offset comparison against independently justified required prefixes, initial positions, known gaps and supported filter/skip explanations. “Archive audit” adds independent physical file/ordinal/block identities, selected-file hashes, acknowledged extents, checkpoint cursors and output multiplicities. Logical IDs, Kafka positions and archive physical identities remain distinct. These are acceptance requirements, not existing observations.
 
+## M1 — Harness sensitivity
+
+`internal/evidence/testdata/` contains literal synthetic histories for byte corruption, missing required output, unsafe saved prefixes, aborted output, wrong routing, missing triggers and truncated evidence; permitted duplicates pass. They test the independent checker rather than repeat a product scenario. `internal/calibration/run_test.go` exercises real owned stand-in children at an independently read saved/output barrier, including death before the barrier, invalid barriers, cancellation and reaping. `cmd/lab/main_test.go` checks command statuses and unchanged offline rechecks. The deliberately faulty stand-in saves before producing; detecting that loss tests orchestration plus checking, not whether a real Kaferry fault window was reached. All these histories remain calibration evidence.
+
 ## M2 — Crashes, stalls and timeouts
 
 Use named restart groups, at least three selected partitions, short recorded timeouts and verified finite input. Start PRESERVE; repeat only routing-sensitive faults with KEY.

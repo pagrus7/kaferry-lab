@@ -23,9 +23,122 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -z "$(gofmt -l $(git ls-files '*.go'))"
-          go vet ./...
-          go test -race -count=1 -timeout=3m ./...
+          mkdir -p .cache/unit
+          ./scripts/check.sh 2>&1 | tee .cache/unit/check.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: unit-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/unit/
+          retention-days: 14
+          if-no-files-found: error
+  m1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build the lab on native Linux AMD64
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/bin .cache/m1
+          {
+            uname -sm
+            test "$(uname -sm)" = "Linux x86_64"
+            go version
+            gh --version
+            go build -o .cache/bin/lab ./cmd/lab
+          } 2>&1 | tee .cache/m1/build.log
+      - name: Check golden histories without network access
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r fixture expected verdict; do
+            for attempt in 1 2; do
+              status=0
+              sudo unshare --net -- .cache/bin/lab check "internal/evidence/testdata/$fixture" > ".cache/m1/$fixture-$attempt.json" 2> ".cache/m1/$fixture-$attempt.stderr" || status=$?
+              printf '%s\n' "$status" > ".cache/m1/$fixture-$attempt.exit"
+              test "$status" -eq "$expected"
+            done
+            cmp ".cache/m1/$fixture-1.json" ".cache/m1/$fixture-2.json"
+            python3 - ".cache/m1/$fixture-1.json" "$verdict" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              result = json.load(stream)
+          assert result["verdict"] == sys.argv[2], result
+          assert result["release_qualified"] is False, result
+          PY
+          done <<'CASES'
+          valid 0 PASS
+          permitted-duplicate 0 PASS
+          permitted-record 0 PASS
+          corrupt-byte 1 VIOLATION
+          required-loss 1 VIOLATION
+          unsafe-prefix 1 VIOLATION
+          aborted-leak 1 VIOLATION
+          wrong-partition 1 VIOLATION
+          missing-trigger 4 INCONCLUSIVE
+          truncated-stream 2 HARNESS_ERROR
+          incomplete-scan 4 INCONCLUSIVE
+          indistinguishable-pass 0 PASS
+          indistinguishable-loss 1 VIOLATION
+          archive-unsupported 3 UNSUPPORTED
+          unknown-contract 3 UNSUPPORTED
+          changed-run 2 HARNESS_ERROR
+          CASES
+      - name: Reach and detect the faulty stand-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          .cache/bin/lab calibrate .cache/m1/calibration > .cache/m1/calibration.json 2> .cache/m1/calibration.stderr
+          python3 - <<'PY'
+          import json
+          with open(".cache/m1/calibration.json") as stream:
+              outcomes = json.load(stream)
+          assert [(o["mode"], o["result"]["verdict"]) for o in outcomes] == [
+              ("healthy-pause", "PASS"), ("faulty", "VIOLATION")], outcomes
+          assert all(o["result"]["namespace"] == "calibration" and
+                     o["result"]["release_qualified"] is False for o in outcomes), outcomes
+          PY
+          for mode in healthy-pause faulty; do
+            expected=0
+            if [ "$mode" = faulty ]; then expected=1; fi
+            for attempt in 1 2; do
+              status=0
+              sudo unshare --net -- .cache/bin/lab check ".cache/m1/calibration/$mode/bundle" > ".cache/m1/$mode-recheck-$attempt.json" 2> ".cache/m1/$mode-recheck-$attempt.stderr" || status=$?
+              printf '%s\n' "$status" > ".cache/m1/$mode-recheck-$attempt.exit"
+              test "$status" -eq "$expected"
+            done
+            cmp ".cache/m1/$mode-recheck-1.json" ".cache/m1/$mode-recheck-2.json"
+          done
+      - name: Verify the published artifact and observe its native version
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          .cache/bin/lab verify .cache/m1/release > .cache/m1/verify.json 2> .cache/m1/verify.stderr
+          python3 - <<'PY'
+          import json
+          with open(".cache/m1/verify.json") as stream:
+              result = json.load(stream)
+          assert result["version_runtime"] == "native linux/amd64 host", result
+          assert result["tag"] == "v0.6.0", result
+          assert result["commit"] == "d7d485b96a52b711cb10d76dca09aa9b155dec5e", result
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: m1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/m1/
+          retention-days: 14
+          if-no-files-found: error
   observer:
     runs-on: ubuntu-24.04
     timeout-minutes: 12

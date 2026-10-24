@@ -1,10 +1,63 @@
 # Lab setup and implemented checks
 
-M0 development is in progress. These commands test the lab observer, not Kaferry qualification. No `lab qualify` command exists yet.
+M0 is accepted. M1 verification, offline checking and calibration are underway; M2–M6 release fault scenarios and campaigns are not implemented. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
 
-Use Go matching `go.mod`, Docker, and an authenticated GitHub CLI for publishing reviewed increments. On the repaired local host, GitHub CLI uses `SSL_CERT_FILE=/etc/ssl/cert.pem`; do not disable certificate verification. The sibling Kaferry checkout is a read-only tagged reference.
+## Prepare and check the harness
 
-Run formatting/vet/unit controls with `./scripts/check.sh`. Unit checks do not need Docker. Live observer tests are opt-in and require both clusters; skipping them in a unit run is not measured capability evidence.
+Use Go matching `go.mod`. Published-artifact verification also needs network access and GitHub CLI with `gh attestation verify` and its source/workflow policy flags. Live observer checks need Docker. Use an authenticated GitHub CLI for publishing reviewed increments. Keep the sibling Kaferry checkout read-only; it is a tagged reference, not a build dependency. If your host needs a custom trusted CA bundle, set `SSL_CERT_FILE` to its path; do not disable certificate verification.
+
+```sh
+./scripts/check.sh
+mkdir -p .cache/bin
+go build -o .cache/bin/lab ./cmd/lab
+```
+
+The check script runs formatting, vet and race-enabled unit controls without Docker. Live observer tests are opt-in; skipping them is not measured capability evidence.
+
+## Verify the published artifact
+
+```sh
+.cache/bin/lab verify .cache/releases/verify-001
+```
+
+Choose a new output directory for each attempt. Verification accepts only the reviewed v0.6.0 Linux AMD64 release at commit `d7d485b96a52b711cb10d76dca09aa9b155dec5e`. It checks the annotated tag, release and asset identities, published checksums, pinned archive/executable bytes, tagged contract document hashes, and cryptographic provenance through `gh attestation verify`. It then runs the verified executable with `--version` and checks its digest again. There is no main/latest selection or source-build fallback. Unknown identities or missing required verification evidence fail closed.
+
+The command has a three-minute overall budget. `verified.json` records the release, hashes, provenance verifier and version runtime; downloaded documents, the archive, executable, verification receipt and version output stay alongside it. A failed attempt retains available files and `FAILED.json`; preserve that directory and use a new one after resolving the failure. These files establish artifact verification, not a fault campaign or qualification.
+
+On a native Linux AMD64 host, version observation runs the executable directly. Other hosts require Docker and the digest-pinned runtime image below; the command records the Docker platform, runs a bounded Linux AMD64 container with no network, and removes only its owned container. An ARM64 Docker host uses emulation and does not establish native AMD64 behavior. The version subprocess has a 20-second budget, so the image must already be available if a pull cannot finish within it.
+
+## Check a bundle offline
+
+```sh
+.cache/bin/lab check internal/evidence/testdata/valid
+```
+
+`check` needs only the lab executable and a stable bundle directory containing `manifest.json`, `artifact.json`, `events.jsonl` and `complete.json`. It makes no network calls and needs no Kafka, Docker or target executable. Keep all four files together. Hashes and run identity bind the recorded observations; they do not authenticate an untrusted author's claims. The checker checks consistency of recorded artifact verification rather than repeating cryptographic provenance verification.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | `PASS`: this supported history meets its recorded obligations. |
+| 1 | `VIOLATION`: the history demonstrates a checked property failure. |
+| 2 | `HARNESS_ERROR`, invalid invocation, or command failure: evidence or execution cannot support a result. |
+| 3 | `UNSUPPORTED`: schema, contract, scope or command is outside implemented support. |
+| 4 | `INCONCLUSIVE`: required observations, such as a reached trigger or complete scan, are missing. |
+
+The verdict is JSON on stdout when a checker result is available; command errors also use stderr. `PASS` covers one partial history and always reports `release_qualified:false`. Unknown schema versions, truncated streams, changed run identity and missing required evidence cannot pass. Archive/checkpoint checking and faults beyond the initial process-kill scope are unsupported. Byte-identical records have an explicit limitation: replay can conceal loss of a particular indistinguishable occurrence. See the [evidence-v1 contract](../internal/evidence/README.md) for exact bounds and supported observations.
+
+## Calibrate detection with real child processes
+
+```sh
+.cache/bin/lab calibrate .cache/calibration/cal-001
+.cache/bin/lab check .cache/calibration/cal-001/healthy-pause/bundle
+# Expected VIOLATION, exit 1:
+.cache/bin/lab check .cache/calibration/cal-001/faulty/bundle
+```
+
+Choose a new calibration directory. This command uses three synthetic records and at most one child at a time, with a 20-second total budget. It pauses each stand-in at an observed saved position, records outstanding output, kills it, confirms the signal exit, and restarts from saved state. The faulty stand-in saves progress before producing a required record. The command succeeds only when the healthy history passes and the faulty history produces a violation. Controller failures are command failures, not successful detection.
+
+Reports and bundles use the `calibration` namespace and identify the stand-in executable. They are not Kaferry runs. Each mode retains its four-file bundle plus input, output, saved-state and child logs under `work/`; preserve partial output after a failure. Rechecking an unchanged complete bundle produces the same result. Calibration reaps its children on success, error and cancellation; a later attempt uses a new directory rather than resuming one.
+
+## Measure the live observer
 
 ```sh
 run_id="m0-$(date +%s)"
@@ -16,8 +69,10 @@ go run ./cmd/fixture down "$run_id"
 
 Always run cleanup after a failed test. Fixture state remains in `.cache/fixtures/<run_id>.json` so cleanup is restartable. Distinct random Kafka cluster IDs are recorded and checked by live metadata observations. Startup has a four-minute total budget, bounded probes, two memory/CPU-limited single-broker clusters, loopback host ports, and unique resource names. Failure triggers cleanup; cleanup refuses names/labels that do not belong to this run. It never prunes global Docker resources. Retain failed startup/broker logs before removing resources when diagnosing an environment failure.
 
-Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02` (3.9.2 multi-platform index). The AMD64 manifest is `sha256:f5f8605794dce59d1d566f63667682771c2fec9e96088b0d6a5ef0f8476dd4b2`; ARM64 is `sha256:ddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0`. Fixture state records the actual Docker platform. Retention/compaction are disabled for initial record-ledger controls. Brokers are plaintext and contain synthetic data only; keep their ports on loopback.
+Kafka and the verification runtime are pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02` (3.9.2 multi-platform index). The AMD64 manifest is `sha256:f5f8605794dce59d1d566f63667682771c2fec9e96088b0d6a5ef0f8476dd4b2`; ARM64 is `sha256:ddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0`. Fixture state records the actual Docker platform. Retention/compaction are disabled for initial record-ledger controls. Brokers are plaintext and contain synthetic data only; keep their ports on loopback.
 
-Local macOS ARM64 orchestration and native ARM64 Docker broker checks do not establish native Linux AMD64 release behavior. AMD64 emulation is available for development but must be labeled emulated. Harness CI runs on native `ubuntu-24.04`; final required qualification also needs a native AMD64 runner. A green observer/harness workflow is not a release qualification.
+## CI and retained evidence
 
-The CI workflow has read-only contents permission, commit-pinned actions, bounded jobs, no publishing secrets in PR jobs, and uniquely named retained evidence artifacts. Qualification/publishing campaigns will be added by later milestones.
+Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness, golden offline histories, actual stand-in calibration, the full published-artifact verification/version path, and live observer capabilities. Offline CLI checks run in a network namespace with no network interfaces available beyond loopback. CI retains logs, verification output, calibration bundles and fixture evidence with `always()`, including failed attempts, for 14 days under unique run/attempt names.
+
+Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.

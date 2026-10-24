@@ -2,34 +2,40 @@
 
 ## Current step
 
-- M0 follow-up source ready to freeze: P1 strict Fetch batch admission fix integrated and tested; initial review at `0af3e7b` retained. NOT pushed. M0 incomplete until affected follow-ups and native AMD64 final-commit CI. M1 staged only; M2–M6 unimplemented.
-- Base commit `49ee1487c5730d8eec6bafed4af4757b18938689`; target v0.6.0 resolves to `d7d485b96a52b711cb10d76dca09aa9b155dec5e`.
-- Permissions and TLS repaired by user. Coordinator can write repo/.git; `SSL_CERT_FILE=/etc/ssl/cert.pem gh api repos/pagrus7/kaferry-lab` reports push=true. Resumed agents retain old sandbox and stage authorized files in external workspace; coordinator integrates.
-- No Kaferry qualification or milestone completion yet. Local live observer attempt f passed on actual Linux ARM64 brokers; do not call it native AMD64 qualification.
+- M0 accepted at `9d3231a7a314a29c7b91d58bee8c186befb98df1`, pushed on `codex/adversarial-release-lab`. Main remote unchanged. User requests PR **after entire required roadmap is done**, not an interim PR.
+- M1 in progress: artifact verifier/checker/CLI/actual calibration stand-in integrated; controller controls and operating docs/CI added. Preparing frozen commit and independent reviews, then native final-head CI. M2–M6 not implemented.
+- Target v0.6.0 / `d7d485b96a52b711cb10d76dca09aa9b155dec5e`. Kaferry sibling stays read-only. No qualification campaign has run.
 
-## Evidence and decisions
+## Acceptance and evidence
 
-- Read-only tagged research copied into `.cache/research/{coverage-network,coverage-archive,observer-research}.md`.
-- Audit compares 11 M2/M3/M5 cases and M4 mechanisms against exact core tests; some tests run in process, others launch test helpers or CLI with optional source build fallback. Blocked stderr alone already has core coverage.
-- Measured mandatory gap: Kafka accepts -2ms timestamps but Sarama cannot observe them faithfully. Select protocol-level kafka-go scanner only after its explicit byte/negative/transaction controls pass; retain Sarama as admin/transaction helper. High-level kafka-go reader also collapses nil/empty; never use it as byte oracle. Default Sarama partitioner is FNV-1a.
-- Host Go `go1.27.2 darwin/arm64`; Docker `linux/aarch64`. User confirmed AMD64 emulation works; label it emulated. Final required native AMD64 campaign will use GitHub Actions `ubuntu-24.04`.
-- Kaferry sibling read-only, pre-existing untracked logo assets preserved. Never source-build qualification artifacts.
+| Milestone | State | Evidence / remaining |
+| --- | --- | --- |
+| M0 | Accepted | Three independent source follow-ups + final-CI oracle approval at `.cache/reviews/9d3231a7a314a29c7b91d58bee8c186befb98df1/`; native Ubuntu24 AMD64 CI [40139173038](https://github.com/pagrus7/kaferry-lab/actions/runs/40139173038), unit+observer success. Download `.cache/ci/40139173038/`. |
+| M1 | In progress | Prior integrated suite and actual calibration retained. Resume offline rechecks retain healthy PASS / faulty VIOLATION at `.cache/m1/resume-recheck-*.json`. New controller/CLI controls, ownership records, docs and native CI await frozen reviews and final-head CI. Local verifier remains UNVERIFIED after platform denial. |
+| M2–M6 | Not started | All required real fault scenarios/campaigns/operating delivery remain; no product verdict. |
 
-## Ownership and resources
+- M0 P1 initial review found kafka-go decoder successful-prefix suppression. Resolved with strict raw fixed-v11 admission + literal malformed multi-batch controls; old reviews and a–h observations retained under `.cache/reviews/` / `.cache/m0/`.
+- Selected primary scanner: kafka-go protocol payload decoder guarded by strict framing/count/CRC/decompression/metadata admission; Sarama admin/transaction producer + independent known-byte cross-read. Negative -2ms/epoch/modern CreateTime measured. LAT remains unsupported; affected runs must not pass. No broad parser/old-syntax/core regression tests.
+- Current source/scenario bounds: 1024 ledger entries, 256 partitions and 64MiB streams in evidence-v1; larger/unknown/archive cases explicitly unsupported until reviewed extensions. Full campaign qualification is always false in this initial checker.
+- Published archive digest `d1ce67ce82f610b479b0458cc7f76b4a6cdb6094f60382d58edcc484ef12670f`; binary `becd8ee9762488af391097c5086a8105721725e753d07e8a9c0c0e70ae377770` (23814268 bytes). Public verifier/checker pin these despite GitHub mutable release flag.
+- Actual trusted `gh attestation verify` succeeded with repo/workflow/source/ref policy: `.cache/m1/gh-attestation.json` + `.err`. This preliminary provenance check did not execute the binary. CLI must still demonstrate full path/version observation.
+- Resumed full `lab verify .cache/releases/m1-resume-20261024a` exited2 before execution. Exact diagnostic notices in `.cache/m1/attestation-diagnostic.stderr`: platform denied gh TUF cache writes under `/Users/pg/.cache/gh/.sigstore/root/` (`operation not permitted`). No local cache redirect, disabled cache, custom root or alternate verifier used. Native CI must independently supply full verification/version evidence with its ordinary permitted cache.
+- Go controller/CLI test command was denied default module/build-cache writes; exact raw log `.cache/m1/controller-cli-first.log`. Delegate had already retried with redirected caches before coordinator stopped it; `.cache/m1/controller-cli-cache-fixed.log` is retained but excluded from acceptance. No further rerouted Go tests. Final native CI required. Full actionlint likewise unavailable after default module-cache denial; YAML/Bash/embedded-Python syntax and diff checks passed.
+- Python source retrieval emitted macOS preference-read denials. Exact actions/notices/reasons and no-retry disposition: `.cache/m1/resume-platform-notices.txt`. These preference files are not lab prerequisites. No denied file was accessed through another route.
+- Tagged contract root `df2f5b7965ed15e7f434f2b06e16b2982c86b63a34dd48cd52ae918a7384eb46`; source hashes `.cache/m0/tagged-contract.sha256`. Summary docs are not the contract hash.
 
-- Coordinator: PROGRESS.md, runtime fixture/CI/integration/git; staged `internal/calibration/{standin,run}.go` M1 actual child-process control (not compiled/tested yet; cmd/lab not written).
-- `observer_research`: owns staged observer fix + module deps. P1: kafka-go v0.4.49 (also .51) can suppress malformed trailing records/batches; strict raw v11 Fetch frame/batch admission needed before codec output can establish completeness. No custom proxy/general protocol stack; keep API, remove redundant secondary test reader.
-- `archive_audit`: completed identity/docs slice (integrated); now owns staged `internal/evidence/` M1 offline-checker slice, held until M0 reviewed increment.
-- `coverage_audit`: completed coverage inventory (integrated; 44 cited tests verified); now owns staged `internal/artifact/` M1 verification slice, held until M0 reviewed increment.
-- Shared staging root: `/Users/pg/Documents/Codex/2026-10-24-work-in-users-pg-documents-codex/kaferry-lab-handoff/staged/`. Preserve disjoint ownership; copy only completed files.
-- No live lab resources. Fixtures a/b/c cleaned with broker logs retained; c cleanup `.cache/m0/fixture-c-cleanup.json`. State retained for idempotent cleanup: `go run ./cmd/fixture down m0-local-20261024c`. Actual local Docker Linux ARM64; native CI pending.
-- Original fixture a exposed identical Apache default cluster IDs; failed topology observation retained, logs captured and all a resources cleaned. New fixture b records crypto-random distinct cluster IDs. Add regression control; do not relabel initial run as pass.
-- Initial review reports `.cache/reviews/0af3e7b0dd4e46a8c968323954657ddb2cfa01c7/`: docs passed; simplicity no blockers (optional redundant test reader); test/oracle requests P1 strict batch admission plus malformed multi-record/multi-batch sensitivity control. Source healthy runs do not discharge that defect. Native AMD64 CI pending; no pass claimed.
-- After P1 fix, format/vet/race passed `.cache/m0/strict-final-unit.log`; live integrated h passed `.cache/m0/m0-observer-20261024h.log` (g staging passed). New literal controls reproduce decoder [0,2] successful-prefix loss then reject malformed raw evidence. Old b–f results retained. Unsupported LAT/unknown tails stay fail-closed; no native CI yet.
+## Ownership, resources, and environment
 
-## Next actions
+- Coordinator owns integration, PROGRESS and git. GPT-6.1 Sol/high bounded delegates: `calibration_controls` owns calibration/controller+CLI tests and ownership records; `m1_docs_ci` completed README/setup/CI. Frozen independent reviews not yet assigned. No pushes during reviews.
+- Original staged module preserved at `/Users/pg/Documents/Codex/2026-10-24-work-in-users-pg-documents-codex/kaferry-lab-handoff/staged/` because resumed workers had stale sandbox roots. Parent has repaired full permissions.
+- No live lab containers/networks/processes. Resume label inventory empty. Prior fixtures cleaned and calibration children reaped; retained bundles `.cache/calibration/cal-20261024a/{healthy-pause,faulty}/bundle`. New test retry reported all owned children absent/reaped. No version container started: verifier stopped at trust initialization.
+- Host Go1.27.2 macOS ARM64, Docker Linux ARM64. AMD64 emulation is development evidence only; final release campaign requires native AMD64 runner. M0 native evidence is actual GitHub hosted Ubuntu24.
+- GitHub commands use `SSL_CERT_FILE=/etc/ssl/cert.pem`; Git push uses trusted CA + command-scoped gh credential helper. Never print tokens. Local verification/Go test cache writes are blocked by platform controls; do not route around denials. Native CI is independent permitted work.
 
-1. Commit integrated P1 fix/docs/handoff, then obtain affected docs/test-oracle/simplicity follow-ups on exact SHA. No push during source reviews; then push only after blockers resolved.
-2. Resolve review findings, push reviewed increment, inspect native `Harness CI` final-commit checks and retain artifact; test reviewer must inspect actual CI evidence before M0 accepted.
-3. Integrate held M1 artifact/checker slices, implement actual trusted `gh attestation verify` boundary, offline check CLI and killed commit-before-produce calibration stand-in. Contract root: `df2f5b7965ed15e7f434f2b06e16b2982c86b63a34dd48cd52ae918a7384eb46` (sorted source doc hashes in `.cache/m0/tagged-contract.sha256`).
-4. Complete M0 acceptance, continue M1–M6 without routine confirmation; update this handoff before long boundaries.
+## Exact next actions
+
+1. Finish calibration ownership record integration; inspect `git diff --check` and `gofmt -l cmd/lab internal/artifact internal/calibration internal/evidence` (no Go build/cache mutation). Preserve all prior dirty work.
+2. Freeze M1 commit, obtain independent docs/test-oracle/simplicity reviews on actual patch and contracts. Reviewers read only, do not run tests. Reports `.cache/reviews/<SHA>/`. Fix findings and refresh affected reviews, with no push during reviews.
+3. Push reviewed feature commit, inspect native CI including real artifact verification/version, controller controls, no-network offline rechecks, live observer and cleanup; download retained evidence and obtain test/oracle CI follow-up. Do not count local denials or redirected tests as passes.
+4. User requested a clearer new-session prompt after seeing a cybersecurity guardrail notice not exposed in these tool results. CODEX_PROMPT.md now puts exact authorized disposable-resource scope first, preserves every roadmap requirement, and requires recording an actual denial without routing around it. This doc change is uncommitted and needs normal docs review.
+5. Continue M2–M6 within that scope; preserve failed/missing observations. Open final PR only once all required acceptance/reviews/CI/delivery are complete.
