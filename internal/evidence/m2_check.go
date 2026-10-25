@@ -23,6 +23,7 @@ type m2WorkerHistory struct {
 }
 
 type m2AuditHistory struct {
+	seq                                      identity.Int64
 	audit                                    M2Audit
 	outputs                                  []Output
 	complete, settled, tailCovered, assigned bool
@@ -372,7 +373,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 				finals++
 				need(a.ID == m.FinalAuditID && a.Mode == "settled", "final_audit", "manifest final audit must be the settled audit")
 			}
-			audits[a.ID] = m2AuditHistory{audit: a, outputs: outputs, complete: complete, settled: settled, tailCovered: tailCovered, assigned: assigned}
+			audits[a.ID] = m2AuditHistory{seq: event.Seq, audit: a, outputs: outputs, complete: complete, settled: settled, tailCovered: tailCovered, assigned: assigned}
 		case "episode":
 			e := *event.Episode
 			if len(episodes) >= 32 {
@@ -474,6 +475,9 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			a, exists := audits[e.TriggerAuditID]
 			signal := m2Signal(w, "SIGKILL")
 			need(exists && a.complete && a.tailCovered && a.assigned && a.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && len(unmatchedRequired(ledger.Entries, a.outputs, nil)) > 0 && signal != nil && a.audit.SavedInterval.EndNS <= signal.Interval.StartNS && a.audit.GroupInterval.EndNS <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == a.audit.ID, "kill_trigger", "kill requires a preceding complete output-lag audit covering the observed tail, stable assignment, and an actual SIGKILL request")
+			if exists && signal != nil {
+				need(m2TriggerFresh(events, a, signal.Interval.StartNS), "trigger_changed", "newer raw output or scan observations precede the kill request; the selected lag audit must be refreshed")
+			}
 			need(signal != nil && w.exit != nil && w.exit.Reaped && w.exit.Signal == "SIGKILL" && w.exit.ExitCode == -1 && signal.Interval.StartNS <= w.exit.Interval.EndNS, "kill_unreached", "actual wait must confirm the requested SIGKILL on the same owned invocation")
 			replacement := workers[e.RecoveryWorkerID]
 			need(replacement != nil && replacement != w && w.exit != nil && replacement.start.Interval.StartNS >= w.exit.Interval.EndNS, "kill_recovery", "each kill requires a distinct same-configuration replacement after its completed wait")
@@ -482,7 +486,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			if e.Kind == "visible-unsaved-kill" {
 				visibleCount++
 				v, ok := audits[e.VisibleAuditID]
-				need(ok && e.VisibleAuditID == e.TriggerAuditID && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && max(v.audit.SavedInterval.EndNS, v.audit.GroupInterval.EndNS) <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == v.audit.ID, "visible_unsaved", "the latest pre-kill trigger audit must itself observe visible destination bytes followed by a saved-position sample below that record")
+				need(ok && e.VisibleAuditID == e.TriggerAuditID && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && max(v.audit.SavedInterval.EndNS, v.audit.GroupInterval.EndNS) <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == v.audit.ID && m2TriggerFresh(events, v, signal.Interval.StartNS), "visible_unsaved", "the latest pre-kill trigger audit must itself observe visible destination bytes followed by a saved-position sample below that record")
 			}
 		} else {
 			if e.Kind != m.ScenarioID {
@@ -514,6 +518,9 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			} else {
 				a, ok := audits[e.TriggerAuditID]
 				need(ok && a.complete && a.tailCovered && a.assigned && a.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && len(unmatchedRequired(ledger.Entries, a.outputs, nil)) > 0 && pause != nil && a.audit.SavedInterval.EndNS <= pause.Request.StartNS && a.audit.GroupInterval.EndNS <= pause.Request.StartNS && m2LatestAudit(audits, pause.Request.StartNS) == a.audit.ID, "outage_trigger", "outage requires previously observed outstanding required output covering the observed destination tail and stable assignment")
+				if ok && pause != nil {
+					need(m2TriggerFresh(events, a, pause.Request.StartNS), "trigger_changed", "newer raw output or scan observations precede the pause request; the selected lag audit must be refreshed")
+				}
 			}
 			if e.Kind == "delivery-stop" {
 				replacement := workers[e.RecoveryWorkerID]
@@ -882,4 +889,26 @@ func m2LatestAudit(audits map[string]m2AuditHistory, before identity.Int64) stri
 		}
 	}
 	return id
+}
+
+// A later saved/group read cannot hide output already observed before the
+// actual fault request. Concurrent or delayed audit finalization is admitted,
+// but its newer raw observations require a fresh complete trigger audit.
+func m2TriggerFresh(events []M2Event, trigger m2AuditHistory, before identity.Int64) bool {
+	for _, e := range events {
+		switch e.Kind {
+		case "output":
+			if e.Output.AuditID != trigger.audit.ID && e.ElapsedNS <= before && (e.Seq > trigger.seq || e.ElapsedNS >= trigger.audit.ScanInterval.StartNS) {
+				return false
+			}
+		case "audit":
+			if e.Audit.ID == trigger.audit.ID {
+				continue
+			}
+			if e.ElapsedNS <= before && e.Seq > trigger.seq || e.Audit.ScanInterval.EndNS <= before && e.Audit.ScanInterval.EndNS > trigger.audit.ScanInterval.EndNS {
+				return false
+			}
+		}
+	}
+	return true
 }

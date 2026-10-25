@@ -45,13 +45,13 @@ type wireNode struct {
 // parse cannot reach a threshold fault or prove that no response existed.
 func parseWirePDML(r io.Reader, clientID string, destinationPort int, known []wireKnownValue) (wireSubmissionCandidates, error) {
 	result := wireSubmissionCandidates{Schema: 1, ClientID: clientID, Limitation: "capture completeness and native Produce11 sensitivity controls unmeasured; candidates prove neither threshold, output, acknowledgments nor absence of responses"}
-	if !strings.HasPrefix(clientID, "kaferry-") || len(clientID) > 256 || destinationPort < 1 || destinationPort > 65535 || len(known) == 0 || len(known) > 1024 {
+	if !strings.HasPrefix(clientID, "kaferry-") || !wireSyntheticASCII(clientID) || destinationPort < 1 || destinationPort > 65535 || len(known) == 0 || len(known) > 1024 {
 		return result, errors.New("wire attribution/ledger bounds invalid")
 	}
 	values := make(map[string]wireKnownValue)
 	ids := make(map[string]bool)
 	for _, v := range known {
-		if v.ID == "" || v.Topic == "" || v.Partition < 0 || len(v.Value) == 0 || len(v.Value) > 1<<16 || ids[v.ID] {
+		if v.ID == "" || !wireSyntheticASCII(v.Topic) || v.Partition < 0 || len(v.Value) == 0 || len(v.Value) > 1<<16 || ids[v.ID] {
 			return result, errors.New("wire stress ledger requires unique IDs and nonempty bounded values")
 		}
 		if _, ok := values[string(v.Value)]; ok {
@@ -207,11 +207,11 @@ func wirePacket(packet *wireNode, client string, port int, known map[string]wire
 		if len(wireFind(k, "kafka.request.version")) == 0 {
 			continue
 		}
-		id, e := wireBytes(k, "kafka.client_id")
+		id, e := wireASCIIString(k, "kafka.client_id")
 		if e != nil {
 			return nil, errors.New("request client attribution missing/ambiguous")
 		}
-		if string(id) != client {
+		if id != client {
 			continue
 		}
 		if dst != int64(port) || streams[stream] != strconv.FormatInt(src, 10) {
@@ -245,13 +245,17 @@ func wirePacket(packet *wireNode, client string, port int, known map[string]wire
 				if !ok {
 					return nil
 				}
-				var topic []byte
+				var topic string
 				partition, codec, magic := int64(-1), int64(-1), int64(-1)
 				for i := len(ancestors) - 1; i >= 0; i-- {
 					for _, f := range ancestors[i].Children {
 						switch f.Name {
 						case "kafka.topic_name":
-							topic, _ = hex.DecodeString(f.Value)
+							var err error
+							topic, err = wireASCIIString(f, "kafka.topic_name")
+							if err != nil {
+								return err
+							}
 						case "kafka.partition_id":
 							partition = wireAncestryNumber(f.Show)
 						case "kafka.batch_codec":
@@ -261,7 +265,7 @@ func wirePacket(packet *wireNode, client string, port int, known map[string]wire
 						}
 					}
 				}
-				if string(topic) != expected.Topic || partition != int64(expected.Partition) || codec != 0 || magic != 2 {
+				if topic != expected.Topic || partition != int64(expected.Partition) || codec != 0 || magic != 2 {
 					return errors.New("known value lacks expected topic/partition/uncompressed magic2 ancestry")
 				}
 				matched[expected.ID] = true
@@ -324,6 +328,34 @@ func wireBytes(n *wireNode, name string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// Kafka FT_STRING spans include their length prefix in raw PDML value/size.
+// Attribution uses only the standard dissector's decoded show, restricted to
+// the lab's synthetic printable ASCII. Raw spans remain completeness evidence;
+// this helper does not decode Kafka string prefixes.
+func wireASCIIString(n *wireNode, name string) (string, error) {
+	value, err := wireField(n, name)
+	if err != nil || !wireSyntheticASCII(value) {
+		return "", errors.New("decoded synthetic ASCII PDML string missing/invalid")
+	}
+	if _, err = wireBytes(n, name); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func wireSyntheticASCII(value string) bool {
+	if len(value) < 1 || len(value) > 256 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 func wireEpoch(value string) (time.Time, error) {
 	p := strings.Split(value, ".")
 	if len(p) != 2 || len(p[1]) < 1 || len(p[1]) > 9 {

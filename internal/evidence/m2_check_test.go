@@ -837,3 +837,145 @@ func TestM2WriterReservationPreservesExistingEvidence(t *testing.T) {
 		t.Fatalf("prior bundle no longer rechecks: %+v", r)
 	}
 }
+
+// Only the output scan completes before the fault. OffsetFetch/DescribeGroups
+// finish later, so the raw observations must not disappear behind that delay.
+func (c *m2Control) pendingAudit(id string, records []int, saved []identity.Int64) *M2Audit {
+	c.audit(id, records, saved, false, false)
+	a := c.e[len(c.e)-1].Audit
+	c.e = c.e[:len(c.e)-1]
+	return a
+}
+func (c *m2Control) finalizePendingAudit(a *M2Audit) {
+	a.SavedInterval = c.interval()
+	a.GroupInterval = a.SavedInterval
+	c.add(M2Event{Kind: "audit", Audit: a})
+}
+
+func pendingOutputCrashM2Control(records []int) *m2Control {
+	c := newM2Control("repeated-kill")
+	c.worker("w1", "start", "")
+	c.audit("lag1", []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	c.worker("w1", "signal", "SIGKILL")
+	c.worker("w1", "exit", "SIGKILL")
+	c.worker("w1", "cleanup", "")
+	c.settle("stop1", []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	c.worker("w2", "start", "")
+	c.audit("lag2", []int{0}, []identity.Int64{0, -1, -1}, false, false)
+	pending := c.pendingAudit("pending", records, []identity.Int64{0, -1, -1})
+	c.worker("w2", "signal", "SIGKILL")
+	c.worker("w2", "exit", "SIGKILL")
+	c.worker("w2", "cleanup", "")
+	c.finalizePendingAudit(pending)
+	c.settle("stop2", []int{0, 1, 2}, []identity.Int64{0, -1, -1}, false, false)
+	c.worker("w3", "start", "")
+	c.worker("w3", "exit", "")
+	c.worker("w3", "cleanup", "")
+	c.settle("final", []int{0, 1, 2}, []identity.Int64{1, 1, 1}, true, false)
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill1", Kind: "unresolved-kill", WorkerID: "w1", RecoveryWorkerID: "w2", TriggerAuditID: "lag1", StoppedAuditID: "stop1"}})
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill2", Kind: "visible-unsaved-kill", WorkerID: "w2", RecoveryWorkerID: "w3", TriggerAuditID: "lag2", VisibleAuditID: "lag2", StoppedAuditID: "stop2"}})
+	c.finish()
+	return c
+}
+
+func TestM2PendingOutputObservationsInvalidateCrashTrigger(t *testing.T) {
+	// Given a valid lag/visible-unsaved sample, when newer full or partial
+	// output is known before the kill, then delayed group reads cannot hide it.
+	for _, records := range [][]int{{0, 1, 2}, {0, 1}} {
+		c := pendingOutputCrashM2Control(records)
+		r := CheckM2(c.m, c.a, c.e)
+		if r.Verdict != Inconclusive || !m2HasCode(r, "trigger_changed") || !m2HasCode(r, "visible_unsaved") || m2HasCode(r, "kill_trigger") {
+			t.Fatalf("records %v: %+v", records, r)
+		}
+	}
+	c := repeatedM2Control()
+	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Pass {
+		t.Fatalf("no intervening observations: %+v", r)
+	}
+}
+
+func TestM2PendingOutputObservationsInvalidatePauseTrigger(t *testing.T) {
+	c := newM2Control("delivery-stop")
+	c.worker("w1", "start", "")
+	c.audit("lag", []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	pending := c.pendingAudit("pending", []int{0, 1, 2}, []identity.Int64{1, 1, 1})
+	c.broker("destination", "pause")
+	c.finalizePendingAudit(pending)
+	c.n += 3_000_000
+	i := c.interval()
+	c.add(M2Event{Kind: "diagnostic", Diagnostic: &M2Diagnostic{WorkerID: "w1", Kind: "delivery-timeout", Interval: i, Proof: "literal corroborating diagnostic while independently paused"}})
+	c.worker("w1", "signal", "SIGTERM")
+	c.worker("w1", "exit", "")
+	c.worker("w1", "cleanup", "")
+	c.broker("destination", "restore")
+	c.settle("stopped", []int{0, 1, 2}, []identity.Int64{1, 1, 1}, false, false)
+	c.worker("w2", "start", "")
+	c.worker("w2", "exit", "")
+	c.worker("w2", "cleanup", "")
+	c.settle("final", []int{0, 1, 2}, []identity.Int64{1, 1, 1}, true, false)
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "outage1", Kind: "delivery-stop", WorkerID: "w1", RecoveryWorkerID: "w2", TriggerAuditID: "lag", StoppedAuditID: "stopped"}})
+	c.finish()
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Inconclusive || !m2HasCode(r, "trigger_changed") || m2HasCode(r, "outage_trigger") {
+		t.Fatalf("got %+v", r)
+	}
+	c = deliveryM2Control()
+	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Pass {
+		t.Fatalf("no intervening observations: %+v", r)
+	}
+}
+
+func TestM2PreKillScanInvalidatesTriggerEvenWithLateOutputJournal(t *testing.T) {
+	c := pendingOutputCrashM2Control([]int{0, 1, 2})
+	lateOutputs := []M2Event{}
+	retained := []M2Event{}
+	for _, e := range c.e {
+		if e.Output != nil && e.Output.AuditID == "pending" {
+			lateOutputs = append(lateOutputs, e)
+		} else {
+			retained = append(retained, e)
+		}
+	}
+	c.e = nil
+	for _, e := range retained {
+		if e.Audit != nil && e.Audit.ID == "pending" {
+			for _, output := range lateOutputs {
+				output.ElapsedNS = e.ElapsedNS
+				c.e = append(c.e, output)
+			}
+		}
+		c.e = append(c.e, e)
+	}
+	for i := range c.e {
+		c.e[i].Seq = identity.Int64(i + 1)
+	}
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Inconclusive || !m2HasCode(r, "trigger_changed") {
+		t.Fatalf("late journal hid pre-kill scan: %+v", r)
+	}
+}
+
+func TestM2OutputAfterActualKillRequestDoesNotInvalidateEarlierTrigger(t *testing.T) {
+	c := pendingOutputCrashM2Control([]int{0, 1, 2})
+	var afterRequest identity.Int64
+	for _, e := range c.e {
+		if e.Worker != nil && e.Worker.Identity.WorkerID == "w2" && e.Worker.Action == "signal" {
+			afterRequest = e.Worker.Interval.StartNS + 1
+		}
+	}
+	// The concurrent scan and output observations happen after the actual
+	// signal request starts, but before its enclosing receipt finishes. Keep
+	// the real request interval intact; receipt completion is not fault time.
+	for i := range c.e {
+		if c.e[i].Output != nil && c.e[i].Output.AuditID == "pending" {
+			c.e[i].ElapsedNS = afterRequest
+		}
+		if c.e[i].Audit != nil && c.e[i].Audit.ID == "pending" {
+			c.e[i].Audit.ScanInterval = M2Interval{StartNS: afterRequest, EndNS: afterRequest}
+		}
+	}
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Pass {
+		t.Fatalf("post-request observations invalidated prior trigger: %+v", r)
+	}
+}

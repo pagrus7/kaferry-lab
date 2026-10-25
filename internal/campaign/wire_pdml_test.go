@@ -3,6 +3,7 @@ package campaign
 import (
 	"encoding/hex"
 	"fmt"
+	"html"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,7 +65,7 @@ func TestWireCandidatesRejectIncompleteOrMisattributedPDUs(t *testing.T) {
 			return strings.Replace(s, `name="kafka.len" show="96"`, `name="kafka.len" show="95"`, 1)
 		}},
 		{"wrong topic ancestry", func(s string) string {
-			return strings.Replace(s, `name="kafka.topic_name" value="74"`, `name="kafka.topic_name" value="75"`, 1)
+			return strings.Replace(s, `name="kafka.topic_name" show="t"`, `name="kafka.topic_name" show="u"`, 1)
 		}},
 		{"compressed batch", func(s string) string {
 			return strings.Replace(s, `name="kafka.batch_codec" show="0"`, `name="kafka.batch_codec" show="1"`, 1)
@@ -123,5 +124,45 @@ func wireTestPacket(frame int, pdus string, reassembled bool) string {
 	return fmt.Sprintf(`<packet><proto name="frame"><field name="frame.number" show="%d"/><field name="frame.len" show="100"/><field name="frame.cap_len" show="100"/><field name="frame.time_epoch" show="%d.125000000"/></proto><proto name="tcp"><field name="tcp.stream" show="0"/><field name="tcp.srcport" show="40000"/><field name="tcp.dstport" show="19092"/>%s</proto>%s</packet>`, frame, 1700000000+frame, extra, pdus)
 }
 func wireTestPDU(client, topic string, partition, correlation int, value []byte) string {
-	return fmt.Sprintf(`<proto name="kafka" size="100"><field name="kafka.len" show="96"/><field name="kafka.api_key" show="0"/><field name="kafka.request.version" show="11"/><field name="kafka.correlation_id" show="%d"/><field name="kafka.required_acks" show="-1"/><field name="kafka.client_id" value="%s" size="%d"/><field><field name="kafka.topic_name" value="%s" size="%d"/><field><field name="kafka.partition_id" show="%d"/><field><field name="kafka.message_magic" show="2"/><field name="kafka.batch_codec" show="0"/><field><field name="kafka.message_value" value="%s" size="%d"/></field></field></field></field></proto>`, correlation, hex.EncodeToString([]byte(client)), len(client), hex.EncodeToString([]byte(topic)), len(topic), partition, hex.EncodeToString(value), len(value))
+	// Pinned Wireshark4.6.6 uses an ordinary two-byte string span for the
+	// header clientID and a compact string span for the Produce11 topic. PDML
+	// raw value includes those prefixes; show is the decoded string.
+	clientSpan := append([]byte{byte(len(client) >> 8), byte(len(client))}, []byte(client)...)
+	topicSpan := append([]byte{byte(len(topic) + 1)}, []byte(topic)...)
+	return fmt.Sprintf(`<proto name="kafka" size="100"><field name="kafka.len" show="96"/><field name="kafka.api_key" show="0"/><field name="kafka.request.version" show="11"/><field name="kafka.correlation_id" show="%d"/><field name="kafka.required_acks" show="-1"/><field name="kafka.client_id" show="%s" value="%s" size="%d"/><field><field name="kafka.topic_name" show="%s" value="%s" size="%d"/><field><field name="kafka.partition_id" show="%d"/><field><field name="kafka.message_magic" show="2"/><field name="kafka.batch_codec" show="0"/><field><field name="kafka.message_value" value="%s" size="%d"/></field></field></field></field></proto>`, correlation, html.EscapeString(client), hex.EncodeToString(clientSpan), len(clientSpan), html.EscapeString(topic), hex.EncodeToString(topicSpan), len(topicSpan), partition, hex.EncodeToString(value), len(value))
+}
+
+func TestWireCandidatesUseDecodedStringsInsteadOfLengthPrefixSubstrings(t *testing.T) {
+	// Given standard prefixed raw string spans and XML-escaped decoded ASCII,
+	// when matching the worker and topic, then exact show values identify them.
+	client := "kaferry-fixture&\""
+	packet := wireTestPDU(client, "t", 0, 1, []byte("one"))
+	known := []wireKnownValue{{ID: "a", Topic: "t", Partition: 0, Value: []byte("one")}}
+	capture := func(pdu string) string { return "<pdml>" + wireTestSYN() + wireTestPacket(2, pdu, false) + "</pdml>" }
+	got, err := parseWirePDML(strings.NewReader(capture(packet)), client, 19092, known)
+	if err != nil || !reflect.DeepEqual(got.DistinctIDs, []string{"a"}) {
+		t.Fatalf("decoded string attribution: %+v, %v", got, err)
+	}
+	// Raw bytes still contain the expected client, but a different decoded
+	// client (or a longer client containing it) cannot identify this worker.
+	for _, other := range []string{
+		strings.Replace(packet, `show="kaferry-fixture&amp;&#34;"`, `show="kaferry-other"`, 1),
+		wireTestPDU(client+"-extra", "t", 0, 1, []byte("one")),
+	} {
+		got, err = parseWirePDML(strings.NewReader(capture(other)), client, 19092, known)
+		if err != nil || len(got.DistinctIDs) != 0 {
+			t.Fatalf("client substring/raw-span accepted: %+v, %v", got, err)
+		}
+	}
+	// Raw prefix/payload substrings cannot compensate for a missing decoded
+	// client, incorrect span length, or a different decoded topic.
+	for _, broken := range []string{
+		strings.Replace(packet, `show="kaferry-fixture&amp;&#34;"`, "", 1),
+		strings.Replace(packet, `name="kafka.client_id" show="kaferry-fixture&amp;&#34;" value="00116b6166657272792d666978747572652622" size="19"`, `name="kafka.client_id" show="kaferry-fixture&amp;&#34;" value="00116b6166657272792d666978747572652622" size="17"`, 1),
+		wireTestPDU(client, "t-extra", 0, 1, []byte("one")),
+	} {
+		if _, err = parseWirePDML(strings.NewReader(capture(broken)), client, 19092, known); err == nil {
+			t.Fatal("incomplete/substring string attribution accepted")
+		}
+	}
 }

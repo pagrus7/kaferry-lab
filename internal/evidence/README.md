@@ -144,7 +144,9 @@ The compiled scenario IDs are `healthy`, `repeated-kill`, `delivery-stop`,
 `delivery-threshold`, `source-startup` and `source-save`. Healthy histories need no
 invented fault. Crash histories need at least two independently reached lag kills,
 including an identified visible-output/unsaved-position episode, each with matching signal exit,
-restart and audits. Startup histories need source impairment before invocation,
+restart and audits. Newer output or scan observations before the actual fault
+request invalidate an older trigger even when the new audit's saved/group read
+finishes after that request. Startup histories need source impairment before invocation,
 observed bounded worker exit, recovery and successful same-group copying.
 Delivery-stop histories additionally need independent timeout-path observations;
 logs can corroborate the path but never replace record scans.
