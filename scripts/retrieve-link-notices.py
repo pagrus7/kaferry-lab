@@ -218,7 +218,7 @@ def select_artifact(listing, github_run, identity):
 
 
 def retrieve(base, identity, github_run, key, cert, token=None):
-    identity = s.identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"])
+    identity = s.identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"], identity.get("layout", "fixture-v1"))
     github_run = run_number(github_run)
     directory, error_fd = s.reserve_operation(Path(base) / ".cache/retrieved-link-notices", identity["run_id"])
     action = "read bounded token stdin"
@@ -284,9 +284,17 @@ def retrieve(base, identity, github_run, key, cert, token=None):
         action = "privately unseal API-verified artifact"
         payloads = u.unseal(base, identity, archive, trusted, key, cert)
         action = "persist authenticated retrieval metadata"
-        s.prepare_complete(directory, s.encode(dict(identity, repository=REPOSITORY, github_run_id=github_run,
+        complete = dict(identity, repository=REPOSITORY, github_run_id=github_run,
                 workflow=WORKFLOW, artifact_id=artifact["id"], artifact_name=artifact["name"],
-                api_zip_sha256=trusted, job_id=job["id"], requests=requests, complete=True)))
+                api_zip_sha256=trusted, job_id=job["id"], requests=requests, complete=True)
+        if identity.get("layout") == s.LINKED_LAYOUT:
+            fixture_absent = not any(name.startswith("fixture/") for name in payloads)
+            complete.update(manifest_version=2, components=s.linked_components(payloads, identity, fixture_absent),
+                            bundle_complete=not fixture_absent, release_qualified=False,
+                            fixture_absence_verified_by_consumer=fixture_absent,
+                            caller_declaration={"notice_writers_stopped_and_reaped": True, "observed_proof": False},
+                            completion_scope="captured bytes only; no writer-quiescence, cleanup or calibration qualification")
+        s.prepare_complete(directory, s.encode(complete))
         owned_fd, error_fd = error_fd, None
         s.close_operation(owned_fd)
         s.publish_complete(directory)
@@ -324,7 +332,7 @@ def main():
     parser.add_argument("--token-stdin", action="store_true", required=True)
     parser.add_argument("--private-key", type=Path, required=True)
     args = parser.parse_args()
-    identity = s.identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt)
+    identity = s.identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt, args.layout)
     if args.recipient_sha256 != s.CERT_PIN:
         raise s.Rejected("reviewed recipient pin required")
     retrieve(Path.cwd(), identity, args.github_run_id, args.private_key,

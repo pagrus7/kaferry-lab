@@ -49,6 +49,8 @@ def verified_member(artifact, trusted_zip_sha256):
 
 
 def unpack(clear, identity):
+    identity = s.identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"], identity.get("layout", "fixture-v1"))
+    linked = identity.get("layout") == s.LINKED_LAYOUT
     if len(clear) > s.MAX_TAR:
         raise s.Rejected("recovered archive bound exceeded")
     prefix = "link-notices/" + identity["run_id"] + "/"
@@ -64,7 +66,12 @@ def unpack(clear, identity):
                 limit = s.MAX_MANIFEST if name == "MANIFEST.json" else s.MAX_FILE
                 if entry.size < 0 or entry.size > limit:
                     raise s.Rejected("recovered member byte bound exceeded")
-                if name != "MANIFEST.json" and (not s.safe_relative(name) or name in payloads):
+                relative = name
+                if linked and name != "MANIFEST.json":
+                    component, separator, relative = name.partition("/")
+                    if not separator or component not in ("driver", "fixture"):
+                        raise s.Rejected("recovered linked component rejected")
+                if name != "MANIFEST.json" and (not s.safe_relative(relative) or name in payloads):
                     raise s.Rejected("recovered member pathname rejected")
                 with archive.extractfile(entry) as source:  # memory only; never extractall
                     body = source.read(limit + 1)
@@ -85,10 +92,26 @@ def unpack(clear, identity):
         raise s.Rejected("recovered archive invalid") from None
     if not payloads or manifest is None:
         raise s.Rejected("recovered manifest or receipts missing")
-    marker = s.parse_json(payloads.get("PRIVATE.json", b"null"))
-    if marker != {"RunID": identity["run_id"], "Classification": "PRIVATE RAW EVIDENCE", "Publication": "withhold pending explicit redaction review"}:
-        raise s.Rejected("recovered private marker rejected")
-    canonical, expected_manifest = s.pack(payloads, identity)
+    absence_body = None
+    if not isinstance(manifest, dict):
+        raise s.Rejected("recovered manifest object rejected")
+    if linked:
+        components = manifest.get("components")
+        fixture = components.get("fixture") if isinstance(components, dict) else None
+        if (manifest.get("version") != 2 or manifest.get("layout") != s.LINKED_LAYOUT
+                or not isinstance(fixture, dict) or fixture.get("availability") not in ("captured", "absent-ENOENT")):
+            raise s.Rejected("explicit linked manifest version or availability rejected")
+        if fixture["availability"] == "absent-ENOENT":
+            absence_body = s.decode_fixture_absence(manifest.get("fixture_absence"), identity)
+        elif manifest.get("fixture_absence") is not None:
+            raise s.Rejected("captured fixture cannot carry an absence observation")
+    else:
+        if manifest.get("version") != 1 or "layout" in manifest:
+            raise s.Rejected("explicit fixture manifest version rejected")
+        marker = s.parse_json(payloads.get("PRIVATE.json", b"null"))
+        if marker != {"RunID": identity["run_id"], "Classification": "PRIVATE RAW EVIDENCE", "Publication": "withhold pending explicit redaction review"}:
+            raise s.Rejected("recovered private marker rejected")
+    canonical, expected_manifest = s.pack(payloads, identity, fixture_absence_body=absence_body)
     # Fixed USTAR byte equality also rejects hidden extensions and trailing data.
     if manifest != expected_manifest or clear != canonical:
         raise s.Rejected("inner manifest identity, hashes or canonical archive rejected")
@@ -96,7 +119,7 @@ def unpack(clear, identity):
 
 
 def unseal(base, identity, artifact, trusted_zip_sha256, key, cert):
-    identity = s.identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"])
+    identity = s.identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"], identity.get("layout", "fixture-v1"))
     destination, error_fd = s.reserve_operation(Path(base) / ".cache/unsealed-link-notices", identity["run_id"])
     action = "verify trusted artifact ZIP bytes and sole CMS member"
     try:
@@ -124,12 +147,22 @@ def unseal(base, identity, artifact, trusted_zip_sha256, key, cert):
                 except FileExistsError:
                     pass
             s.write_private(path, body)
+        absence_body = None
+        if identity.get("layout") == s.LINKED_LAYOUT and manifest["fixture_absence"] is not None:
+            absence_body = s.decode_fixture_absence(manifest["fixture_absence"], identity)
+            action = "persist exact verified fixture absence observation"
+            s.write_private(destination / "fixture-absence.json", absence_body)
         action = "persist verified inner manifest"
         s.write_private(destination / "MANIFEST.json", s.encode(manifest))
         action = "persist complete metadata"
-        s.prepare_complete(destination, s.encode(dict(identity, complete=True,
-                        trusted_zip_sha256=trusted_zip_sha256, derived_cms_sha256=cms_sha,
-                        files=len(payloads), total_bytes=sum(map(len, payloads.values())))))
+        complete = dict(identity, complete=True, trusted_zip_sha256=trusted_zip_sha256, derived_cms_sha256=cms_sha,
+                        files=len(payloads), total_bytes=sum(map(len, payloads.values())))
+        if identity.get("layout") == s.LINKED_LAYOUT:
+            complete.update(manifest_version=2, components=manifest["components"], bundle_complete=manifest["bundle_complete"],
+                            release_qualified=False, caller_declaration=manifest["caller_declaration"],
+                            fixture_absence_sha256=s.digest(absence_body) if absence_body is not None else None,
+                            completion_scope="captured bytes only; no writer-quiescence, cleanup or calibration qualification")
+        s.prepare_complete(destination, s.encode(complete))
         owned_fd, error_fd = error_fd, None
         s.close_operation(owned_fd)
         s.publish_complete(destination)
@@ -150,7 +183,7 @@ def main():
     parser.add_argument("--trusted-artifact-zip-sha256", required=True)
     parser.add_argument("--private-key", type=Path, required=True)
     args = parser.parse_args()
-    identity = s.identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt)
+    identity = s.identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt, args.layout)
     if args.recipient_sha256 != s.CERT_PIN:
         raise s.Rejected("reviewed recipient pin required")
     unseal(Path.cwd(), identity, args.artifact_zip, args.trusted_artifact_zip_sha256,

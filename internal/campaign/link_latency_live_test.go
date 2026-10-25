@@ -184,7 +184,8 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		Command                                                                                              []string
 		BudgetSeconds, WorkSeconds, MemoryBytes, NanoCPUs, PIDs, LogBytes, Connections, Requests, NonceBytes int64
 		LatencyMS, GranularityMS, DelayedMinimumMS, PromptMaximumMS, RequestBoundMS                          int
-	}{state.RunID, name, "latency-calibration", fixture.ProxyImage, linkLatencyImageID, "host", api, endpoint, upstream, configPath, command, 90, 70, 128 << 20, 500000000, 64, 1 << 20, 8, 14, 32, 400, 100, 300, 200, 4000})
+		LongLatencyMS, LongMinimumMS, LongRequestBoundMS, PendingTriggerMaximumMS                            int
+	}{state.RunID, name, "latency-calibration", fixture.ProxyImage, linkLatencyImageID, "host", api, endpoint, upstream, configPath, command, 90, 70, 128 << 20, 500000000, 64, 1 << 20, 10, 19, 32, 400, 100, 300, 200, 4000, 20000, 19900, 25000, 1000})
 	t.Log("STOCK PROXY ECHO CALIBRATION ONLY; selected synthetic facts: " + filepath.Join(directory, "observations.jsonl"))
 
 	serverEvents := make(chan linkLatencyServerReceipt, 16)
@@ -195,6 +196,18 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		return retainLinkLatencyServerFailures(state, serverFailures)
 	}
 	var persistent net.Conn
+	persistentCloseAttempted := false
+	var persistentCloseError error
+	closePersistent := func() error {
+		if persistent == nil {
+			return nil
+		}
+		if !persistentCloseAttempted {
+			persistentCloseAttempted = true
+			persistentCloseError = closeLinkLatencyClient(state, persistent)
+		}
+		return persistentCloseError
+	}
 	var containerID string
 	created, dockerStopped := false, false
 	docker := func(ctx context.Context, args ...string) ([]byte, error) {
@@ -274,7 +287,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	t.Cleanup(func() {
 		clientClosed := true
 		if persistent != nil {
-			closeErr := closeLinkLatencyClient(state, persistent)
+			closeErr := closePersistent()
 			clientClosed = closeErr == nil
 			if closeErr != nil {
 				t.Error(closeErr)
@@ -405,13 +418,17 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	persistentID, persistentPeer := 0, ""
 	newIDs := map[int]bool{}
 	seenNonces := map[string]bool{}
-	probeBoth := func(phase, delayedDirection string) {
+	probeBoth := func(phase, delayedDirection string, longDownstream bool) {
 		t.Helper()
 		for _, socket := range []string{"existing", "new"} {
 			if err := drainServerFailures(); err != nil {
 				t.Fatal(err)
 			}
-			one, done := context.WithTimeout(ctx, 4*time.Second)
+			requestBound := 4 * time.Second
+			if longDownstream {
+				requestBound = 25 * time.Second
+			}
+			one, done := context.WithTimeout(ctx, requestBound)
 			conn := persistent
 			if socket == "new" {
 				var e error
@@ -421,7 +438,13 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-			observed, e := exchangeLinkLatency(one, state, origin, conn, serverEvents)
+			var observed linkLatencyExchange
+			var e error
+			if longDownstream {
+				observed, e = exchangeLongLinkLatency(one, state, origin, conn, serverEvents)
+			} else {
+				observed, e = exchangeLinkLatency(one, state, origin, conn, serverEvents)
+			}
 			done()
 			observed.Phase, observed.Socket = phase, socket
 			if socket == "new" {
@@ -449,6 +472,12 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 				}
 				newIDs[observed.ServerConnection] = true
 			}
+			if longDownstream {
+				if !linkLatencyLongDownstreamObserved(observed) {
+					t.Fatal("20s downstream server-write-to-client-first-byte interval not independently observed")
+				}
+				continue
+			}
 			up := time.Duration(observed.ServerFirstByteNS - observed.ClientWriteStartNS)
 			down := time.Duration(observed.ClientFirstByteNS - observed.ServerWriteStartNS)
 			prompt := 200 * time.Millisecond
@@ -460,7 +489,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	}
 	// When latency is added to the existing stock proxy, both its established
 	// link and a later new link must exhibit the independently observed direction.
-	probeBoth("healthy", "")
+	probeBoth("healthy", "", false)
 	for _, setting := range []struct {
 		direction string
 		toxicity  float64
@@ -485,7 +514,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if setting.toxicity == 0 {
 			direction, phase = "", "toxicity-zero"
 		}
-		probeBoth(phase, direction)
+		probeBoth(phase, direction, false)
 		if err = apiCall("DELETE", "/proxies/"+mapping.Name+"/toxics/latency", nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -495,8 +524,55 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		// Then removal must independently restore prompt exact-byte exchange on
 		// both socket lifetimes. Nothing is pending when this toxic is removed;
 		// this control does not claim to calibrate pending-byte early flush.
-		probeBoth("removed-"+phase, "")
+		probeBoth("removed-"+phase, "", false)
 	}
+	// The 20s toxic is a separate measurement, never an extrapolation from the
+	// 400ms controls. Each complete exchange records its own server write end.
+	longToxic := linkLatencyToxic{Name: "latency", Type: "latency", Stream: "downstream", Toxicity: 1}
+	longToxic.Attributes.Latency = 20000
+	if err = checkMapping([]linkLatencyToxic{}); err != nil {
+		t.Fatal(err)
+	}
+	var addedLong linkLatencyToxic
+	if err = apiCall("POST", "/proxies/"+mapping.Name+"/toxics", longToxic, &addedLong); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(addedLong, longToxic) {
+		t.Fatal("20s toxic activation response mismatch")
+	}
+	if err = checkMapping([]linkLatencyToxic{longToxic}); err != nil {
+		t.Fatal(err)
+	}
+	probeBoth("downstream-20s", "downstream", true)
+	if err = checkMapping([]linkLatencyToxic{longToxic}); err != nil {
+		t.Fatal(err)
+	}
+	// Unlike the short quiescent removals, this request removes the toxic while
+	// a matching server-written nonce has no observed first-byte read completion.
+	pending, pendingErr := pendingLinkLatencyRemoval(ctx, state, origin, persistent, serverEvents, closePersistent, func() (int64, int64, error) {
+		start := time.Since(origin).Nanoseconds()
+		e := apiCall("DELETE", "/proxies/"+mapping.Name+"/toxics/latency", nil, nil)
+		return start, time.Since(origin).Nanoseconds(), e
+	})
+	pending.Exchange.Phase, pending.Exchange.Socket = "pending-removal-20s", "existing"
+	if pendingErr == nil {
+		pending.Effect, pendingErr = linkLatencyPendingEffect(pending)
+	}
+	mustRetain("pending_removal", pending)
+	if pendingErr != nil {
+		t.Fatal(pendingErr)
+	}
+	if pending.Exchange.ClientLocal != local || pending.Exchange.ClientRemote != remote || pending.Exchange.ServerConnection != persistentID || pending.Exchange.ServerPeer != persistentPeer || seenNonces[pending.Exchange.Nonce] {
+		t.Fatal("pending-removal nonce or established socket identity mismatch")
+	}
+	seenNonces[pending.Exchange.Nonce] = true
+	if err = checkMapping([]linkLatencyToxic{}); err != nil {
+		t.Fatal(err)
+	}
+	// Exact bytes and prompt new/existing responses establish recovery; no
+	// aggregate zero counter or inferred quiescence is used for that decision.
+	probeBoth("removed-pending-20s", "", false)
+
 	if err = ctx.Err(); err != nil {
 		t.Fatal("calibration work budget expired")
 	}
@@ -650,7 +726,19 @@ func readyLinkLatencyAPI(ctx context.Context, read func() (string, error)) error
 	return errors.New("calibration API sample bound exhausted")
 }
 
-func exchangeLinkLatency(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (result linkLatencyExchange, err error) {
+func exchangeLinkLatency(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (linkLatencyExchange, error) {
+	bounded, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	return exchangeLinkLatencyInWindow(bounded, state, origin, conn, events)
+}
+
+func exchangeLongLinkLatency(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (linkLatencyExchange, error) {
+	bounded, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	return exchangeLinkLatencyInWindow(bounded, state, origin, conn, events)
+}
+
+func exchangeLinkLatencyInWindow(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (result linkLatencyExchange, err error) {
 	result.RequestStartNS = time.Since(origin).Nanoseconds()
 	result.ClientLocal, result.ClientRemote = conn.LocalAddr().String(), conn.RemoteAddr().String()
 	operation := "rand.Read"
@@ -665,9 +753,10 @@ func exchangeLinkLatency(ctx context.Context, state fixture.State, origin time.T
 		return result, err
 	}
 	result.Nonce = hex.EncodeToString(nonce[:])
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	deadline, _ := ctx.Deadline()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return result, errors.New("calibration exchange requires its fixed request deadline")
+	}
 	operation = "SetDeadline"
 	if err = conn.SetDeadline(deadline); err != nil {
 		return result, err
@@ -725,16 +814,16 @@ func linkLatencyClosed(err error) bool {
 
 func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Listener, events chan<- linkLatencyServerReceipt, failures chan<- linkLatencyNetworkFailure) func() error {
 	var mu sync.Mutex
-	connections := make([]net.Conn, 0, 8)
+	connections := make([]net.Conn, 0, 10)
 	stopping := false
 	failed := func(operation, endpoint string, cause error) {
-		// At most 19 terminal/close failures: eight worker failures,
-		// eight single-attempt connection closes, listener/accept and one race.
+		// At most 23 terminal/close failures: ten worker failures,
+		// ten single-attempt connection closes, listener/accept and one race.
 		// The fixed 32-entry owner handoff never drops or redacts a cause.
 		failures <- linkLatencyNetworkFailure{[]string{"latency_echo", operation, endpoint}, cause}
 	}
 	var closeMu sync.Mutex
-	closeAttempted := map[net.Conn]bool{} // at most eight owned TCP connections
+	closeAttempted := map[net.Conn]bool{} // at most ten owned TCP connections
 	closeConn := func(conn net.Conn) {
 		closeMu.Lock()
 		if closeAttempted[conn] {
@@ -751,7 +840,7 @@ func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Li
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		for id := 1; id <= 8; id++ {
+		for id := 1; id <= 10; id++ {
 			conn, err := listener.Accept()
 			if err != nil {
 				mu.Lock()
@@ -875,4 +964,197 @@ func retainLinkLatencyServerFailures(state fixture.State, failures <-chan linkLa
 			return result
 		}
 	}
+}
+
+// Long-delay comparisons use the independent server write END, not request
+// start or configured toxic presence, as the lower observation boundary.
+func linkLatencyServerWriteObserved(v linkLatencyExchange) bool {
+	const prompt = int64(200 * time.Millisecond)
+	return v.ExactBytes && v.Error == "" && v.RequestStartNS > 0 &&
+		v.ClientWriteStartNS >= v.RequestStartNS && v.ClientWriteEndNS >= v.ClientWriteStartNS && v.ClientWriteEndNS-v.ClientWriteStartNS <= prompt &&
+		v.ServerFirstByteNS >= v.ClientWriteStartNS && v.ServerFirstByteNS-v.ClientWriteStartNS <= prompt &&
+		v.ServerReceiveNS >= v.ServerFirstByteNS && v.ServerWriteStartNS >= v.ServerReceiveNS && v.ServerWriteStartNS-v.ServerReceiveNS <= prompt &&
+		v.ServerWriteEndNS >= v.ServerWriteStartNS && v.ServerWriteEndNS-v.ServerWriteStartNS <= int64(100*time.Millisecond) &&
+		v.ClientReadEndNS >= v.ClientFirstByteNS && v.ClientReadEndNS-v.RequestStartNS <= int64(25*time.Second)
+}
+
+func linkLatencyLongDownstreamObserved(v linkLatencyExchange) bool {
+	return linkLatencyServerWriteObserved(v) &&
+		v.ClientFirstByteNS-v.ServerWriteEndNS >= int64(19900*time.Millisecond) &&
+		v.ClientFirstByteNS-v.ServerWriteEndNS <= int64(25*time.Second)
+}
+
+type linkLatencyPendingRemoval struct {
+	Exchange                                          linkLatencyExchange
+	ClientReadStartedNS, ClientReadOutstandingCheckNS int64
+	RemovalStartNS, RemovalEndNS                      int64
+	ReaderReaped                                      bool
+	Effect                                            string
+}
+
+type linkLatencyPendingRead struct {
+	FirstByteNS, ReadEndNS int64
+	ExactBytes             bool
+	Error                  error // already privately retained before leaving the reader goroutine
+}
+
+// This finite observation has exactly one reader, one matching server-write
+// receipt and one remove operation. Its callbacks own only this already-open
+// persistent socket and this one toxic; they are not a transport/retry policy.
+func pendingLinkLatencyRemoval(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt, closeOnce func() error, remove func() (int64, int64, error)) (result linkLatencyPendingRemoval, err error) {
+	bounded, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	deadline, _ := bounded.Deadline()
+	v := &result.Exchange
+	v.RequestStartNS = time.Since(origin).Nanoseconds()
+	v.ClientLocal, v.ClientRemote = conn.LocalAddr().String(), conn.RemoteAddr().String()
+	operation, safeFailure := "rand.Read", false
+	started, firstByte := make(chan int64, 1), make(chan int64, 1)
+	readResult, readerDone := make(chan linkLatencyPendingRead, 1), make(chan struct{})
+	readerStarted, outcomeConsumed := false, false
+	apply := func(read linkLatencyPendingRead) {
+		v.ClientFirstByteNS, v.ClientReadEndNS, v.ExactBytes = read.FirstByteNS, read.ReadEndNS, read.ExactBytes
+	}
+	defer func() {
+		var closeErr error
+		if readerStarted {
+			if err != nil {
+				closeErr = closeOnce()
+			}
+			// Even cancellation cannot abandon a reader or its original notice.
+			// Initial SetDeadline bounds this wait by request end + one second;
+			// that is <=71s from the campaign origin, before the90s cleanup cap.
+			timer := time.NewTimer(max(0, time.Until(deadline)) + time.Second)
+			defer timer.Stop()
+			select {
+			case <-readerDone:
+				result.ReaderReaped = true
+				if !outcomeConsumed {
+					read := <-readResult
+					apply(read)
+					err = errors.Join(err, read.Error)
+				}
+			case <-timer.C:
+				err = errors.Join(err, errors.New("pending-removal client reader not reaped within its fixed deadline"))
+			}
+		}
+		if err != nil {
+			if !safeFailure {
+				err = linkLatencyRetainFailure(state, []string{"latency_pending_removal", operation, v.ClientLocal, v.ClientRemote, v.Nonce}, nil, err, false)
+			}
+			err = errors.Join(err, closeErr)
+			v.Error = err.Error()
+		}
+	}()
+	var nonce [32]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return result, err
+	}
+	v.Nonce = hex.EncodeToString(nonce[:])
+	operation = "SetDeadline"
+	if err = conn.SetDeadline(deadline); err != nil {
+		return result, err
+	}
+	operation = "Write"
+	v.ClientWriteStartNS = time.Since(origin).Nanoseconds()
+	n, writeErr := conn.Write(nonce[:])
+	v.ClientWriteEndNS = time.Since(origin).Nanoseconds()
+	if writeErr != nil {
+		return result, writeErr
+	}
+	if n != len(nonce) {
+		return result, io.ErrShortWrite
+	}
+	readerStarted = true
+	go func() {
+		defer close(readerDone)
+		started <- time.Since(origin).Nanoseconds()
+		var reply [32]byte
+		_, cause := io.ReadFull(conn, reply[:1])
+		read := linkLatencyPendingRead{FirstByteNS: time.Since(origin).Nanoseconds()}
+		firstByte <- read.FirstByteNS
+		readOperation := "ReadFirstByte"
+		if cause == nil {
+			readOperation = "ReadRemainingBytes"
+			_, cause = io.ReadFull(conn, reply[1:])
+		}
+		read.ReadEndNS = time.Since(origin).Nanoseconds()
+		read.ExactBytes = cause == nil && bytes.Equal(reply[:], nonce[:])
+		if cause != nil {
+			read.Error = linkLatencyRetainFailure(state, []string{"latency_pending_removal", readOperation, v.ClientLocal, v.ClientRemote, v.Nonce}, nil, cause, false)
+		}
+		readResult <- read
+	}()
+	operation = "ReadStartedHandoff"
+	select {
+	case result.ClientReadStartedNS = <-started:
+	case <-bounded.Done():
+		return result, bounded.Err()
+	}
+	operation = "ServerWriteHandoff"
+	select {
+	case receipt := <-events:
+		v.ServerConnection, v.ServerPeer = receipt.Connection, receipt.Peer
+		v.ServerFirstByteNS, v.ServerReceiveNS = receipt.FirstByteNS, receipt.ReceiveNS
+		v.ServerWriteStartNS, v.ServerWriteEndNS = receipt.WriteStartNS, receipt.WriteEndNS
+		if receipt.Nonce != v.Nonce {
+			return result, errors.New("pending-removal server nonce mismatch")
+		}
+	case <-bounded.Done():
+		return result, bounded.Err()
+	}
+	operation = "PendingTrigger"
+	select {
+	case <-firstByte:
+		return result, errors.New("pending-removal trigger unreached: client first-byte read already completed")
+	default:
+		result.ClientReadOutstandingCheckNS = time.Since(origin).Nanoseconds()
+	}
+	if v.ServerWriteEndNS <= 0 || result.ClientReadOutstandingCheckNS-v.ServerWriteEndNS < 0 || result.ClientReadOutstandingCheckNS-v.ServerWriteEndNS > int64(time.Second) {
+		return result, errors.New("pending-removal server-write trigger not fresh within one second")
+	}
+	operation = "RemoveToxic"
+	result.RemovalStartNS, result.RemovalEndNS, err = remove()
+	if err != nil {
+		safeFailure = true
+		return result, err
+	}
+	operation = "ReadCompletedHandoff"
+	select {
+	case read := <-readResult:
+		outcomeConsumed = true
+		apply(read)
+		if read.Error != nil {
+			safeFailure = true
+			return result, read.Error
+		}
+		if !read.ExactBytes {
+			return result, errors.New("pending-removal response nonce changed")
+		}
+	case <-bounded.Done():
+		return result, bounded.Err()
+	}
+	return result, nil
+}
+
+// Return observations, never an inferred Kafka ACK or a claim that removal
+// necessarily flushes. An early read during the HTTP interval is distinguished
+// from one after its completion; a delayed read reports no observed early byte.
+func linkLatencyPendingEffect(v linkLatencyPendingRemoval) (string, error) {
+	e := v.Exchange
+	if !v.ReaderReaped || !linkLatencyServerWriteObserved(e) || e.ServerWriteEndNS <= 0 ||
+		v.ClientReadStartedNS < e.ClientWriteEndNS || v.ClientReadStartedNS > v.ClientReadOutstandingCheckNS ||
+		v.ClientReadOutstandingCheckNS < e.ServerWriteEndNS || v.ClientReadOutstandingCheckNS-e.ServerWriteEndNS > int64(time.Second) ||
+		v.RemovalStartNS < v.ClientReadOutstandingCheckNS || v.RemovalEndNS < v.RemovalStartNS ||
+		v.RemovalStartNS-e.ServerWriteEndNS >= int64(19900*time.Millisecond) ||
+		e.ClientFirstByteNS < v.RemovalStartNS || e.ClientReadEndNS < e.ClientFirstByteNS {
+		return "", errors.New("pending-removal timing/read-completion evidence is missing, stale or precedes removal")
+	}
+	if e.ClientFirstByteNS-e.ServerWriteEndNS < int64(19900*time.Millisecond) {
+		if e.ClientFirstByteNS <= v.RemovalEndNS {
+			return "first_byte_during_removal_before_20s_reference", nil
+		}
+		return "first_byte_after_removal_before_20s_reference", nil
+	}
+	return "first_byte_at_or_after_20s_reference", nil
 }

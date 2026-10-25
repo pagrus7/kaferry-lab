@@ -6,6 +6,8 @@ GitHub API digest of the complete artifact ZIP before parsing or decryption.
 """
 import argparse
 import base64
+import binascii
+import errno
 import hashlib
 import io
 import json
@@ -27,12 +29,14 @@ MAX_TAR = 10 << 20
 MAX_CMS = 12 << 20
 MAX_ZIP = 16 << 20
 MAX_MANIFEST = 256 << 10
+MAX_ABSENCE = 16 << 10
 RUN = re.compile(r"[a-z][a-z0-9-]{3,48}\Z")
 HEAD = re.compile(r"[0-9a-f]{40}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}(?:\.json)?\Z")
 JOB = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 CERT_PIN = "ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57"
+LINKED_LAYOUT = "linked-calibration-v2"
 DENIAL = (b"permission denied", b"operation not permitted", b"access denied", b"denied by policy", b"sandbox_extension_issue_file")
 
 
@@ -226,12 +230,17 @@ def read_regular(path, maximum, private=False):
     return body
 
 
-def identities(run, head, pin, job, attempt):
+def identities(run, head, pin, job, attempt, layout="fixture-v1"):
     if (not RUN.fullmatch(run) or not HEAD.fullmatch(head) or not SHA.fullmatch(pin)
             or not JOB.fullmatch(job) or not re.fullmatch(r"[1-9][0-9]{0,8}", str(attempt))):
         raise Rejected("mandatory reviewed identity rejected")
-    return {"run_id": run, "source_head": head, "recipient_sha256": pin,
-            "job": job, "attempt": str(attempt)}
+    if layout not in ("fixture-v1", LINKED_LAYOUT) or (layout == LINKED_LAYOUT and job != "links"):
+        raise Rejected("reviewed layout and job rejected")
+    result = {"run_id": run, "source_head": head, "recipient_sha256": pin,
+              "job": job, "attempt": str(attempt)}
+    if layout == LINKED_LAYOUT:
+        result["layout"] = layout
+    return result
 
 
 def safe_relative(name):
@@ -241,7 +250,7 @@ def safe_relative(name):
             and all(not p.endswith(".json") for p in parts[:-1]))
 
 
-def snapshot(root, run):
+def snapshot(root, run, *, remaining_files=MAX_FILES, remaining_bytes=MAX_PAYLOAD, include_inventory=False):
     """Read through held directory FDs; compare a second complete inventory."""
     check_chain(root)
     check_private(root.lstat(), True)
@@ -282,7 +291,7 @@ def snapshot(root, run):
                     record(relative, info, reread)
                     if reread:
                         continue
-                    if len(payloads) >= MAX_FILES:
+                    if len(payloads) >= remaining_files:
                         raise Rejected("receipt count bound exceeded")
                     source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
                     with os.fdopen(source, "rb") as stream:
@@ -291,7 +300,7 @@ def snapshot(root, run):
                         body = stream.read(MAX_FILE + 1)
                         if signature(info) != signature(os.fstat(stream.fileno())):
                             raise Rejected("receipt changed during read")
-                    if len(body) != info.st_size or sum(map(len, payloads.values())) + len(body) > MAX_PAYLOAD:
+                    if len(body) != info.st_size or sum(map(len, payloads.values())) + len(body) > remaining_bytes:
                         raise Rejected("receipt payload bound exceeded")
                     value = parse_json(body)
                     if not isinstance(value, dict) or ("RunID" in value and value["RunID"] != run):
@@ -317,13 +326,122 @@ def snapshot(root, run):
             raise Rejected("input inventory changed")
     finally:
         os.close(fd)
-    return payloads
+    return (payloads, inventory, root_signature) if include_inventory else payloads
 
 
-def pack(payloads, identity):
+def linked_snapshot(base, identity):
+    """The two fixed roots only; absence is observed, never repaired or adopted."""
+    run = identity["run_id"]
+    driver = base / ".cache/link-calibration-private" / run
+    fixture_parent = base / ".cache/fixtures-private"
+    fixture = fixture_parent / (run + "-links")
+    def fixture_state():
+        # Only lstat of these two fixed root components may admit ENOENT.
+        # Missing descendants, permission/unknown errors and malformed roots fail.
+        check_chain(base / ".cache")
+        anchor = signature((base / ".cache").lstat())
+        for path in (fixture_parent, fixture):
+            try:
+                info = path.lstat()
+            except FileNotFoundError as error:
+                if error.errno != errno.ENOENT:
+                    raise
+                return ("absent-ENOENT", str(path), anchor), {
+                    "action": "observe fixed fixture component absence", "type": type(error).__name__,
+                    "errno": error.errno, "exact_text": str(error)}
+            check_private(info, True)
+            anchor = signature(info)
+        return ("captured", anchor), None
+    check_private(driver.parent.lstat(), True)
+    captured_driver = snapshot(driver, run, include_inventory=True)
+    driver_files = captured_driver[0]
+    remaining_files = MAX_FILES - len(driver_files)
+    remaining_bytes = MAX_PAYLOAD - sum(map(len, driver_files.values()))
+    state, absence = fixture_state()
+    captured_fixture = None
+    if absence is None:
+        captured_fixture = snapshot(fixture, run, remaining_files=remaining_files,
+                                    remaining_bytes=remaining_bytes, include_inventory=True)
+    # Recheck both components after both captures, including inode/mtime
+    # inventories: byte equality alone would miss replaced identical files.
+    if snapshot(driver, run, include_inventory=True) != captured_driver:
+        raise Rejected("driver component changed during linked capture")
+    if captured_fixture is not None:
+        if snapshot(fixture, run, remaining_files=remaining_files, remaining_bytes=remaining_bytes,
+                    include_inventory=True) != captured_fixture:
+            raise Rejected("fixture component changed during linked capture")
+    final_state, _ = fixture_state()
+    if final_state != state:
+        raise Rejected("fixture component availability changed during linked capture")
+    payloads = {"driver/" + name: body for name, body in driver_files.items()}
+    if captured_fixture is not None:
+        payloads.update({"fixture/" + name: body for name, body in captured_fixture[0].items()})
+    return payloads, absence
+
+
+def linked_components(payloads, identity, fixture_absent):
+    if type(fixture_absent) is not bool or len(payloads) > MAX_FILES or sum(map(len, payloads.values())) > MAX_PAYLOAD:
+        raise Rejected("linked shared payload bounds rejected")
+    groups = {"driver": {}, "fixture": {}}
+    for name, body in payloads.items():
+        component, separator, relative = name.partition("/")
+        if not separator or component not in groups or not safe_relative(relative) or len(body) > MAX_FILE:
+            raise Rejected("linked component member rejected")
+        value = parse_json(body)
+        if not isinstance(value, dict) or ("RunID" in value and value["RunID"] != identity["run_id"]):
+            raise Rejected("linked receipt run rejected")
+        groups[component][relative] = body
+    marker = {"RunID": identity["run_id"], "Classification": "PRIVATE RAW EVIDENCE", "Publication": "withhold pending explicit redaction review"}
+    for component in ("driver", "fixture"):
+        if component == "fixture" and fixture_absent:
+            if groups[component]:
+                raise Rejected("absent fixture component contains receipts")
+        elif parse_json(groups[component].get("PRIVATE.json", b"null")) != marker:
+            raise Rejected("linked component private marker rejected")
+    return {component: {"availability": "absent-ENOENT" if component == "fixture" and fixture_absent else "captured",
+                        "files": len(files), "total_bytes": sum(map(len, files.values()))}
+            for component, files in groups.items()}
+
+
+def fixture_absence_record(body, identity):
+    """Wrap the exact captured observation bytes; do not reconstruct the notice."""
+    if identity.get("layout") != LINKED_LAYOUT or not isinstance(body, bytes) or not 0 < len(body) <= MAX_ABSENCE:
+        raise Rejected("fixture absence observation bound or layout rejected")
+    notice = parse_json(body)
+    if (not isinstance(notice, dict) or set(notice) != {"action", "type", "errno", "exact_text"}
+            or notice["action"] != "observe fixed fixture component absence"
+            or notice["type"] != "FileNotFoundError" or type(notice["errno"]) is not int
+            or notice["errno"] != errno.ENOENT or not isinstance(notice["exact_text"], str) or not notice["exact_text"]):
+        raise Rejected("fixture absence observation schema rejected")
+    return {"scope": "fixed-fixture-root-ENOENT", "identity": identity,
+            "bytes": len(body), "sha256": digest(body), "body_base64": base64.b64encode(body).decode("ascii")}
+
+
+def decode_fixture_absence(record, identity):
+    if (not isinstance(record, dict) or not isinstance(record.get("body_base64"), str)
+            or len(record["body_base64"]) > 4 * ((MAX_ABSENCE + 2) // 3)):
+        raise Rejected("required fixture absence record missing or oversized")
+    try:
+        body = base64.b64decode(record["body_base64"], validate=True)
+    except (binascii.Error, ValueError):
+        raise Rejected("fixture absence encoding rejected") from None
+    if record != fixture_absence_record(body, identity):
+        raise Rejected("fixture absence hash, identity or scope rejected")
+    return body
+
+
+def pack(payloads, identity, *, fixture_absence_body=None):
     manifest = dict(identity, version=1, files=[{"path": name, "bytes": len(body), "sha256": digest(body)}
                     for name, body in sorted(payloads.items())], count=len(payloads),
                     total_bytes=sum(map(len, payloads.values())))
+    if identity.get("layout") == LINKED_LAYOUT:
+        fixture_absent = fixture_absence_body is not None
+        manifest.update(version=2, components=linked_components(payloads, identity, fixture_absent),
+                        fixture_absence=fixture_absence_record(fixture_absence_body, identity) if fixture_absent else None,
+                        bundle_complete=not fixture_absent, release_qualified=False,
+                        caller_declaration={"notice_writers_stopped_and_reaped": True, "observed_proof": False})
+    elif fixture_absence_body is not None:
+        raise Rejected("fixture absence requires explicit linked layout")
     manifest_body = encode(manifest)
     if len(manifest_body) > MAX_MANIFEST:
         raise Rejected("manifest bound exceeded")
@@ -467,18 +585,31 @@ def certificate(path, expected):
     return body
 
 
-def seal(base, identity, cert, expected_payloads=None):
-    identity = identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"])
+def seal(base, identity, cert, expected_payloads=None, *, notice_writers_stopped_and_reaped=False):
+    identity = identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"], identity.get("layout", "fixture-v1"))
+    if identity.get("layout") == LINKED_LAYOUT and notice_writers_stopped_and_reaped is not True:
+        raise Rejected("linked producer requires caller writer-stop declaration; proof remains external")
     base = Path(base)
     diagnostics, error_fd = reserve_operation(base / ".cache/link-sealing-private", identity["run_id"])
     action = "read pinned recipient certificate"
     try:
         cert_body = certificate(cert, identity["recipient_sha256"])
         action = "snapshot fixed private receipt tree"
-        payloads = snapshot(base / ".cache/fixtures-private" / (identity["run_id"] + "-links"), identity["run_id"])
+        absence_body = None
+        if identity.get("layout") == LINKED_LAYOUT:
+            action = "capture fixed linked driver and fixture components"
+            payloads, absence = linked_snapshot(base, identity)
+            if absence is not None:
+                action = "bound exact admitted fixture absence observation"
+                absence_body = encode(absence)
+                fixture_absence_record(absence_body, identity)
+                action = "persist exact admitted fixture absence observation"
+                write_private(diagnostics / "fixture-absence.json", absence_body)
+        else:
+            payloads = snapshot(base / ".cache/fixtures-private" / (identity["run_id"] + "-links"), identity["run_id"])
         if expected_payloads is not None and payloads != expected_payloads:
             raise Rejected("captured receipt bytes differ from reviewed expected payloads")
-        clear, manifest = pack(payloads, identity)
+        clear, manifest = pack(payloads, identity, fixture_absence_body=absence_body)
         action = "reserve ciphertext quarantine"
         destination = reserve(base / ".cache/link-quarantine", identity["run_id"])
         action = "write private recipient snapshot"
@@ -493,6 +624,11 @@ def seal(base, identity, cert, expected_payloads=None):
                         files=manifest["count"], total_bytes=manifest["total_bytes"],
                         publication="DISABLED; explicit encrypted-public-quarantine exception required",
                         cipher="AES-256-CBC; RSA-OAEP-SHA256; MGF1-SHA256; NOT AEAD")
+        if identity.get("layout") == LINKED_LAYOUT:
+            complete.update(manifest_version=2, components=manifest["components"], bundle_complete=manifest["bundle_complete"],
+                            release_qualified=False, caller_declaration=manifest["caller_declaration"],
+                            fixture_absence_sha256=digest(absence_body) if absence_body is not None else None,
+                            completion_scope="captured bytes only; no writer-quiescence, cleanup or calibration qualification")
         action = "persist complete metadata"
         prepare_complete(destination, encode(complete))
         owned_fd, error_fd = error_fd, None
@@ -516,15 +652,19 @@ def arguments(description):
     parser.add_argument("--recipient-sha256", required=True)
     parser.add_argument("--job", required=True)
     parser.add_argument("--attempt", required=True)
+    parser.add_argument("--layout", choices=("fixture-v1", LINKED_LAYOUT), default="fixture-v1")
     return parser
 
 
 def main():
-    args = arguments(__doc__).parse_args()
-    identity = identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt)
+    parser = arguments(__doc__)
+    parser.add_argument("--notice-writers-stopped-and-reaped", action="store_true")
+    args = parser.parse_args()
+    identity = identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt, args.layout)
     if args.recipient_sha256 != CERT_PIN:
         raise Rejected("reviewed recipient pin required")
-    seal(Path.cwd(), identity, Path(__file__).with_name("link-notices-recipient.pem"))
+    seal(Path.cwd(), identity, Path(__file__).with_name("link-notices-recipient.pem"),
+         notice_writers_stopped_and_reaped=args.notice_writers_stopped_and_reaped)
     print("sealed: complete metadata retained privately; publication disabled")
 
 

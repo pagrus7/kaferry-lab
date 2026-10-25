@@ -6,6 +6,8 @@ Keys and all synthetic plaintext stay below excluded owner-only
 """
 import importlib.util
 import contextlib
+import base64
+import hashlib
 import copy
 import errno
 import fcntl
@@ -195,10 +197,376 @@ def run():
         assert u.unpack(shape_clear, identity)[0] == shaped
         passed("actual fixture intent success-without-RunID log readiness network shapes")
 
-        # Injected literal OS failures on the actual CLI entrypoints. The flag
-        # rejects EVERY later os.open, proving retention uses the reserved FD.
         cli_cert = root / "link-notices-recipient.pem"
         s.write_private(cli_cert, cert.read_bytes())
+        # Explicit v2 has exactly two fixed component roots. These inputs are
+        # synthetic; no source directory can assert writer quiescence for us.
+        linked_identity = s.identities(run_id, head, identity["recipient_sha256"], "links", "1", s.LINKED_LAYOUT)
+        fixture_links_identity = s.identities(run_id, head, identity["recipient_sha256"], "links", "1")
+        def linked_tree(name, fixture=True, empty_parent=False):
+            if fixture:
+                path, fixture_root = input_tree("linked-" + name)
+                s.write_private(fixture_root / "fixture-note.json", s.encode({"RunID": run_id, "Notice": "PRIVATE-LINKED fixture literal"}))
+            else:
+                path, fixture_root = base("linked-" + name), None
+                if empty_parent:
+                    s.private_root(path / ".cache/fixtures-private")
+            driver_root = s.private_root(path / ".cache/link-calibration-private") / run_id
+            driver_root.mkdir(mode=0o700)
+            s.write_private(driver_root / "PRIVATE.json", expected["PRIVATE.json"])
+            s.write_private(driver_root / "driver-errors.json", s.encode({"RunID": run_id, "Errors": [{"Action": ["synthetic UpLinks"], "Cause": "UFJJVkFURS1MSU5LRUQ=", "Complete": True}]}))
+            s.write_private(driver_root / "child-output.json", s.encode({"RunID": run_id, "Wait": {"Reaped": True}, "Stdout": "", "Stderr": ""}))
+            return path, driver_root, fixture_root
+        argv = ["seal", "--run-id", run_id, "--source-head", head, "--recipient-sha256", identity["recipient_sha256"],
+                "--job", "links", "--attempt", "1", "--layout", s.LINKED_LAYOUT]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(s, "CERT_PIN", identity["recipient_sha256"]):
+            with mock.patch.object(s, "reserve_operation") as reserved:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    assert s.cli() == 1
+                assert reserved.call_count == 0
+        passed("linked actual CLI missing writer-stop declaration before filesystem", filesystem_reservations=0)
+        # Membership and bytes come from the specified input specimens, never
+        # from a production snapshot, archive builder or decoder. Keep the two
+        # PRIVATE occurrences explicit: they are separate required receipts.
+        linked_driver_expected = {
+            "driver/PRIVATE.json": b'{"Classification":"PRIVATE RAW EVIDENCE","Publication":"withhold pending explicit redaction review","RunID":"notice-test"}\n',
+            "driver/driver-errors.json": b'{"Errors":[{"Action":["synthetic UpLinks"],"Cause":"UFJJVkFURS1MSU5LRUQ=","Complete":true}],"RunID":"notice-test"}\n',
+            "driver/child-output.json": b'{"RunID":"notice-test","Stderr":"","Stdout":"","Wait":{"Reaped":true}}\n',
+        }
+        linked_both_expected = {
+            "driver/PRIVATE.json": linked_driver_expected["driver/PRIVATE.json"],
+            "driver/driver-errors.json": linked_driver_expected["driver/driver-errors.json"],
+            "driver/child-output.json": linked_driver_expected["driver/child-output.json"],
+            "driver/operation-42/network/nested/driver-notice.json": receipt,
+            "fixture/PRIVATE.json": b'{"Classification":"PRIVATE RAW EVIDENCE","Publication":"withhold pending explicit redaction review","RunID":"notice-test"}\n',
+            "fixture/fixture-note.json": b'{"Notice":"PRIVATE-LINKED fixture literal","RunID":"notice-test"}\n',
+        }
+        def assert_linked_bytes(actual, wanted):
+            assert set(actual) == set(wanted), "independent linked receipt membership mismatch"
+            assert actual == wanted, "independent linked receipt bytes mismatch"
+        linked_archives, linked_absence_expected, linked_manifests = {}, {}, {}
+        for name, present, empty_parent in [("both", True, False), ("missing-parent", False, False),
+                                             ("missing-root", False, True), ("literal-notice", False, True)]:
+            case_base, driver_root, fixture_root = linked_tree(name, present, empty_parent)
+            if present:
+                nested_driver = driver_root / "operation-42" / "network" / "nested"
+                nested_driver.mkdir(mode=0o700, parents=True)
+                s.write_private(nested_driver / "driver-notice.json", receipt)
+                # A separate private HOME is deliberately outside both roots.
+                home = s.private_root(case_base / ".cache/link-calibration-home") / run_id
+                home.mkdir(mode=0o700)
+                s.write_private(home / "unknown.json", s.encode({"notice": "PRIVATE-HOME excluded synthetic bytes"}))
+            wanted = linked_both_expected if present else linked_driver_expected
+            expected_count = 6 if present else 3
+            expected_total = sum(map(len, wanted.values()))
+            expected_components = {
+                "driver": {"availability": "captured", "files": 4 if present else 3,
+                           "total_bytes": sum(map(len, linked_driver_expected.values())) + (len(receipt) if present else 0)},
+                "fixture": {"availability": "captured" if present else "absent-ENOENT", "files": 2 if present else 0,
+                            "total_bytes": (len(linked_both_expected["fixture/PRIVATE.json"]) + len(linked_both_expected["fixture/fixture-note.json"])) if present else 0},
+            }
+            assert len(wanted) == expected_count
+            expected_absence_body = None
+            injected_absence = None
+            if not present:
+                missing_path = case_base / ".cache/fixtures-private"
+                if name != "missing-parent":
+                    missing_path = missing_path / "notice-test-links"
+                try:
+                    missing_path.lstat()  # independent actual OS observation
+                except FileNotFoundError as independently_observed:
+                    absence_text = str(independently_observed)
+                else:
+                    raise AssertionError("expected absent input root unexpectedly exists")
+                if name == "literal-notice":
+                    injected_absence = FileNotFoundError(errno.ENOENT, "PRIVATE-ABSENCE exact original Ω\nsecond line with  two spaces", str(missing_path))
+                    absence_text = str(injected_absence)
+                # Independent standard serialization of known fields and the
+                # independently observed/provided original notice, never pack,
+                # snapshot, decode_fixture_absence or production encode.
+                expected_absence_body = (json.dumps({"action": "observe fixed fixture component absence", "type": "FileNotFoundError",
+                        "errno": errno.ENOENT, "exact_text": absence_text}, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            original_lstat = Path.lstat
+            def stated(path, *args, **kwargs):
+                if injected_absence is not None and path == missing_path:
+                    raise injected_absence
+                return original_lstat(path, *args, **kwargs)
+            with mock.patch.object(Path, "lstat", stated):
+                result = s.seal(case_base, linked_identity, cert, notice_writers_stopped_and_reaped=True)
+            envelope = (case_base / ".cache/link-quarantine" / run_id / "notice.cms").read_bytes()
+            archive, hashed = artifact("linked-" + name, [("notice.cms", envelope, stat.S_IFREG | 0o600)])
+            restored_base = base("linked-recovered-" + name)
+            restored = u.unseal(restored_base, linked_identity, archive, hashed, key, cert)
+            assert_linked_bytes(restored, wanted)
+            assert result["files"] == expected_count and result["total_bytes"] == expected_total
+            assert result["components"] == expected_components
+            metadata = json.loads((restored_base / ".cache/unsealed-link-notices" / run_id / "MANIFEST.json").read_bytes())
+            assert metadata["version"] == result["manifest_version"] == 2 and metadata["layout"] == s.LINKED_LAYOUT
+            assert metadata["bundle_complete"] == result["bundle_complete"] == present
+            assert metadata["count"] == expected_count and metadata["total_bytes"] == expected_total
+            assert metadata["components"] == expected_components
+            recovered_directory = restored_base / ".cache/unsealed-link-notices" / run_id
+            if not present:
+                expected_hash = hashlib.sha256(expected_absence_body).hexdigest()
+                expected_record = {"scope": "fixed-fixture-root-ENOENT", "identity": dict(linked_identity),
+                                   "bytes": len(expected_absence_body), "sha256": expected_hash,
+                                   "body_base64": base64.b64encode(expected_absence_body).decode("ascii")}
+                assert metadata["fixture_absence"] == expected_record
+                assert (case_base / ".cache/link-sealing-private" / run_id / "fixture-absence.json").read_bytes() == expected_absence_body
+                assert (recovered_directory / "fixture-absence.json").read_bytes() == expected_absence_body
+                assert json.loads((recovered_directory / "COMPLETE.json").read_bytes())["fixture_absence_sha256"] == result["fixture_absence_sha256"] == expected_hash
+                assert not (case_base / ".cache/fixtures-private" / (run_id + "-links")).exists()
+                linked_absence_expected[name] = expected_absence_body
+            else:
+                assert metadata["fixture_absence"] is None and result["fixture_absence_sha256"] is None
+                assert not (recovered_directory / "fixture-absence.json").exists()
+            linked_manifests[name] = metadata
+            assert not any("PRIVATE-HOME" in body.decode() for body in restored.values())
+            linked_archives[name] = (archive, hashed, wanted)
+            passed("linked v2 real-stock exact recovery " + name, files=expected_count, total_bytes=expected_total,
+                   independent_literal_members=True, bundle_complete=present,
+                   fixture_availability=result["components"]["fixture"]["availability"], release_qualified=False,
+                   exact_absence_preserved=not present, absence_bytes=len(expected_absence_body) if expected_absence_body is not None else 0)
+            if present:
+                for omitted in ("driver/driver-errors.json", "fixture/fixture-note.json"):
+                    incomplete = dict(restored)
+                    del incomplete[omitted]
+                    try:
+                        assert_linked_bytes(incomplete, linked_both_expected)
+                    except AssertionError:
+                        pass
+                    else:
+                        raise AssertionError("independent oracle accepted omitted supplied receipt")
+                    passed("linked independent oracle detects omitted " + omitted, expected_files=6,
+                           supplied_files=len(incomplete), actual_network=False)
+        # Independent malformed encrypted archives exercise actual consumer
+        # admission. The supplied driver map stays literal; pack is not used.
+        bad_absence_archives = {}
+        for name in ("missing", "tampered-body", "wrong-hash", "wrong-bytes", "cross-run", "unknown-scope", "not-ENOENT", "oversize"):
+            manifest = copy.deepcopy(linked_manifests["missing-root"])
+            record = manifest["fixture_absence"]
+            if name == "missing":
+                del manifest["fixture_absence"]
+            elif name == "tampered-body":
+                changed = linked_absence_expected["missing-root"].replace(b"notice-test-links", b"notice-test-linkX")
+                assert changed != linked_absence_expected["missing-root"]
+                record["body_base64"] = base64.b64encode(changed).decode("ascii")
+            elif name == "wrong-hash":
+                record["sha256"] = "0" * 64
+            elif name == "wrong-bytes":
+                record["bytes"] += 1
+            elif name == "cross-run":
+                record["identity"]["run_id"] = "another-run"
+            elif name == "unknown-scope":
+                record["scope"] = "arbitrary-root"
+            else:
+                if name == "oversize":
+                    changed = b"x" * (16384 + 1)
+                else:
+                    notice = json.loads(linked_absence_expected["missing-root"])
+                    notice["errno"] = errno.EACCES
+                    changed = (json.dumps(notice, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                record.update(body_base64=base64.b64encode(changed).decode("ascii"), bytes=len(changed), sha256=hashlib.sha256(changed).hexdigest())
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive_:
+                for member, body in [("MANIFEST.json", s.encode(manifest)), *sorted(linked_driver_expected.items())]:
+                    entry = tarfile.TarInfo("link-notices/notice-test/" + member)
+                    entry.size, entry.mode, entry.mtime = len(body), 0o600, 0
+                    archive_.addfile(entry, io.BytesIO(body))
+            encrypted = s.openssl(["cms", "-encrypt", "-binary", "-aes256", "-outform", "DER", "-recip", str(cert),
+                       "-keyopt", "rsa_padding_mode:oaep", "-keyopt", "rsa_oaep_md:sha256", "-keyopt", "rsa_mgf1_md:sha256"],
+                       buffer.getvalue(), root, "absence-bad-envelope-" + name, s.MAX_CMS)
+            archive_path, archive_hash = artifact("absence-bad-" + name, [("notice.cms", encrypted, stat.S_IFREG | 0o600)])
+            bad_absence_archives[name] = (archive_path, archive_hash, linked_driver_expected)
+            recovery = base("absence-bad-recovery-" + name)
+            reject("encrypted absence observation rejection " + name,
+                   lambda path=recovery, archive=archive_path, hashed=archive_hash: u.unseal(path, linked_identity, archive, hashed, key, cert), calls=1)
+            destination = recovery / ".cache/unsealed-link-notices" / run_id
+            assert not (destination / "COMPLETE.json").exists() and not (destination / "fixture-absence.json").exists()
+        # Newly recovered observation persistence is mandatory, with the same
+        # reserved private boundary and no later path open after a write fault.
+        recovered_failure_base = base("absence-recovered-write-failure")
+        failure = OSError(errno.EIO, "PRIVATE-ABSENCE exact recovered observation write failure")
+        original_write, original_open = s.write_private, s.os.open
+        failed_write = False
+        def observation_written(path, body):
+            nonlocal failed_write
+            if path.name == "fixture-absence.json":
+                failed_write = True
+                raise failure
+            return original_write(path, body)
+        def observation_opened(*args, **kwargs):
+            if failed_write:
+                raise AssertionError("new path after recovered absence write failure")
+            return original_open(*args, **kwargs)
+        valid_archive, valid_hash, _ = linked_archives["missing-root"]
+        with mock.patch.object(s, "write_private", side_effect=observation_written):
+            with mock.patch.object(s.os, "open", side_effect=observation_opened):
+                reject("recovered exact absence write failure stops completion",
+                       lambda: u.unseal(recovered_failure_base, linked_identity, valid_archive, valid_hash, key, cert), calls=1)
+        failed_destination = recovered_failure_base / ".cache/unsealed-link-notices" / run_id
+        notice = json.loads((failed_destination / "OS-ERROR.json").read_bytes())
+        assert failed_write and notice["complete"] and notice["exceptions"][0]["exact_text"] == str(failure)
+        assert not (failed_destination / "COMPLETE.json").exists() and not (failed_destination / "fixture-absence.json").exists()
+        oversized_base, _, _ = linked_tree("oversize-original-absence", False, True)
+        missing_path = oversized_base / ".cache/fixtures-private/notice-test-links"
+        original_lstat = Path.lstat
+        original_notice = FileNotFoundError(errno.ENOENT, "PRIVATE-ABSENCE original " + "x" * 16384, str(missing_path))
+        def oversized_lstat(path, *args, **kwargs):
+            if path == missing_path:
+                raise original_notice
+            return original_lstat(path, *args, **kwargs)
+        with mock.patch.object(Path, "lstat", oversized_lstat):
+            reject("oversized original fixture absence before encryption",
+                   lambda: s.seal(oversized_base, linked_identity, cert, notice_writers_stopped_and_reaped=True))
+        assert not (oversized_base / ".cache/link-quarantine" / run_id / "COMPLETE.json").exists()
+        linked_expected = linked_archives["both"][2]
+        linked_clear, linked_manifest = s.pack(linked_expected, linked_identity)
+        fixture_clear, _ = s.pack(expected, fixture_links_identity)
+        reject("linked v2 consumer requires explicit layout", lambda: u.unpack(linked_clear, fixture_links_identity))
+        reject("fixture v1 cannot be reinterpreted as linked v2", lambda: u.unpack(fixture_clear, linked_identity))
+        reject("linked v2 caller source head mismatch", lambda: u.unpack(linked_clear, dict(linked_identity, source_head="b" * 40)))
+        for name, change in [("version", lambda m: m.update(version=1)),
+                             ("layout", lambda m: m.update(layout="fixture-v1")),
+                             ("availability", lambda m: m["components"]["fixture"].update(availability="absent-ENOENT")),
+                             ("bundle-complete", lambda m: m.update(bundle_complete=False))]:
+            manifest = copy.deepcopy(linked_manifest)
+            change(manifest)
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                for member, body in [("MANIFEST.json", s.encode(manifest)), *sorted(linked_expected.items())]:
+                    entry = tarfile.TarInfo("link-notices/" + run_id + "/" + member)
+                    entry.size, entry.mode, entry.mtime = len(body), 0o600, 0
+                    archive.addfile(entry, io.BytesIO(body))
+            reject("linked manifest confusion " + name, lambda body=buffer.getvalue(): u.unpack(body, linked_identity))
+        for name, present in [("driver-crossrun", True), ("fixture-crossrun", True), ("driver-symlink", True),
+                              ("fixture-symlink", True), ("partial-fixture", True), ("malformed-driver", True),
+                              ("unexpected-driver-home", True), ("oversize-driver", True), ("missing-driver", False)]:
+            case_base, driver_root, fixture_root = linked_tree(name, present)
+            if name.endswith("crossrun"):
+                target = driver_root / "driver-errors.json" if name.startswith("driver") else fixture_root / "fixture-note.json"
+                target.write_bytes(s.encode({"RunID": "another-run", "Notice": "PRIVATE-LINKED wrong run"}))
+            elif name.endswith("symlink"):
+                target = driver_root / "driver-errors.json" if name.startswith("driver") else fixture_root / "fixture-note.json"
+                target.unlink()
+                target.symlink_to(cert)
+            elif name == "partial-fixture":
+                (fixture_root / "PRIVATE.json").unlink()
+            elif name == "malformed-driver":
+                (driver_root / "driver-errors.json").write_bytes(b'{"RunID":')
+            elif name == "unexpected-driver-home":
+                (driver_root / ".docker").mkdir(mode=0o700)
+            elif name == "oversize-driver":
+                (driver_root / "driver-errors.json").write_bytes(b"x" * (s.MAX_FILE + 1))
+            else:
+                for item in driver_root.iterdir():
+                    item.unlink()
+                driver_root.rmdir()
+            reject("linked input fail-closed " + name, lambda path=case_base: s.seal(path, linked_identity, cert, notice_writers_stopped_and_reaped=True))
+        # The two components share limits; neither receives its own allowance.
+        count_base, count_driver, count_fixture = linked_tree("shared-count")
+        for directory_, count in [(count_driver, 509), (count_fixture, 510)]:
+            for number in range(count):
+                s.write_private(directory_ / ("count-" + str(number) + ".json"), b"{}\n")
+        count_payloads, _ = s.linked_snapshot(count_base, linked_identity)
+        assert len(count_payloads) == s.MAX_FILES
+        count_clear, _ = s.pack(count_payloads, linked_identity)
+        assert u.unpack(count_clear, linked_identity)[0] == count_payloads
+        passed("linked shared exact1024 file producer/consumer boundary", files=len(count_payloads))
+        s.write_private(count_fixture / "one-extra.json", b"{}\n")
+        reject("linked shared1025 files before encryption", lambda: s.seal(count_base, linked_identity, cert, notice_writers_stopped_and_reaped=True))
+        total_base, total_driver, total_fixture = linked_tree("shared-bytes")
+        initial = sum(path.stat().st_size for directory_ in (total_driver, total_fixture) for path in directory_.iterdir())
+        remaining = s.MAX_PAYLOAD - initial
+        number = 0
+        while remaining:
+            size = min(s.MAX_FILE, remaining)
+            body = s.encode({"notice": "x" * (size - len(s.encode({"notice": ""})))})
+            assert len(body) == size
+            directory_ = total_driver if number % 2 == 0 else total_fixture
+            s.write_private(directory_ / ("bytes-" + str(number) + ".json"), body)
+            remaining -= size
+            number += 1
+        total_payloads, _ = s.linked_snapshot(total_base, linked_identity)
+        assert sum(map(len, total_payloads.values())) == s.MAX_PAYLOAD
+        total_clear, _ = s.pack(total_payloads, linked_identity)
+        assert u.unpack(total_clear, linked_identity)[0] == total_payloads
+        passed("linked shared exact8MiB producer/consumer boundary", total_bytes=len(b"".join(total_payloads.values())))
+        s.write_private(total_fixture / "one-extra.json", b"{}\n")
+        reject("linked shared8MiB plus3 bytes before encryption", lambda: s.seal(total_base, linked_identity, cert, notice_writers_stopped_and_reaped=True))
+        for name in ("late-driver-replacement", "late-fixture-appearance"):
+            present = name == "late-driver-replacement"
+            case_base, driver_root, fixture_root = linked_tree(name, present)
+            original_snapshot = s.snapshot
+            calls = 0
+            def changed_snapshot(path, *args, **kwargs):
+                nonlocal calls
+                result = original_snapshot(path, *args, **kwargs)
+                calls += 1
+                if calls == 2:
+                    if present:
+                        target = driver_root / "driver-errors.json"
+                        replacement = driver_root / "replacement.json"
+                        s.write_private(replacement, target.read_bytes())
+                        replacement.replace(target)
+                    else:
+                        parent = s.private_root(case_base / ".cache/fixtures-private")
+                        new_root = parent / (run_id + "-links")
+                        new_root.mkdir(mode=0o700)
+                        s.write_private(new_root / "PRIVATE.json", expected["PRIVATE.json"])
+                return result
+            with mock.patch.object(s, "snapshot", side_effect=changed_snapshot):
+                reject("linked cross-component consistency " + name, lambda: s.seal(case_base, linked_identity, cert, notice_writers_stopped_and_reaped=True))
+        for name, component, point, number in [("driver-read-denial", "driver", "read", errno.EACCES),
+                                                 ("fixture-read-denial", "fixture", "read", errno.EACCES),
+                                                 ("fixture-probe-denial", "fixture", "probe", errno.EPERM),
+                                                 ("fixture-probe-unknown", "fixture", "probe", errno.EIO),
+                                                 ("fixture-descendant-ENOENT", "fixture", "read", errno.ENOENT),
+                                                 ("absence-receipt-write", "fixture", "receipt", errno.EIO)]:
+            case_base, _, fixture_root = linked_tree(name, point != "receipt")
+            target = "driver-errors.json" if component == "driver" else "fixture-note.json"
+            error = OSError(number, "PRIVATE-LINKED exact " + name, "/private/PRIVATE-LINKED/" + target)
+            original_open, original_lstat, original_write = s.os.open, Path.lstat, s.write_private
+            fault_reached = False
+            def fail():
+                nonlocal fault_reached
+                fault_reached = True
+                raise error
+            def opened(path, *args, **kwargs):
+                if fault_reached:
+                    raise AssertionError("new path after linked input failure")
+                if point == "read" and str(path) == target:
+                    fail()
+                return original_open(path, *args, **kwargs)
+            def stated(path, *args, **kwargs):
+                if point == "probe" and path == fixture_root:
+                    fail()
+                return original_lstat(path, *args, **kwargs)
+            def written(path, body):
+                if point == "receipt" and path.name == "fixture-absence.json":
+                    fail()
+                return original_write(path, body)
+            argv = ["seal", "--run-id", run_id, "--source-head", head, "--recipient-sha256", identity["recipient_sha256"],
+                    "--job", "links", "--attempt", "1", "--layout", s.LINKED_LAYOUT, "--notice-writers-stopped-and-reaped"]
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.ExitStack() as stack:
+                for module, name_, value in [(s, "CERT_PIN", identity["recipient_sha256"]), (s, "__file__", str(root / "seal-link-notices.py")), (Path, "cwd", lambda: case_base), (sys, "argv", argv)]:
+                    stack.enter_context(mock.patch.object(module, name_, value))
+                stack.enter_context(contextlib.redirect_stdout(stdout))
+                stack.enter_context(contextlib.redirect_stderr(stderr))
+                stack.enter_context(mock.patch.object(s.os, "open", side_effect=opened))
+                stack.enter_context(mock.patch.object(Path, "lstat", stated))
+                stack.enter_context(mock.patch.object(s, "write_private", side_effect=written))
+                commands = stack.enter_context(mock.patch.object(s, "openssl", wraps=s.openssl))
+                assert s.cli() == 1 and commands.call_count == 0
+            assert fault_reached and "PRIVATE-LINKED" not in stdout.getvalue() + stderr.getvalue()
+            notice = json.loads((case_base / ".cache/link-sealing-private" / run_id / "OS-ERROR.json").read_bytes())
+            assert notice["complete"] and notice["exceptions"][0]["exact_text"] == str(error)
+            assert not (case_base / ".cache/link-quarantine" / run_id / "COMPLETE.json").exists()
+            passed("linked actual CLI private exact failure " + name, stock_commands=0, no_new_path_after_failure=True)
+
+        # Injected literal OS failures on the actual CLI entrypoints. The flag
+        # rejects EVERY later os.open, proving retention uses the reserved FD.
         def cli_os_failure(name, consumer=False, point="read", number=errno.EACCES, expected_commands=0, sink_failure=False):
             case_base, _ = input_tree("os-" + name)
             action_started = False
@@ -857,6 +1225,74 @@ def run():
         cdn_url = "https://synthetic.blob.core.windows.net/notices/artifact.zip?signed=LOCAL-SYNTHETIC"
         routes = {api_run: "run", api_run + "/attempts/1": "attempt", api_run + "/attempts/1/jobs?per_page=100": "jobs",
                   api_run + "/artifacts?per_page=100": "artifacts", r.ROOT + "/artifacts/" + str(artifact_id): "artifact"}
+        # The same literal API tuple now selects job links, but the encrypted
+        # manifest must independently match the caller's explicit v2 layout.
+        for label in ("both", "missing-root", "literal-notice", "wrong-layout", "missing-absence", "tampered-absence"):
+            rejected = label in ("wrong-layout", "missing-absence", "tampered-absence")
+            if label.endswith("-absence"):
+                archive_path, archive_hash, wanted = bad_absence_archives["missing" if label == "missing-absence" else "tampered-body"]
+            else:
+                archive_path, archive_hash, wanted = linked_archives["both" if label == "wrong-layout" else label]
+            data = copy.deepcopy(fixtures)
+            data["jobs"]["jobs"][0]["name"] = "links"
+            canonical_name = "encrypted-link-notices-links-" + head + "-" + str(github_run) + "-1"
+            for artifact_ in (data["artifacts"]["artifacts"][0], data["artifact"]):
+                artifact_.update(name=canonical_name, size_in_bytes=archive_path.stat().st_size, digest="sha256:" + archive_hash)
+            case_base = base("linked-api-" + label)
+            requested = fixture_links_identity if label == "wrong-layout" else linked_identity
+            download_calls = 0
+            def linked_transport(url, token, maximum, deadline, download=False):
+                nonlocal download_calls
+                assert token == synthetic_token
+                if download:
+                    download_calls += 1
+                    assert url == artifact_info["archive_download_url"]
+                    return 200, None, archive_path.read_bytes()
+                assert url in routes
+                return 200, None, s.encode(data[routes[url]])
+            with mock.patch.object(r, "https_get", side_effect=linked_transport):
+                with mock.patch.object(r.http.client, "HTTPSConnection", side_effect=AssertionError("real network forbidden")):
+                    with mock.patch.object(r.u, "unseal", wraps=r.u.unseal) as consumer:
+                        with mock.patch.object(r.u, "verified_member", wraps=r.u.verified_member) as admission:
+                            try:
+                                result = r.retrieve(case_base, requested, str(github_run), key, cert, synthetic_token)
+                            except r.s.Rejected:
+                                assert rejected
+                            else:
+                                assert not rejected
+                                assert_linked_bytes(result, wanted)
+                            assert consumer.call_count == admission.call_count == 1 and download_calls == 1
+            marker = case_base / ".cache/retrieved-link-notices" / run_id / "COMPLETE.json"
+            assert marker.exists() == (not rejected)
+            if not rejected:
+                complete = json.loads(marker.read_bytes())
+                assert complete["layout"] == s.LINKED_LAYOUT and complete["bundle_complete"] == (label == "both")
+                assert complete["api_zip_sha256"] == archive_hash
+                assert complete["fixture_absence_verified_by_consumer"] == (label != "both")
+                if label != "both":
+                    assert (case_base / ".cache/unsealed-link-notices" / run_id / "fixture-absence.json").read_bytes() == linked_absence_expected[label]
+                assert complete["components"]["driver"]["files"] == (4 if label == "both" else 3)
+                assert complete["components"]["fixture"]["files"] == (2 if label == "both" else 0)
+                assert sum(item["total_bytes"] for item in complete["components"].values()) == sum(map(len, wanted.values()))
+            passed("linked synthetic authenticated retrieval " + label, actual_network=False,
+                   consumer_calls=1, digest_admissions=1, downloads=download_calls)
+        for module, operation in [(s, "seal"), (u, "unseal"), (r, "retrieve")]:
+            source_module = s if module is s else module.s
+            invalid = dict(linked_identity, job="unit")
+            with mock.patch.object(source_module, "reserve_operation") as reserved:
+                try:
+                    if operation == "seal":
+                        s.seal(root / "must-not-exist", invalid, cert)
+                    elif operation == "unseal":
+                        u.unseal(root / "must-not-exist", invalid, zip_path, trusted, key, cert)
+                    else:
+                        r.retrieve(root / "must-not-exist", invalid, str(github_run), key, cert, synthetic_token)
+                except source_module.Rejected:
+                    pass
+                else:
+                    raise AssertionError("linked wrong job admitted")
+                assert reserved.call_count == 0
+            passed("linked pure layout/job admission " + operation, filesystem_reservations=0)
         def retrieved_case(name, changed=None, *, success=False, downloads=0, corrupt=False, reflected_error=False, http_failure=False, malformed=False, close_fault=False, rename_fault=False, term=False):
             data = copy.deepcopy(fixtures)
             if changed is not None:

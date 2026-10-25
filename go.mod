@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/IBM/sarama v1.61.0
 	github.com/segmentio/kafka-go v0.4.49
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -21,5 +22,4 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 )

@@ -548,3 +548,101 @@ func TestLatencyActualHTTPStatusReasonIsPrivateWithEmptyBody(t *testing.T) {
 	}
 	checkLatencyPrivate(t, state, first, []string{"latency_http", "GET", "127.0.0.1:18474", "/version"}, nil, reportedStatus)
 }
+
+func TestLatencyTwentySecondsUsesIndependentServerWriteEnd(t *testing.T) {
+	// Given literal monotonic observations of a20s response delay after a prompt
+	// known-nonce request and independent server write, not merely20s total time.
+	observed := linkLatencyExchange{
+		RequestStartNS: 1_000_000_000, ClientWriteStartNS: 1_001_000_000, ClientWriteEndNS: 1_002_000_000,
+		ServerFirstByteNS: 1_003_000_000, ServerReceiveNS: 1_004_000_000,
+		ServerWriteStartNS: 1_005_000_000, ServerWriteEndNS: 1_006_000_000,
+		ClientFirstByteNS: 21_006_000_000, ClientReadEndNS: 21_007_000_000, ExactBytes: true,
+	}
+	if !linkLatencyLongDownstreamObserved(observed) {
+		t.Fatal("literal20s server-write interval rejected")
+	}
+	for _, condition := range []string{"only400ms", "delay before server write", "blocked server write", "slow upstream", "unknown bytes", "outside request budget", "read precedes write"} {
+		t.Run(condition, func(t *testing.T) {
+			v := observed
+			switch condition {
+			case "only400ms":
+				v.ClientFirstByteNS, v.ClientReadEndNS = 1_406_000_000, 1_407_000_000
+			case "delay before server write":
+				v.ServerFirstByteNS, v.ServerReceiveNS, v.ServerWriteStartNS, v.ServerWriteEndNS = 20_000_000_000, 20_001_000_000, 20_002_000_000, 20_003_000_000
+			case "blocked server write":
+				v.ServerWriteEndNS = 21_005_000_000
+			case "slow upstream":
+				v.ServerFirstByteNS, v.ServerReceiveNS, v.ServerWriteStartNS, v.ServerWriteEndNS = 1_901_000_000, 1_902_000_000, 1_903_000_000, 1_904_000_000
+				v.ClientFirstByteNS, v.ClientReadEndNS = 21_904_000_000, 21_905_000_000
+			case "unknown bytes":
+				v.ExactBytes = false
+			case "outside request budget":
+				v.ClientFirstByteNS, v.ClientReadEndNS = 26_006_000_000, 26_007_000_000
+			case "read precedes write":
+				v.ClientFirstByteNS, v.ClientReadEndNS = 1_001_000_000, 1_002_000_000
+			}
+			// When the actual interval oracle decides, Then request elapsed time,
+			// upstream/server stalls or missing bytes cannot replace this response interval.
+			if linkLatencyLongDownstreamObserved(v) {
+				t.Fatal("unproved20s response delay accepted")
+			}
+		})
+	}
+}
+
+func TestLatencyPendingRemovalReportsObservedPlacementWithoutAssumingFlush(t *testing.T) {
+	// Given a literal matching server-written response, an outstanding client
+	// read, a bounded removal interval and an actually reaped exact-byte reader.
+	observed := linkLatencyPendingRemoval{
+		Exchange: linkLatencyExchange{
+			RequestStartNS: 1_000_000_000, ClientWriteStartNS: 1_001_000_000, ClientWriteEndNS: 1_002_000_000,
+			ServerFirstByteNS: 1_003_000_000, ServerReceiveNS: 1_004_000_000, ServerWriteStartNS: 1_005_000_000, ServerWriteEndNS: 1_006_000_000,
+			ClientFirstByteNS: 1_050_000_000, ClientReadEndNS: 1_051_000_000, ExactBytes: true,
+		},
+		ClientReadStartedNS: 1_003_000_000, ClientReadOutstandingCheckNS: 1_010_000_000,
+		RemovalStartNS: 1_020_000_000, RemovalEndNS: 1_060_000_000, ReaderReaped: true,
+	}
+	for _, tc := range []struct {
+		name       string
+		first, end int64
+		want       string
+	}{
+		{"during removal", 1_050_000_000, 1_051_000_000, "first_byte_during_removal_before_20s_reference"},
+		{"after removal", 2_000_000_000, 2_001_000_000, "first_byte_after_removal_before_20s_reference"},
+		{"no early arrival observed", 21_006_000_000, 21_007_000_000, "first_byte_at_or_after_20s_reference"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := observed
+			v.Exchange.ClientFirstByteNS, v.Exchange.ClientReadEndNS = tc.first, tc.end
+			// When removal's effect is classified, Then the independent raw
+			// intervals decide; lack of early arrival is not relabeled a flush.
+			got, err := linkLatencyPendingEffect(v)
+			if err != nil || got != tc.want {
+				t.Fatalf("effect=%s error=%v", got, err)
+			}
+		})
+	}
+	for _, condition := range []string{"already read before removal", "stale server write", "missing write start", "unreaped reader", "changed bytes", "request budget exceeded"} {
+		t.Run(condition, func(t *testing.T) {
+			v := observed
+			switch condition {
+			case "already read before removal":
+				v.Exchange.ClientFirstByteNS, v.Exchange.ClientReadEndNS = 1_015_000_000, 1_016_000_000
+			case "stale server write":
+				v.ClientReadOutstandingCheckNS, v.RemovalStartNS, v.RemovalEndNS = 2_100_000_000, 2_110_000_000, 2_120_000_000
+				v.Exchange.ClientFirstByteNS, v.Exchange.ClientReadEndNS = 2_130_000_000, 2_140_000_000
+			case "missing write start":
+				v.Exchange.ServerWriteStartNS = 0
+			case "unreaped reader":
+				v.ReaderReaped = false
+			case "changed bytes":
+				v.Exchange.ExactBytes = false
+			case "request budget exceeded":
+				v.Exchange.ClientFirstByteNS, v.Exchange.ClientReadEndNS = 26_050_000_000, 26_051_000_000
+			}
+			if _, err := linkLatencyPendingEffect(v); err == nil {
+				t.Fatal("unreached or incomplete pending-removal evidence accepted")
+			}
+		})
+	}
+}

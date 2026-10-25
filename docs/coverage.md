@@ -83,12 +83,20 @@ The optional stock-link fixture source (`internal/fixture/links.go`) and
 `TestLiveOwnedWorkerLinkTopology` check planned worker Metadata/coordinator
 routes against independently healthy direct endpoints.
 `TestLiveOwnedLinkDirectionalLatency` supplies a separate exact-nonce
-calibration for upstream/downstream delay, persistent/new sockets, and
-quiescent removal. These controls have no accepted native proxy execution, are absent
-from the current CI runtime matrix, and establish no M3 release fault
-coverage. Raw private notice durability must be resolved before ephemeral
-proxy runtime. Short-delay source assertions do not establish long-delay or
-pending-response behavior.
+calibration for 400ms upstream/downstream delay, persistent/new sockets,
+toxicity zero, and quiescent removal. The additional source assertions cover
+20s downstream delays and independently server-written replies whose client
+reads remain outstanding at removal. They record actual first-byte/full-read
+and deletion intervals without assuming queued-byte disposition. This adds
+measurement beyond the tagged reply gate: generic TCP timing cannot identify
+Kafka response types or worker ACK receipt. The dedicated driver adds bounded
+subreaper/anchor wait controls and run-journal-based cleanup of the extra nonce
+container; these calibrate evidence ownership, not a Kaferry scenario.
+These controls have no accepted native proxy execution. The CI `links` job
+builds specimens with runtime disabled; it establishes no M3 release coverage.
+Raw private notice durability and publication authorization must be resolved
+before ephemeral proxy runtime. Source assertions establish no measured delay,
+pending-response behavior, timeout, drain or save path.
 
 ## M4 — Archive storage and replay
 

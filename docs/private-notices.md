@@ -9,15 +9,18 @@ reviewed durable retention route is available.
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
 reviewed, redacted evidence containing synthetic inputs.” Encryption provides
 confidentiality, not content review or redaction. No exception to that rule has
-been authorized, and no unknown-notice public encrypted upload is enabled. The unknown-notice
-upload proposal remains ignored under `.cache/m2/notice-sealing-implementation/`.
+been authorized, and no unknown-notice public encrypted upload is enabled. The integrated caller is explicitly disabled by
+`LAB_LINK_RUNTIME`; no enabled unknown-notice upload is authorized.
 These helpers prepare a concrete retention option; they are not qualification.
 
 ## Implemented helpers and bounds
 
 `scripts/seal-link-notices.py` accepts a validated run ID, reviewed source head,
-job/attempt and pinned recipient certificate. It snapshots only the fixed private
-run directory: regular owner-only JSON receipts, no links/special files, at most
+job/attempt and pinned recipient certificate. Its default v1 layout snapshots
+the fixed fixture private directory. Explicit `--layout linked-calibration-v2`
+(job `links` only) also selects the fixed driver private root, with `driver/`
+and `fixture/` archive prefixes. Both layouts admit regular owner-only JSON
+receipts, no links/special files, at most
 1,024 receipts, 256 KiB per complete receipt, 8 MiB total and four path levels.
 A second inventory checks observed consistency. The caller must first stop all
 notice writers; inventories cannot establish quiescence by themselves.
@@ -117,3 +120,48 @@ an actual private durable transfer or explicit authorization for the proposed
 public ciphertext exception. Until then, linked runtime and unknown-notice encrypted public
 retention remain off. Real product fault coverage and M2–M6 acceptance remain
 separate requirements.
+
+## Linked v2 source and disabled caller
+
+V2 requires the caller declaration `--notice-writers-stopped-and-reaped`.
+The helper records `observed_proof:false`: it does not observe processes.
+Only genuine ENOENT of the fixed fixture root or its parent permits a partial
+bundle, always `bundle_complete:false` and `release_qualified:false`. The
+original absence exception is serialized once and retained both privately and
+inside the encrypted manifest with exact byte length, SHA-256, base64 body,
+run identity and scope. Recovery checks that bounded record before writing the
+same bytes privately. Missing descendants, malformed existing roots,
+permissions, unknown failures and failed retention cannot use this exception.
+The driver root is mandatory. The absence record is capped at 16KiB within the
+existing 256KiB manifest, 10MiB tar, 12MiB CMS and 16MiB ZIP limits.
+
+The driver final marker follows selected-result staging, actual child/adopted
+waits and ECHILD, then primary private sink sync/close. CI additionally requires
+actual foreground return and noncancelled admission, exact typed run/head/hash
+and private references, terminal waits and joined stream copies. A failed
+calibration may establish writer closure; that does not establish cleaned
+resources or successful calibration. The final job remains failed even if its
+notice bytes could be retained. `SealingReady` and `PublicationAuthorized` in
+the driver stay false; neither a marker nor the sealer declaration grants
+permission. Native positive/negative lifecycle and caller controls are required
+before enabling runtime.
+
+The new v2 source passed 168 local synthetic controls in its preserved proposal;
+its integrated native controls remain pending. Those tests include independent
+literal archive membership and byte expectations and tampered/missing absence
+records. The last independently supported native head is `b18a691e`, with the
+older 115-control helper source and no proxy execution. Prior results do not
+approve changed v2 source.
+
+An enabled head would skip the unit fixed-sample producer/upload so the current
+retriever still admits exactly one canonical encrypted artifact in a run.
+The disabled `links` job builds only specimens. Its future guarded upload
+selects only the sole CMS member for 14 days, with read-only contents permission
+and no publishing credential or recipient key. Before such a head is pushed,
+the concrete source, native controls and exact publication exception or private
+transfer require review. Encryption remains separate from redaction.
+
+No guarantee covers a first required sink failure, failed final close, missing
+accepted archive, failed encryption, cancelled unconfirmed writer or lost
+runner. Such failures are incomplete, not durably retained by assumption.
+There is no alternate sink, cleanup tool or capture route after denial.

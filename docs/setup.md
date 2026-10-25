@@ -86,3 +86,18 @@ qualification or durable private-notice route is currently established.
 Private notice sealing, authenticated retrieval and offline recovery are
 described in [private-notices](private-notices.md). They do not enable an
 unreviewed upload or a linked-runtime campaign.
+
+The feature-push `links` job builds `cmd/link-calibration` and a fresh
+`internal/campaign` test binary on native Linux AMD64 with clean exact-head VCS
+metadata. Its workflow selection is `LAB_LINK_RUNTIME: 'disabled'`; only
+selected build metadata is uploaded. Driver execution, stock-proxy runtime,
+linked notice sealing and unknown-notice ciphertext upload remain disabled.
+The foreground driver command and its fixed run paths are encoded in CI;
+local Go execution remains stopped under the recorded denial. No local command
+is offered as a substitute. This job has a 20-minute outer budget, with separate
+build, driver, proof and retention limits if execution is later authorized.
+
+Feature pushes are the working premerge trigger. Read-only API preflight found
+no CI workflow file on default branch `main`; manual dispatch has not been
+established for this branch. Manual and scheduled required campaigns remain M6
+work, with no default-branch or repository-setting change made here.

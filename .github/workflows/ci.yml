@@ -8,6 +8,8 @@ permissions:
 concurrency:
   group: harness-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
+env:
+  LAB_LINK_RUNTIME: 'disabled'
 jobs:
   unit:
     runs-on: ubuntu-24.04
@@ -24,6 +26,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache/unit .cache/m2
+          caller_status=0
+          python3 scripts/test-linked-caller.py 2>&1 | tee .cache/unit/linked-caller-controls.log || caller_status=$?
+          caller_reports=(.cache/m2/linked-caller-controls/run-*/report.json)
+          test "${#caller_reports[@]}" -eq 1
+          cp "${caller_reports[0]}" .cache/unit/linked-caller-observations.json
+          test "$caller_status" -eq 0
           python3 scripts/test-link-notice-sealing.py 2>&1 | tee .cache/unit/notice-controls.log
           python3 - <<'PYOBS'
           import hashlib, json, math, os, re, stat
@@ -94,7 +102,7 @@ jobs:
           ./scripts/check.sh 2>&1 | tee .cache/unit/check.log
       - name: Create reviewed fixed synthetic transport sample
         id: reviewed-notice-sample
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && env.LAB_LINK_RUNTIME != 'enabled' }}
         shell: bash
         env:
           SAMPLE_RUN_ID: transport-${{ github.run_id }}-${{ github.run_attempt }}
@@ -106,7 +114,7 @@ jobs:
           python3 scripts/create-notice-transport-sample.py --run-id "$SAMPLE_RUN_ID" --source-head "$GITHUB_SHA" --job "$GITHUB_JOB" --attempt "$GITHUB_RUN_ATTEMPT" --reviewed-synthetic-transport-only
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
       - name: Upload only reviewed synthetic transport ciphertext
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && steps.reviewed-notice-sample.outputs.complete == 'true' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && env.LAB_LINK_RUNTIME != 'enabled' && steps.reviewed-notice-sample.outputs.complete == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         timeout-minutes: 2
         with:
@@ -423,3 +431,254 @@ jobs:
             .cache/fixtures/
           retention-days: 14
           if-no-files-found: error
+
+  links:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      LAB_RUN_ID: links-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+      - name: Build fresh owned calibration executables and selected public metadata
+        id: build
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(uname -sm)" = 'Linux x86_64'
+          test "$GITHUB_JOB" = links
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          test "$LAB_RUN_ID" = "links-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python3 - <<'PYBUILD'
+          import datetime, os, pathlib, re, stat
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['GITHUB_SHA'])
+          assert re.fullmatch(r'links-[1-9][0-9]{0,19}-[1-9][0-9]{0,8}', os.environ['LAB_RUN_ID'])
+          root = pathlib.Path('.cache')
+          if not root.exists():
+              root.mkdir(mode=0o700)
+          info = root.lstat()
+          assert stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+          for path in [root / 'links', root / 'link-calibration-build']:
+              path.mkdir(mode=0o700)
+          build = root / 'link-calibration-build' / os.environ['LAB_RUN_ID']
+          build.mkdir(mode=0o700)
+          timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+          (build / 'BuiltAfterUTC').write_text(timestamp + '\n')
+          PYBUILD
+          build="$GITHUB_WORKSPACE/.cache/link-calibration-build/$LAB_RUN_ID"
+          go build -buildvcs=true -o "$build/link-calibration" ./cmd/link-calibration
+          go test -c -buildvcs=true -o "$build/campaign.test" ./internal/campaign
+          chmod 0555 "$build/link-calibration" "$build/campaign.test"
+          go version -m "$build/link-calibration" > "$build/driver-buildinfo.txt"
+          go version -m "$build/campaign.test" > "$build/test-buildinfo.txt"
+          python3 - <<'PYMETA'
+          import hashlib, json, os, pathlib, stat
+          build = pathlib.Path('.cache/link-calibration-build') / os.environ['LAB_RUN_ID']
+          head = os.environ['GITHUB_SHA']
+          records = {}
+          for name, metadata, package in [('link-calibration', 'driver-buildinfo.txt', 'github.com/pagrus7/kaferry-lab/cmd/link-calibration'), ('campaign.test', 'test-buildinfo.txt', 'github.com/pagrus7/kaferry-lab/internal/campaign.test')]:
+              path = build / name
+              info = path.lstat()
+              assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o555 and 0 < info.st_size <= 128 << 20
+              text = (build / metadata).read_text()
+              assert '\tpath\t' + package + '\n' in text
+              for setting in ['GOOS=linux', 'GOARCH=amd64', 'vcs.revision=' + head, 'vcs.modified=false']:
+                  assert '\tbuild\t' + setting + '\n' in text
+              records[name] = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'bytes': info.st_size, 'mode': '0555', 'package': package, 'source_head': head, 'source_clean': True, 'goos': 'linux', 'goarch': 'amd64'}
+          record = {'namespace': 'calibration/linked-build', 'run_id': os.environ['LAB_RUN_ID'], 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'source_head': head, 'built_after_utc': (build / 'BuiltAfterUTC').read_text().strip(), 'executables': records, 'release_qualified': False, 'runtime_requested': os.environ['LAB_LINK_RUNTIME'] == 'enabled'}
+          with pathlib.Path('.cache/links/build.json').open('x') as stream:
+              json.dump(record, stream, indent=2, sort_keys=True)
+              stream.write('\n')
+          PYMETA
+      - name: Run the sole foreground driver which owns setup tests and cleanup
+        id: driver
+        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          build="$GITHUB_WORKSPACE/.cache/link-calibration-build/$LAB_RUN_ID"
+          test_sha=$(python3 -c 'import json; print(json.load(open(".cache/links/build.json"))["executables"]["campaign.test"]["sha256"])')
+          built_after=$(cat "$build/BuiltAfterUTC")
+          status=0
+          "$build/link-calibration" --repository "$GITHUB_WORKSPACE" --run-id "$LAB_RUN_ID" --test-binary "$build/campaign.test" --test-sha256 "$test_sha" --reviewed-head "$GITHUB_SHA" --built-after "$built_after" || status=$?
+          # This file is written only after the actual foreground command returns.
+          # Cancellation before this point leaves no fact and cannot authorize sealing.
+          printf '%s\n' "$status" > .cache/links/foreground.exit
+      - name: Admit typed writer closure independently of calibration outcome
+        id: proof
+        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.driver.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          CALLER_CANCELLED: ${{ cancelled() }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PYPROOF'
+          import json, os, pathlib, re, stat, sys
+          def rejected():
+              raise ValueError('caller-proof-rejected')
+          def require(value):
+              if not value:
+                  rejected()
+          def boolean(value):
+              require(type(value) is bool)
+              return value
+          def integer(value, low=0, high=1 << 63):
+              require(type(value) is int and low <= value <= high)
+              return value
+          def unique(pairs):
+              result = {}
+              for key, value in pairs:
+                  require(key not in result)
+                  result[key] = value
+              return result
+          def receipt(path):
+              info = path.lstat()
+              require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size <= 256 << 10)
+              return json.loads(path.read_bytes(), object_pairs_hook=unique)
+          try:
+              require(os.environ['CALLER_CANCELLED'] == 'false')
+              run, head = os.environ['LAB_RUN_ID'], os.environ['GITHUB_SHA']
+              require(os.environ['GITHUB_JOB'] == 'links')
+              require(run == 'links-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+              require(re.fullmatch(r'[0-9a-f]{40}', head) is not None)
+              foreground = pathlib.Path('.cache/links/foreground.exit').read_text()
+              require(re.fullmatch(r'[0-9]{1,3}\n', foreground) is not None)
+              code = integer(int(foreground), 0, 255)
+              build = receipt(pathlib.Path('.cache/links/build.json'))
+              require(build['source_head'] == head and build['run_id'] == run and build['job'] == 'links' and build['attempt'] == os.environ['GITHUB_RUN_ATTEMPT'])
+              public = pathlib.Path('.cache/link-calibration') / run
+              for parent in [pathlib.Path('.cache'), public.parent, public]:
+                  info = parent.lstat()
+                  require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700)
+              require(not (public / 'INCOMPLETE.json').exists() and not (public / 'result.pending.json').exists())
+              r = receipt(public / 'WRITERS_QUIESCENT.json')
+              require(r['Version'] == '1' and r['RunID'] == run and r['ReviewedHead'] == head and r['TestSHA256'] == build['executables']['campaign.test']['sha256'])
+              require(boolean(r['Synthetic']) and not boolean(r['ReleaseQualified']))
+              require(not boolean(r['SealingReady']) and not boolean(r['PublicationAuthorized']))
+              require(boolean(r['WritersQuiescent']) and boolean(r['PrivateCaptureComplete']) and boolean(r['SetupReturned']))
+              repository = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+              driver_private = repository / '.cache/link-calibration-private' / run
+              require(r['DriverPrivate'] == str(driver_private) and r['PrivateReference'] == str(driver_private / 'driver-errors.json'))
+              require(r['FixturePrivate'] == str(repository / '.cache/fixtures-private' / (run + '-links')))
+              attempted, returned = boolean(r['CleanupAttempted']), boolean(r['CleanupReturned'])
+              require((attempted and returned) or (not attempted and not returned))
+              w, tree = r['Wait'], r['Tree']
+              require(boolean(tree['SubreaperEnabled']) and boolean(tree['Closed']) and boolean(tree['NoChildren']) and not boolean(tree['ControlFailed']))
+              require(type(tree['Adopted']) is list or tree['Adopted'] is None)
+              adopted = tree['Adopted'] or []
+              require(len(adopted) <= 16)
+              for child in adopted:
+                  integer(child['PID'], 1)
+                  status = integer(child['Status'], 0, (1 << 32) - 1)
+                  require(boolean(child['Terminal']) and (os.WIFEXITED(status) or os.WIFSIGNALED(status)))
+              if boolean(tree['AnchorStarted']):
+                  integer(tree['AnchorPID'], 1)
+                  require(re.fullmatch(r'[0-9]{1,32}', tree['AnchorStartTicks']) is not None)
+                  require(boolean(tree['AnchorWaitReturned']) and boolean(tree['AnchorReaped']) and boolean(tree['SignalsClosed']))
+                  status = integer(tree['AnchorStatus'], 0, (1 << 32) - 1)
+                  require(os.WIFEXITED(status) or os.WIFSIGNALED(status))
+              else:
+                  require(not boolean(tree['AnchorWaitReturned']) and not boolean(tree['AnchorReaped']) and tree['AnchorPID'] == 0)
+              if boolean(w['Started']):
+                  integer(w['PID'], 1)
+                  require(re.fullmatch(r'[0-9]{1,32}', w['StartTicks']) is not None)
+                  require(boolean(w['WaitReturned']) and boolean(w['Reaped']) and boolean(w['StreamCopiesJoined']) and boolean(w['OutputComplete']))
+                  integer(w['ExitCode'], -1, 255)
+                  integer(w['SignalNumber'], 0, 64)
+                  require((w['SignalNumber'] == 0 and w['ExitCode'] >= 0) or (w['SignalNumber'] > 0 and w['ExitCode'] == -1))
+                  integer(w['WaitElapsedNS'], 1)
+                  for channel in ['Stdout', 'Stderr']:
+                      require(integer(w[channel + 'Bytes'], 0, 65536) == integer(w['Captured' + channel + 'Bytes'], 0, 65536))
+                      require(integer(w['DroppedObserved' + channel + 'Bytes']) == 0)
+              else:
+                  require(not boolean(w['WaitReturned']) and not boolean(w['Reaped']) and not boolean(w['StreamCopiesJoined']) and w['PID'] == 0 and w['StartTicks'] == '')
+              require(r['Status'] in ('INCOMPLETE', 'CALIBRATION_PASSED_NOT_QUALIFICATION'))
+              passed = r['Status'] == 'CALIBRATION_PASSED_NOT_QUALIFICATION'
+              require((code == 0) == passed)
+              require(not passed or (boolean(w['TestsPassed']) and boolean(r['ResourcesCleaned']) and boolean(r['FixtureCleanupSucceeded']) and attempted and returned))
+              selected = {'namespace': 'calibration/linked-caller', 'run_id': run, 'source_head': head, 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'foreground_return_observed': True, 'foreground_exit_code': code, 'caller_cancelled_at_admission': False, 'writers_quiescent': True, 'private_capture_complete': True, 'setup_returned': True, 'cleanup_attempted': attempted, 'cleanup_returned': returned, 'resources_cleaned': boolean(r['ResourcesCleaned']), 'fixture_cleanup_succeeded': boolean(r['FixtureCleanupSucceeded']), 'child_started': w['Started'], 'child_wait_returned': w['WaitReturned'], 'child_reaped': w['Reaped'], 'stream_copies_joined': w['StreamCopiesJoined'], 'anchor_started': tree['AnchorStarted'], 'anchor_wait_returned': tree['AnchorWaitReturned'], 'anchor_reaped': tree['AnchorReaped'], 'subreaper_enabled': True, 'terminal_adopted_waits': len(adopted), 'actual_ECHILD_observed_by_driver': True, 'calibration_passed': passed, 'release_qualified': False, 'scope': 'Reviewed driver final marker after actual wait/tree closure and primary sink sync/close; no ACK or Kaferry qualification.'}
+              with pathlib.Path('.cache/links/caller-proof.json').open('x') as stream:
+                  json.dump(selected, stream, indent=2, sort_keys=True)
+                  stream.write('\n')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+                  stream.write('writers_stopped=true\ncalibration_passed=' + str(passed).lower() + '\n')
+          except Exception:
+              print('linked caller proof rejected; sealing disabled', file=sys.stderr)
+              sys.exit(1)
+          PYPROOF
+      - name: Seal only after actual stopped and reaped writer proof
+        id: seal
+        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.proof.outputs.writers_stopped == 'true' }}
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/seal-link-notices.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --recipient-sha256 ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57 --job links --attempt "$GITHUB_RUN_ATTEMPT" --layout linked-calibration-v2 --notice-writers-stopped-and-reaped
+          # The helper creates notice.cms and COMPLETE.json only after its own terminal finalization.
+          python3 - <<'PYSEALED'
+          import hashlib, json, os, pathlib, stat
+          root = pathlib.Path('.cache/link-quarantine') / os.environ['LAB_RUN_ID']
+          metadata = json.loads((root / 'COMPLETE.json').read_bytes())
+          cms = root / 'notice.cms'
+          info = cms.lstat()
+          assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size <= 12 << 20
+          for key, value in {'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'layout': 'linked-calibration-v2', 'manifest_version': 2, 'complete': True, 'release_qualified': False}.items():
+              assert metadata[key] == value
+          assert metadata['cms_bytes'] == info.st_size and metadata['cms_sha256'] == hashlib.sha256(cms.read_bytes()).hexdigest()
+          assert metadata['caller_declaration'] == {'notice_writers_stopped_and_reaped': True, 'observed_proof': False}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('complete=true\n')
+          PYSEALED
+      - name: Upload only the sole encrypted linked-notice member
+        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.seal.outputs.complete == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 2
+        with:
+          name: encrypted-link-notices-links-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/link-quarantine/links-${{ github.run_id }}-${{ github.run_attempt }}/notice.cms
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: false
+      - name: Keep incomplete or failed calibration nonpassing after retention
+        if: ${{ always() && env.LAB_LINK_RUNTIME == 'enabled' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          PROOF_PASSED: ${{ steps.proof.outputs.calibration_passed }}
+          SEALED: ${{ steps.seal.outputs.complete }}
+          CALLER_CANCELLED: ${{ cancelled() }}
+        run: |
+          set -euo pipefail
+          test "$CALLER_CANCELLED" = false
+          test "$PROOF_PASSED" = true
+          test "$SEALED" = true
+      - name: Upload only selected public build and caller facts
+        if: ${{ always() && !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 1
+        with:
+          name: links-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/links/build.json
+            .cache/links/caller-proof.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
