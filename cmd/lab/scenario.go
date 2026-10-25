@@ -64,7 +64,6 @@ func runScenario(ctx context.Context, args []string) int {
 		Subject:    verified.artifactEvidence.Subject, Artifact: verified.artifactEvidence,
 		LabSource: source,
 		Records:   96, Budget: 5 * time.Minute,
-		WireToolReceipt: os.Getenv("KAFERRY_LAB_WIRE_RECEIPT"),
 	}, state, fixture.Docker)
 	result := evidence.LoadAndCheck(filepath.Join(directory, "bundle"))
 	if output(struct {

@@ -40,12 +40,22 @@ observations to version2 bundles checked by `internal/evidence/m2_*.go`.
 | `M2.source-startup-save-outage` | `source-startup` observes source impairment before launch, bounded failed startup/exit, restoration and same-group copying. `source-save` retains an attempted outage/recovery but cannot establish the precise periodic commit and remains incomplete. |
 
 The native CI development matrix includes the two healthy controls and
-source-startup and repeated-kill. Packet capture is unavailable and disabled in CI; its retained
-`UNSUPPORTED` status is separate from the data verdict. Experimental packet
-candidates cannot satisfy a fault trigger. Compiled runs retain Linux owned-child wait RSS/CPU; the checker derives
-SIGTERM-to-wait ranges/overshoot and final observed output/input volume. Native
-measurement and repeated-crash evidence remain pending. All required M2
-variants need native evidence, offline rechecks and independent acceptance reviews.
+source-startup and repeated-kill. Packet capture is unavailable; CI retains its
+`UNSUPPORTED` status and denied run reference without attempting capture. That
+status is separate from the data verdict. Compiled runs retain Linux owned-child
+wait RSS/CPU; the checker derives SIGTERM-to-wait ranges/overshoot and final
+observed output/input volume. Native run `40164631081` at `9ff5f9b` retains
+independently reviewed measurements and four narrow executions: healthy
+PRESERVE/KEY, source-startup and repeated-kill. That evidence does not accept
+M2 or approve later source changes. All required M2 variants need native
+evidence, offline rechecks and independent acceptance reviews.
+
+The completion-loop calibration controls in `internal/campaign/scenario_test.go`
+exercise worker exit during a complete audit, repeated old output with unknown
+ownership or saved-zero progress, and unknown→stable-zero→stable-complete
+progress. They require a live worker and independently supplied completion facts;
+the stale cases must fail within the numerical audit bound. These synthetic
+controls test the harness and add no release fault coverage.
 
 ## M3 — Ownership, links, transactions and discovery
 

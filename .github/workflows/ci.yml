@@ -24,7 +24,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache/unit
-          python3 scripts/install-wire-tools.test.py 2>&1 | tee .cache/unit/wire-trust.log
           ./scripts/check.sh 2>&1 | tee .cache/unit/check.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -240,7 +239,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SCENARIO: ${{ matrix.scenario }}
           ROUTING: ${{ matrix.routing }}
-          KAFERRY_LAB_WIRE_RECEIPT: ""
         shell: bash
         run: |
           set -euo pipefail

@@ -164,10 +164,10 @@ observed bounded worker exit, recovery and successful same-group copying.
 Delivery-stop histories additionally need independent timeout-path observations;
 logs can corroborate the path but never replace record scans.
 
-The current threshold observer is experimental: its capture/PDML candidates do
-not establish accepted-work threshold handling, response absence or output.
-Threshold histories remain `UNSUPPORTED`. Precise source-save interruption
-remains `INCONCLUSIVE` without an independent commit observation. Missing
+Threshold histories remain `UNSUPPORTED`: no accepted independent observation
+establishes the accepted-work threshold or entry into its drain. Packet evidence
+is unavailable. Precise source-save interruption remains `INCONCLUSIVE` without
+an independent commit observation. Missing
 mandatory facts, unsupported observations, timeout, cleanup or evidence-write
 failure cannot produce a passing run. Version2 synthetic controls remain
 calibration histories; they do not establish real released-binary fault coverage.

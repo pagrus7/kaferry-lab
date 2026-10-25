@@ -82,7 +82,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 		return r
 	}
 	if m.ScenarioID == "delivery-threshold" {
-		return unsupported("threshold_observer", "independent accepted-work/threshold observation has not been calibrated for the negotiated Kafka Produce protocol")
+		return unsupported("threshold_observer", "independent accepted-work and threshold-drain observations have not been calibrated")
 	}
 	if m.Settings.MeasurementsVersion != 0 && m.Settings.MeasurementsVersion != 1 {
 		return unsupported("measurements_version", "unsupported M2 measurement contract")

@@ -24,7 +24,6 @@ import (
 // Directory exists already; its runtime and bundle output paths must not exist.
 type ScenarioPlan struct {
 	ID, Routing, Directory, Executable string
-	WireToolReceipt                    string
 	Subject                            evidence.Subject
 	Artifact                           evidence.ArtifactMetadata
 	LabSource                          evidence.LabSource
@@ -44,10 +43,8 @@ type ScenarioReport struct {
 
 type scenarioInterval struct{ StartNS, EndNS int64 }
 type scenarioObservation struct {
-	WireCapture     *wireCaptureReceipt       `json:",omitempty"`
-	WireCandidates  *wireSubmissionCandidates `json:",omitempty"`
-	ProcessState    string                    `json:",omitempty"`
-	BrokerProbe     *brokerProbeObservation   `json:",omitempty"`
+	ProcessState    string                  `json:",omitempty"`
+	BrokerProbe     *brokerProbeObservation `json:",omitempty"`
 	Kind            string
 	Interval        scenarioInterval
 	WorkerID        string                  `json:",omitempty"`
@@ -65,7 +62,6 @@ type scenarioObservation struct {
 }
 
 type scenarioController struct {
-	wire                *wireCapture
 	fixtureState        fixture.State
 	preledger           []evidence.M2Event
 	plan                ScenarioPlan
@@ -92,9 +88,6 @@ func normalizeScenarioPlan(p ScenarioPlan) (ScenarioPlan, error) {
 	}
 	if p.Routing != "PRESERVE" && p.Routing != "KEY" {
 		return p, errors.New("scenario routing must be PRESERVE or KEY")
-	}
-	if p.WireToolReceipt != "" && (!filepath.IsAbs(p.WireToolReceipt) || p.ID != "healthy") {
-		return p, errors.New("experimental wire receipt requires an absolute path and a healthy calibration")
 	}
 	if !filepath.IsAbs(p.Directory) || !filepath.IsAbs(p.Executable) {
 		return p, errors.New("scenario paths must be absolute")
@@ -183,17 +176,12 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 	}()
 	c.initManifest(state)
 	if plan.ID == "delivery-threshold" {
-		report.Limitations = append(report.Limitations, "UNSUPPORTED: no measured independent packet observation establishes the worker accepted-record threshold or drain entry.")
+		report.Limitations = append(report.Limitations, "UNSUPPORTED: no measured independent observation establishes the worker accepted-record threshold or drain entry.")
 		_ = c.retain(scenarioObservation{Kind: "unsupported", Interval: c.interval(time.Now()), Error: report.Limitations[len(report.Limitations)-1]})
 		return report, errors.New("delivery threshold observation is unsupported")
 	}
 	if err = c.prepare(ctx, state, run); err != nil {
 		return report, err
-	}
-	if plan.WireToolReceipt != "" {
-		if err = c.startWire(ctx); err != nil {
-			return report, err
-		}
 	}
 	switch plan.ID {
 	case "healthy":
@@ -655,28 +643,34 @@ func (c *scenarioController) healthy(ctx context.Context) error {
 	return c.settledAudit(ctx, true)
 }
 func (c *scenarioController) awaitComplete(ctx context.Context, p *ownedProcess) error {
+	return scenarioAwaitComplete(ctx, p.done, c.ledger, c.report.Group, func(bounded context.Context) (scenarioAuditResult, error) {
+		return c.audit(bounded, false, false)
+	})
+}
+
+func scenarioAwaitComplete(ctx context.Context, done <-chan struct{}, ledger evidence.Ledger, group string, read func(context.Context) (scenarioAuditResult, error)) error {
 	bounded, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	for i := 0; i < 24; i++ {
 		select {
-		case <-p.done:
+		case <-done:
 			return errors.New("worker exited before finite-input completion was observed")
 		default:
 		}
-		audit, err := c.audit(bounded, false, false)
+		audit, err := read(bounded)
 		if err != nil {
 			return err
 		}
-		membership, err := scenarioMembership(c.ledger, audit.Output)
+		membership, err := scenarioMembership(ledger, audit.Output)
 		if err != nil {
 			return err
 		}
 		select {
-		case <-p.done:
+		case <-done:
 			return errors.New("worker exited before finite-input completion was observed")
 		default:
 		}
-		if len(membership.Missing) == 0 && scenarioProgressComplete(c.ledger, audit.Group, c.report.Group) {
+		if len(membership.Missing) == 0 && scenarioProgressComplete(ledger, audit.Group, group) {
 			return nil
 		}
 		if err = scenarioPoll(bounded, 150*time.Millisecond); err != nil {
@@ -916,7 +910,7 @@ func (c *scenarioController) deliveryStop(ctx context.Context) error {
 		return err
 	}
 	c.episode("delivery-stop-1", "delivery-stop", p, recovery, trigger.ID, "", stopped)
-	c.diagnostic(p.Identity().WorkerID, "unsupported-observation", "Broker outage exceeded configured delivery timeout; no packet observation proves when missing records were accepted. Timeout and TERM overlap require actual exit/diagnostic inspection.")
+	c.diagnostic(p.Identity().WorkerID, "unsupported-observation", "Broker outage exceeded configured delivery timeout; no independent observation establishes the actual delivery-timeout path or its overlap with TERM.")
 	if err = c.awaitComplete(ctx, recovery); err != nil {
 		return err
 	}
@@ -990,7 +984,6 @@ func (c *scenarioController) cleanup(ctx context.Context) error {
 		if c.manifest.FinalAuditID == "" && len(c.ledger.Entries) > 0 {
 			errs = append(errs, c.settledAudit(ctx, true))
 		}
-		errs = append(errs, c.finishWire(ctx))
 		errs = append(errs, c.k.Close())
 	}
 	errs = append(errs, ctx.Err())

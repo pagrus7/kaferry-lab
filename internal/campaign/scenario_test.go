@@ -48,7 +48,6 @@ func TestScenarioRejectsUnreviewedOrUnboundedPlans(t *testing.T) {
 		{"unverified provenance", func(p *ScenarioPlan) { p.Artifact.ProvenanceStatus = "unavailable" }},
 		{"unrelated artifact", func(p *ScenarioPlan) { p.Artifact.Subject.Tag = "v999" }},
 		{"foreign architecture", func(p *ScenarioPlan) { p.Subject.Platform = "linux/arm64" }},
-		{"wire calibration only", func(p *ScenarioPlan) { p.ID = "source-save"; p.WireToolReceipt = "/tmp/receipt.json" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -748,8 +747,96 @@ func TestScenarioExitedWorkerCannotReachCompletionAudit(t *testing.T) {
 	// Then fail before any Kafka audit can supply preexisting output as recovery.
 	p := &ownedProcess{done: make(chan struct{})}
 	close(p.done)
-	c := &scenarioController{}
+	c := &scenarioController{report: &ScenarioReport{Group: "g"}}
 	if err := c.awaitComplete(context.Background(), p); err == nil || !strings.Contains(err.Error(), "worker exited before finite-input completion") {
 		t.Fatalf("exited invocation accepted: %v", err)
 	}
+}
+
+func scenarioCompletionGroup(ledger evidence.Ledger) kafkaGroupSnapshot {
+	g := kafkaGroupSnapshot{GroupID: "g", Description: kafkaGroupDescription{GroupID: "g", State: "Stable", ProtocolType: "consumer", Protocol: "range", Members: []kafkaMemberSnapshot{{ID: "current", Topics: map[string][]int32{ledger.Partitions[0].Source.Topic: {0, 1, 2}}}}}, Offsets: kafkaOffsetSnapshot{GroupID: "g"}}
+	for _, p := range ledger.Partitions {
+		source := p.Source
+		source.Offset = p.End
+		g.Offsets.Offsets = append(g.Offsets.Offsets, kafkaSavedOffset{Source: source, Saved: true})
+	}
+	return g
+}
+
+func TestScenarioWorkerExitDuringAuditCannotComplete(t *testing.T) {
+	// Given complete old output and a group independently at every saved end.
+	ledger, output := scenarioSyntheticOutput(t)
+	group := scenarioCompletionGroup(ledger)
+	done := make(chan struct{})
+	calls := 0
+	// When the worker exits during that otherwise successful audit,
+	err := scenarioAwaitComplete(context.Background(), done, ledger, "g", func(context.Context) (scenarioAuditResult, error) {
+		calls++
+		close(done)
+		return scenarioAuditResult{Output: output, Group: group}, nil
+	})
+	// Then those complete facts cannot establish live recovery completion.
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), "worker exited before finite-input completion") {
+		t.Fatalf("mid-audit exit accepted: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestScenarioRepeatedOldOutputFailsWithinAuditBound(t *testing.T) {
+	for _, condition := range []string{"unknown ownership", "saved zero"} {
+		t.Run(condition, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given complete old output with recovery facts that never advance.
+				ledger, output := scenarioSyntheticOutput(t)
+				group := scenarioCompletionGroup(ledger)
+				if condition == "unknown ownership" {
+					group.Description.State = "PreparingRebalance"
+					group.Description.Members[0].Topics = nil
+				} else {
+					for i := range group.Offsets.Offsets {
+						group.Offsets.Offsets[i].Source.Offset = 0
+					}
+				}
+				calls := 0
+				// When the live worker is repeatedly audited under fake time,
+				err := scenarioAwaitComplete(context.Background(), make(chan struct{}), ledger, "g", func(context.Context) (scenarioAuditResult, error) {
+					calls++
+					return scenarioAuditResult{Output: output, Group: group}, nil
+				})
+				// Then old output cannot pass, and the numerical audit bound must
+				// stop work before a deadline or cancellation shortcut does.
+				if calls <= 1 || calls > 24 || err == nil || !strings.Contains(err.Error(), "not observed within audit bound") || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					t.Fatalf("unbounded or successful stale recovery: calls=%d error=%v", calls, err)
+				}
+			})
+		})
+	}
+}
+
+func TestScenarioCompletionWaitsForStableOwnershipAndEverySavedEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Given complete old output across three independent group observations.
+		ledger, output := scenarioSyntheticOutput(t)
+		unknown := scenarioCompletionGroup(ledger)
+		unknown.Description.State = "PreparingRebalance"
+		unknown.Description.Members[0].Topics = nil
+		zero := scenarioCompletionGroup(ledger)
+		for i := range zero.Offsets.Offsets {
+			zero.Offsets.Offsets[i].Source.Offset = 0
+		}
+		observations := []kafkaGroupSnapshot{unknown, zero, scenarioCompletionGroup(ledger)}
+		calls := 0
+		// When ownership stabilizes before the saved ends finally advance,
+		err := scenarioAwaitComplete(context.Background(), make(chan struct{}), ledger, "g", func(context.Context) (scenarioAuditResult, error) {
+			if calls >= len(observations) {
+				t.Fatal("completion ignored the full stable saved-end observation")
+			}
+			group := observations[calls]
+			calls++
+			return scenarioAuditResult{Output: output, Group: group}, nil
+		})
+		// Then only the third observation can establish successful completion.
+		if err != nil || calls != 3 {
+			t.Fatalf("completion did not await the required facts: calls=%d error=%v", calls, err)
+		}
+	})
 }
