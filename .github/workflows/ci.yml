@@ -239,7 +239,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/install-wire-tools.py .cache/wire-tools
+          python3 scripts/install-wire-tools.py .cache/wire-tools 2>&1 | tee .cache/m2-release/wire-install.log
       - name: Run one bounded partial M2 release scenario
         env:
           GH_TOKEN: ${{ github.token }}

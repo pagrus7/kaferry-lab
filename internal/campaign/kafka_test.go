@@ -387,3 +387,48 @@ func TestKafkaPublishRetainsFinalAcknowledgmentAfterCancellation(t *testing.T) {
 		t.Fatalf("acknowledged input retried: attempts=%+v sends=%d retained=%d err=%v", attempts, sends, len(run.Attempts), err)
 	}
 }
+
+func TestKafkaGroupPreparationErrorsRetainTypedCoordinatorCodes(t *testing.T) {
+	// Given raw unavailable, loading, moved, and denied group responses.
+	for _, code := range []sarama.KError{sarama.ErrOffsetsLoadInProgress, sarama.ErrConsumerCoordinatorNotAvailable, sarama.ErrNotCoordinatorForConsumer, sarama.ErrGroupAuthorizationFailed} {
+		for _, legacy := range []bool{false, true} {
+			raw := &sarama.GroupDescription{GroupId: "g"}
+			if legacy {
+				raw.Err = code
+			} else {
+				raw.ErrorCode = int16(code)
+			}
+			// When decoding the response, Then the raw code and typed cause survive.
+			g, err := kafkaDecodeGroup("g", raw)
+			if !errors.Is(err, code) || g.ErrorCode != raw.ErrorCode || g.LegacyErrorCode != int16(raw.Err) {
+				t.Fatalf("group code=%d legacy=%v: %+v / %v", code, legacy, g, err)
+			}
+			if scenarioTransientPreparation(err) != (code != sarama.ErrGroupAuthorizationFailed) {
+				t.Fatalf("incorrect retry admission for group code=%d: %v", code, err)
+			}
+		}
+		source := kafkaTopic{Topic: "input", Partitions: 3}
+		raw := &sarama.OffsetFetchResponse{Version: 8, Groups: []sarama.OffsetFetchResponseGroup{{GroupId: "g", Err: code}}}
+		offsets, err := kafkaDecodeOffsets("g", source, raw)
+		if !errors.Is(err, code) || offsets.ErrorCode != int16(code) || scenarioTransientPreparation(err) != (code != sarama.ErrGroupAuthorizationFailed) {
+			t.Fatalf("offset code=%d: %+v / %v", code, offsets, err)
+		}
+		// Then a conflicting group identity is permanent even beside a transient code.
+		raw.Groups[0].GroupId = "wrong"
+		if _, err := kafkaDecodeOffsets("g", source, raw); err == nil || scenarioTransientPreparation(err) {
+			t.Fatalf("conflicting offset group admitted: %v", err)
+		}
+	}
+}
+
+func TestKafkaCoordinatorErrorCannotConcealMalformedReturnedOffsets(t *testing.T) {
+	// Given a moved-coordinator response that nevertheless contains offsets.
+	source := kafkaTopic{Topic: "input", Partitions: 3}
+	raw := &sarama.OffsetFetchResponse{Version: 8, Groups: []sarama.OffsetFetchResponseGroup{{GroupId: "g", Err: sarama.ErrNotCoordinatorForConsumer, Blocks: map[string]map[int32]*sarama.OffsetFetchResponseBlock{"input": {0: {Offset: -2}, 1: {Offset: -1}, 2: {Offset: 0}}}}}}
+	// When those returned blocks include an invalid offset, Then the error is
+	// permanent and the failed observation retains every supplied position.
+	snapshot, err := kafkaDecodeOffsets("g", source, raw)
+	if !errors.Is(err, sarama.ErrNotCoordinatorForConsumer) || scenarioTransientPreparation(err) || len(snapshot.Offsets) != 3 || snapshot.Offsets[0].Source.Offset != -2 {
+		t.Fatalf("malformed offset hidden: %+v / %v", snapshot, err)
+	}
+}

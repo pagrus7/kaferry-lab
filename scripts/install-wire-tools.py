@@ -5,15 +5,18 @@ The receipt is dependency evidence, never a claim that packet observation works.
 No capture privileges or host packet/offload settings are changed here.
 """
 
+from contextlib import contextmanager
 import hashlib
 import json
 import lzma
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tarfile
 
 
@@ -40,20 +43,76 @@ def verify_primary_key(shown, expected):
         raise RuntimeError("PPA signing key fingerprint mismatch")
 
 
+def require_run_id(value):
+    if not re.fullmatch(r"[a-z][a-z0-9-]{3,48}", value):
+        raise RuntimeError("LAB_RUN_ID must match [a-z][a-z0-9-]{3,48}")
+    return value
+
+
+def verify_apt_stage_path(directory):
+    # Check only the actual public APT input path. Private evidence/workspace
+    # parents do not need to be readable by APT and are never modified.
+    for parent in [directory, *directory.parents]:
+        if parent.stat().st_mode & 0o001 == 0:
+            raise RuntimeError("APT staging parents must be traversable by _apt")
+
+
+@contextmanager
+def verified_apt_stage(evidence, packages, run_id):
+    require_run_id(run_id)
+    receipt_path = evidence / "apt-staging.json"
+    # Reserve the receipt before creating another resource; one installation
+    # attempt owns one staging directory and may not replace a prior receipt.
+    with receipt_path.open("x") as receipt_file:
+        receipt_file.write("{}\n")
+    directory = Path(tempfile.mkdtemp(prefix="kaferry-lab-" + run_id + "-wire-", dir="/tmp")).resolve()
+    identity = directory.stat()
+    receipt = {"schema": 1, "run_id": run_id, "directory": str(directory), "owner_uid": identity.st_uid,
+               "device": identity.st_dev, "inode": identity.st_ino, "packages": [], "cleaned": False}
+    try:
+        # Only this newly reserved directory and its public package files change
+        # mode. Do not chmod runner HOME, workspace parents, /tmp or APT settings.
+        directory.chmod(0o755)
+        verify_apt_stage_path(directory)
+        specs = []
+        for package in packages:
+            name = Path(package["Filename"]).name
+            expected = {"size": package["Size"], "sha256": package["SHA256"]}
+            # A bounded verified snapshot prevents a changed source from growing
+            # an unbounded copy. Verify the destination again before invoking APT.
+            with (evidence / name).open("rb") as source:
+                body = source.read(int(expected["size"]) + 1)
+            verify_blob(body, expected, name)
+            destination = directory / name
+            with destination.open("xb") as output:
+                output.write(body)
+            destination.chmod(0o644)
+            verify_blob(destination.read_bytes(), expected, name)
+            receipt["packages"].append({"path": str(destination), "size": len(body), "sha256": expected["sha256"]})
+            specs.append(str(destination))
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        yield specs
+    finally:
+        # Never glob or delete by a label alone. Clean the one retained inode
+        # created above; replacement or missing ownership leaves cleanup failed.
+        current = directory.lstat()
+        if (current.st_dev, current.st_ino, current.st_uid) != (identity.st_dev, identity.st_ino, identity.st_uid):
+            raise RuntimeError("APT staging directory ownership changed; cleanup unconfirmed")
+        shutil.rmtree(directory)
+        receipt["cleaned"] = True
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: install-wire-tools.py NEW_EVIDENCE_DIRECTORY")
     release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
     if (platform.system(), platform.machine(), release.get("ID", "").strip('"'), release.get("VERSION_ID", "").strip('"')) != ("Linux", "x86_64", "ubuntu", "24.04") or os.environ.get("GITHUB_ACTIONS") != "true":
         raise SystemExit("requires a disposable native Ubuntu 24.04 AMD64 GitHub Actions runner")
+    run_id = require_run_id(os.environ.get("LAB_RUN_ID", ""))
     pins = json.loads(PINS.read_text())
     root = Path(sys.argv[1]).resolve()
-    root.mkdir(mode=0o755)  # reserve ownership; never mix receipts from runs
-    # APT's ordinary _apt sandbox must traverse public dependency paths. Fail
-    # before installation if a caller supplied a private parent directory.
-    for parent in [root, *root.parents]:
-        if parent.stat().st_mode & 0o001 == 0:
-            raise SystemExit("dependency evidence parents must be traversable by _apt")
+    root.mkdir(mode=0o700)  # reserve private evidence; never mix attempts
     shutil.copyfile(PINS, root / PINS.name)
     (root / "gnupg").mkdir(mode=0o700)
     counter = 0
@@ -121,9 +180,9 @@ def main():
     # Install only signed-index/hash-verified local package bytes. Ordinary
     # authenticated Ubuntu sources supply dependencies; no PPA configuration
     # or capture privilege changes are needed.
-    run(["sudo", "-n", "apt-get", "-o", "DPkg::Lock::Timeout=30", "update"], timeout=240)
-    specs = [str(root / Path(p["Filename"]).name) for p in pins["packages"]]
-    run(["sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-o", "DPkg::Lock::Timeout=30", "install", "-y", "--reinstall", "--no-install-recommends", *specs], timeout=300)
+    with verified_apt_stage(root, pins["packages"], run_id) as specs:
+        run(["sudo", "-n", "apt-get", "-o", "DPkg::Lock::Timeout=30", "update"], timeout=240)
+        run(["sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-o", "DPkg::Lock::Timeout=30", "install", "-y", "--reinstall", "--no-install-recommends", *specs], timeout=300)
     run(["apt-cache", "policy", *[p["Package"] for p in pins["packages"]]])
     installed = run(["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\n"]).decode()
     for p in pins["packages"]:

@@ -5,14 +5,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/pagrus7/kaferry-lab/internal/evidence"
 	"github.com/pagrus7/kaferry-lab/internal/fixture"
 	"github.com/pagrus7/kaferry-lab/internal/identity"
@@ -448,6 +453,14 @@ func TestScenarioJournalFailureCannotBecomeSuccessfulReadinessRetry(t *testing.T
 	if info, err := recovered.Stat(); err != nil || info.Size() != 0 {
 		t.Fatal("replacement journal concealed missing facts", err)
 	}
+	calls := 0
+	_, err = scenarioReadyGroup(context.Background(), func(context.Context) (kafkaGroupSnapshot, error) {
+		calls++
+		return kafkaGroupSnapshot{}, errors.Join(io.EOF, c.retain(scenarioObservation{Kind: "group_preparation"}))
+	})
+	if err == nil || calls != 1 {
+		t.Fatalf("failed journal retried beside transport error: calls=%d error=%v", calls, err)
+	}
 }
 
 func TestScenarioCleanupCannotIgnoreExpiredBudgetWithoutResources(t *testing.T) {
@@ -458,5 +471,181 @@ func TestScenarioCleanupCannotIgnoreExpiredBudgetWithoutResources(t *testing.T) 
 	// prevents a claim that cleanup completed within its configured allowance.
 	if err := (&scenarioController{}).cleanup(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("expired cleanup passed", err)
+	}
+}
+
+func TestScenarioPreparationRetriesOnlyAvailabilityFailures(t *testing.T) {
+	// Given transport failures, broker availability codes, and permanent failures.
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"EOF", io.EOF, true},
+		{"wrapped reset", fmt.Errorf("metadata: %w", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}), true},
+		{"leader unavailable", sarama.ErrLeaderNotAvailable, true},
+		{"coordinator loading", sarama.ErrOffsetsLoadInProgress, true},
+		{"coordinator unavailable", sarama.ErrConsumerCoordinatorNotAvailable, true},
+		{"wrong coordinator", sarama.ErrNotCoordinatorForConsumer, true},
+		{"joined availability", errors.Join(io.EOF, sarama.ErrNotCoordinatorForConsumer), true},
+		{"authorization", sarama.ErrGroupAuthorizationFailed, false},
+		{"CRC", sarama.ErrInvalidMessage, false},
+		{"identity", errors.New("Kafka topic or cluster identity changed"), false},
+		{"layout", errors.New("Kafka topic partition layout changed or missing"), false},
+		{"retention", errors.New("snapshot exceeds finite retained nontransactional topic bounds"), false},
+		{"malformed plus transport", errors.Join(io.EOF, errors.New("missing partition")), false},
+		{"receipt plus transport", errors.Join(io.EOF, errors.New("scenario journal persistence failed")), false},
+		{"cancellation", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// When preparation decides whether another probe is permitted,
+			// Then an availability error cannot conceal a permanent failure.
+			if got := scenarioTransientPreparation(tc.err); got != tc.want {
+				t.Fatalf("retry=%v, want %v: %v", got, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func TestScenarioScanPreparationNeverRetriesStartedScans(t *testing.T) {
+	cases := []struct {
+		name      string
+		scans     []observer.Scan
+		err       error
+		wantCalls int
+	}{
+		{"preread EOF", nil, io.EOF, 2},
+		{"partial first partition EOF", []observer.Scan{{Partition: 0, Start: 0, End: 2, Next: 1}}, io.EOF, 1},
+		{"first scan empty EOF", []observer.Scan{{Partition: 0}}, io.EOF, 1},
+		{"finished scan then metadata EOF", []observer.Scan{{Partition: 0, End: 1, Next: 1}}, io.EOF, 1},
+		{"CRC after scan starts", []observer.Scan{{Partition: 0}}, sarama.ErrInvalidMessage, 1},
+		{"fidelity mismatch", []observer.Scan{{Partition: 0}}, errors.New("unknown, corrupt or misrouted bytes"), 1},
+		{"identity before scan", nil, errors.New("Kafka topic or cluster identity changed"), 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given a failed snapshot followed by an available successful snapshot.
+				failed := kafkaScanSnapshot{Scans: tc.scans, Error: tc.err.Error()}
+				calls := 0
+				read := func(context.Context) (kafkaScanSnapshot, error) {
+					calls++
+					if calls == 1 {
+						return failed, tc.err
+					}
+					return kafkaScanSnapshot{}, nil
+				}
+				// When destination readiness is sampled, Then only a preread
+				// availability failure may be followed by another snapshot.
+				got, err := scenarioReadyOutput(context.Background(), read)
+				if calls != tc.wantCalls || (err == nil) != (tc.wantCalls == 2) {
+					t.Fatalf("output calls=%d error=%v", calls, err)
+				}
+				if err != nil && !reflect.DeepEqual(got, failed) {
+					t.Fatal("failed destination snapshot was discarded")
+				}
+				// The same restriction applies to retained source verification.
+				calls = 0
+				v, err := scenarioReadyInputs(context.Background(), func(ctx context.Context) (kafkaInputVerification, error) {
+					s, e := read(ctx)
+					return kafkaInputVerification{Snapshot: s, Complete: e == nil}, e
+				})
+				if calls != tc.wantCalls || (err == nil) != (tc.wantCalls == 2) || (err != nil && !reflect.DeepEqual(v.Snapshot, failed)) {
+					t.Fatalf("input calls=%d verification=%+v error=%v", calls, v, err)
+				}
+			})
+		})
+	}
+}
+
+func TestScenarioGroupPreparationRetainsEachFailedProbe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observations.jsonl")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	synctest.Test(t, func(t *testing.T) {
+		// Given literal unavailable and moved-coordinator responses for one
+		// named group, followed by a successful readiness response.
+		c := &scenarioController{log: file, origin: time.Now()}
+		failures := []error{sarama.ErrConsumerCoordinatorNotAvailable, sarama.ErrNotCoordinatorForConsumer, nil}
+		calls := 0
+		group, err := scenarioReadyGroup(context.Background(), func(context.Context) (kafkaGroupSnapshot, error) {
+			e := failures[calls]
+			calls++
+			g := kafkaGroupSnapshot{GroupID: "named-group", Error: scenarioError(e), Description: kafkaGroupDescription{GroupID: "named-group", State: "Dead"}}
+			if e != nil {
+				g.Description.ErrorCode = int16(e.(sarama.KError))
+			}
+			return g, errors.Join(e, c.retain(scenarioObservation{Kind: "group_preparation", Group: &g, Error: scenarioError(e)}))
+		})
+		// When readiness succeeds, Then all previous failed probes still exist.
+		if err != nil || calls != 3 || group.Error != "" || group.GroupID != "named-group" {
+			t.Fatalf("calls=%d group=%+v error=%v", calls, group, err)
+		}
+	})
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("lost group attempts: %s", raw)
+	}
+	for i, line := range lines {
+		var receipt scenarioObservation
+		if err := json.Unmarshal([]byte(line), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Group == nil || receipt.Group.GroupID != "named-group" || (receipt.Error != "") != (i < 2) {
+			t.Fatalf("changed probe %d: %+v", i, receipt)
+		}
+	}
+}
+
+func TestScenarioPreparationStopsAtAttemptAndContextBounds(t *testing.T) {
+	cases := []struct {
+		name         string
+		deadline     time.Duration
+		cancelInRead bool
+		delayRead    time.Duration
+		wantCalls    int
+		wantError    error
+	}{
+		{"already expired", -time.Second, false, 0, 0, context.DeadlineExceeded},
+		{"attempt limit", time.Minute, false, 0, 12, io.EOF},
+		{"deadline during poll", 100 * time.Millisecond, false, 0, 1, context.DeadlineExceeded},
+		{"cancel before next probe", time.Minute, true, 0, 1, context.Canceled},
+		{"late successful probe", time.Minute, false, 16 * time.Second, 1, context.DeadlineExceeded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given an unavailable coordinator or a probe completing after its deadline.
+				ctx, cancel := context.WithTimeout(context.Background(), tc.deadline)
+				defer cancel()
+				calls := 0
+				_, err := scenarioReadyGroup(ctx, func(context.Context) (kafkaGroupSnapshot, error) {
+					calls++
+					if tc.cancelInRead {
+						cancel()
+						return kafkaGroupSnapshot{}, nil
+					}
+					if tc.delayRead > 0 {
+						time.Sleep(tc.delayRead)
+						return kafkaGroupSnapshot{}, nil
+					}
+					return kafkaGroupSnapshot{}, io.EOF
+				})
+				// When bounded readiness ends, Then it cannot run extra probes
+				// or accept a response after cancellation/deadline expiry.
+				if calls != tc.wantCalls || !errors.Is(err, tc.wantError) {
+					t.Fatalf("calls=%d error=%v, want %d / %v", calls, err, tc.wantCalls, tc.wantError)
+				}
+			})
+		})
 	}
 }

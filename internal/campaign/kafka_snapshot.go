@@ -30,8 +30,8 @@ type kafkaInputVerification struct {
 }
 
 // VerifyInputs reads every source partition from zero. A warmup-only check is
-// useful before worker preflight; the full ledger must be verified again after
-// bulk publication while the worker is independently confirmed suspended.
+// useful before worker preflight. After bulk publication, the caller verifies
+// the full finite ledger before using it to establish fault obligations.
 func (k *kafkaRun) VerifyInputs(ctx context.Context, warmupOnly bool) (v kafkaInputVerification, err error) {
 	v.Snapshot, err = snapshotKafkaTopic(ctx, k.sourceAdmin, k.sourceObserver, k.Preparation.Source)
 	if err != nil {
@@ -138,17 +138,27 @@ func checkKafkaTopic(ctx context.Context, a sarama.ClusterAdmin, o *observer.Obs
 	if err != nil {
 		return err
 	}
-	if len(metadata) != 1 || metadata[0] == nil || metadata[0].Name != topic.Topic || metadata[0].Err != sarama.ErrNoError || len(metadata[0].Partitions) != int(topic.Partitions) {
+	if len(metadata) != 1 || metadata[0] == nil || metadata[0].Name != topic.Topic {
+		return errors.New("Kafka topic partition layout changed or missing")
+	}
+	if metadata[0].Err != sarama.ErrNoError {
+		return metadata[0].Err
+	}
+	if len(metadata[0].Partitions) != int(topic.Partitions) {
 		return errors.New("Kafka topic partition layout changed or missing")
 	}
 	seen := map[int32]bool{}
+	var partitionErr error
 	for _, p := range metadata[0].Partitions {
-		if p == nil || p.Err != sarama.ErrNoError || p.ID < 0 || p.ID >= topic.Partitions || seen[p.ID] {
+		if p == nil || p.ID < 0 || p.ID >= topic.Partitions || seen[p.ID] {
 			return errors.New("invalid Kafka topic partition metadata")
+		}
+		if p.Err != sarama.ErrNoError {
+			partitionErr = errors.Join(partitionErr, p.Err)
 		}
 		seen[p.ID] = true
 	}
-	return ctx.Err()
+	return errors.Join(partitionErr, ctx.Err())
 }
 
 // Outputs converts complete raw scans to evidence observations. It does not
@@ -237,12 +247,16 @@ func (k *kafkaRun) SnapshotGroup(ctx context.Context, group string) (snapshot ka
 		return snapshot, errors.New("missing or ambiguous raw group description")
 	}
 	snapshot.Description, err = kafkaDecodeGroup(group, descriptions[0])
-	if err != nil {
+	describeErr := err
+	if err != nil && !errors.Is(err, sarama.ErrOffsetsLoadInProgress) && !errors.Is(err, sarama.ErrConsumerCoordinatorNotAvailable) && !errors.Is(err, sarama.ErrNotCoordinatorForConsumer) {
 		return snapshot, err
 	}
 	if err = ctx.Err(); err != nil {
-		return snapshot, err
+		return snapshot, errors.Join(describeErr, err)
 	}
+	// Sarama's offset probe refreshes its coordinator cache on unavailable or
+	// wrong-coordinator responses; DescribeConsumerGroups does not. Retain the
+	// failed description even when this read-only probe succeeds.
 	partitions := make([]int32, k.Preparation.Source.Partitions)
 	for p := range partitions {
 		partitions[p] = int32(p)
@@ -251,8 +265,11 @@ func (k *kafkaRun) SnapshotGroup(ctx context.Context, group string) (snapshot ka
 	raw, e := k.sourceAdmin.ListConsumerGroupOffsets(group, map[string][]int32{k.Preparation.Source.Topic: partitions})
 	snapshot.FetchEndedAt = time.Now().UTC()
 	// Preserve a raw error response as typed observations where available.
+	if raw == nil && e != nil {
+		return snapshot, errors.Join(describeErr, e, ctx.Err())
+	}
 	snapshot.Offsets, err = kafkaDecodeOffsets(group, k.Preparation.Source, raw)
-	if err = errors.Join(e, err, ctx.Err()); err != nil {
+	if err = errors.Join(describeErr, e, err, ctx.Err()); err != nil {
 		return snapshot, err
 	}
 	if err = checkKafkaTopic(ctx, k.sourceAdmin, k.sourceObserver, k.Preparation.Source); err != nil {
@@ -266,8 +283,16 @@ func kafkaDecodeGroup(group string, raw *sarama.GroupDescription) (g kafkaGroupD
 		return g, errors.New("missing group description")
 	}
 	g = kafkaGroupDescription{Version: raw.Version, GroupID: raw.GroupId, State: raw.State, ProtocolType: raw.ProtocolType, Protocol: raw.Protocol, ErrorCode: raw.ErrorCode, LegacyErrorCode: int16(raw.Err), Members: []kafkaMemberSnapshot{}}
-	if raw.GroupId != group || raw.Err != sarama.ErrNoError || raw.ErrorCode != 0 {
-		return g, errors.New("raw group identity/error prevents assignment observation")
+	if raw.GroupId != group {
+		return g, errors.New("raw group identity prevents assignment observation")
+	}
+	for _, code := range []sarama.KError{raw.Err, sarama.KError(raw.ErrorCode)} {
+		if code != sarama.ErrNoError {
+			err = errors.Join(err, code)
+		}
+	}
+	if err != nil {
+		return g, err
 	}
 	if raw.ProtocolType != "consumer" && !(len(raw.Members) == 0 && raw.ProtocolType == "" && (raw.State == "Empty" || raw.State == "Dead")) {
 		return g, errors.New("unsupported group protocol")
@@ -314,7 +339,12 @@ func kafkaDecodeOffsets(group string, source kafkaTopic, raw *sarama.OffsetFetch
 		snapshot.ErrorCode = int16(raw.Groups[0].Err)
 	}
 	if snapshot.ErrorCode != 0 {
-		err = fmt.Errorf("OffsetFetch group error %d", snapshot.ErrorCode)
+		err = sarama.KError(snapshot.ErrorCode)
+		// A failed group response may omit partition blocks. If it includes
+		// blocks, preserve them and reject malformed coordinates as usual.
+		if len(blocks) == 0 {
+			return snapshot, err
+		}
 	}
 	if len(blocks) != 1 || len(blocks[source.Topic]) != int(source.Partitions) {
 		err = errors.Join(err, errors.New("OffsetFetch omitted or added requested topic/partition blocks"))
@@ -327,8 +357,11 @@ func kafkaDecodeOffsets(group string, source kafkaTopic, raw *sarama.OffsetFetch
 		}
 		position := kafkaPosition(source, p, b.Offset)
 		snapshot.Offsets = append(snapshot.Offsets, kafkaSavedOffset{Source: position, Saved: b.Offset >= 0, LeaderEpoch: b.LeaderEpoch, MetadataBase64: base64.StdEncoding.EncodeToString([]byte(b.Metadata)), ErrorCode: int16(b.Err)})
-		if b.Err != sarama.ErrNoError || b.Offset < -1 {
-			err = errors.Join(err, fmt.Errorf("OffsetFetch invalid/error partition %d", p))
+		if b.Err != sarama.ErrNoError {
+			err = errors.Join(err, b.Err)
+		}
+		if b.Offset < -1 {
+			err = errors.Join(err, fmt.Errorf("OffsetFetch invalid offset partition %d", p))
 		}
 	}
 	return snapshot, err

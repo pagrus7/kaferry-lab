@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/pagrus7/kaferry-lab/internal/evidence"
 	"github.com/pagrus7/kaferry-lab/internal/fixture"
 )
@@ -243,6 +246,9 @@ func (c *scenarioController) retain(o scenarioObservation) error {
 	}
 	_, err = c.log.Write(append(raw, '\n'))
 	c.journalErr = errors.Join(err, c.log.Sync())
+	if c.journalErr != nil {
+		c.journalErr = errors.Join(errors.New("scenario journal persistence failed"), c.journalErr)
+	}
 	return c.journalErr
 }
 func (c *scenarioController) prepare(ctx context.Context, state fixture.State, run fixture.Executor) (err error) {
@@ -297,7 +303,15 @@ func (c *scenarioController) prepare(ctx context.Context, state fixture.State, r
 			return e
 		}
 	}
-	_, err = c.verify(ctx)
+	if _, err = scenarioReadyInputs(ctx, c.verify); err != nil {
+		return err
+	}
+	// A broker API response and readable input do not establish readiness of
+	// this named group's coordinator. These read-only probes neither join the
+	// group nor save offsets; the startup fault is applied afterwards.
+	_, err = scenarioReadyGroup(ctx, func(probe context.Context) (kafkaGroupSnapshot, error) {
+		return c.groupSnapshot(probe, "group_preparation", "")
+	})
 	return err
 }
 func scenarioConfiguration(state fixture.State, p kafkaPreparation, group, routing string) (string, string) {
@@ -442,17 +456,24 @@ func (c *scenarioController) audit(ctx context.Context, settled, final bool) (re
 	if c.nextAudit > 96 {
 		return result, errors.New("bounded audit count exceeded")
 	}
-	start := time.Now()
-	result.Output, err = c.k.SnapshotOutput(ctx)
-	oi := c.interval(start)
-	err = errors.Join(err, c.retain(scenarioObservation{Kind: "output_scan", Interval: oi, AuditID: result.ID, Output: &result.Output, Error: scenarioError(err)}))
+	var oi, gi scenarioInterval
+	result.Output, err = scenarioReadyOutput(ctx, func(probe context.Context) (kafkaScanSnapshot, error) {
+		start := time.Now()
+		output, e := c.k.SnapshotOutput(probe)
+		oi = c.interval(start)
+		return output, errors.Join(e, c.retain(scenarioObservation{Kind: "output_scan", Interval: oi, AuditID: result.ID, Output: &output, Error: scenarioError(e)}))
+	})
 	if err != nil {
 		return result, err
 	}
-	start = time.Now()
-	result.Group, err = c.k.SnapshotGroup(ctx, c.report.Group)
-	gi := c.interval(start)
-	err = errors.Join(err, c.retain(scenarioObservation{Kind: "group_snapshot", Interval: gi, AuditID: result.ID, Group: &result.Group, Error: scenarioError(err)}))
+	// Keep the completed output snapshot while the group coordinator recovers.
+	// A later scan must not replace bytes already observed by this audit.
+	result.Group, err = scenarioReadyGroup(ctx, func(probe context.Context) (kafkaGroupSnapshot, error) {
+		start := time.Now()
+		group, e := c.groupSnapshot(probe, "group_snapshot", result.ID)
+		gi = c.interval(start)
+		return group, e
+	})
 	if err != nil {
 		return result, err
 	}
@@ -464,6 +485,105 @@ func (c *scenarioController) audit(ctx context.Context, settled, final bool) (re
 	}
 	return result, nil
 }
+func (c *scenarioController) groupSnapshot(ctx context.Context, kind, auditID string) (kafkaGroupSnapshot, error) {
+	start := time.Now()
+	group, err := c.k.SnapshotGroup(ctx, c.report.Group)
+	return group, errors.Join(err, c.retain(scenarioObservation{Kind: kind, Interval: c.interval(start), AuditID: auditID, Group: &group, Error: scenarioError(err)}))
+}
+
+// Preparation retries admit only transport or broker availability failures.
+// Every callback retains its attempt before returning. A journal failure,
+// identity mismatch, malformed response, or record failure stops the operation.
+func scenarioReadyInputs(ctx context.Context, read func(context.Context) (kafkaInputVerification, error)) (v kafkaInputVerification, err error) {
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		if err = bounded.Err(); err != nil {
+			return v, err
+		}
+		v, err = read(bounded)
+		err = errors.Join(err, bounded.Err())
+		if err == nil || len(v.Snapshot.Scans) != 0 {
+			return v, err
+		}
+		if retry, e := scenarioPreparationRetry(bounded, err, attempt); !retry {
+			return v, e
+		}
+	}
+}
+func scenarioReadyOutput(ctx context.Context, read func(context.Context) (kafkaScanSnapshot, error)) (s kafkaScanSnapshot, err error) {
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		if err = bounded.Err(); err != nil {
+			return s, err
+		}
+		s, err = read(bounded)
+		err = errors.Join(err, bounded.Err())
+		if err == nil || len(s.Scans) != 0 {
+			return s, err
+		}
+		if retry, e := scenarioPreparationRetry(bounded, err, attempt); !retry {
+			return s, e
+		}
+	}
+}
+func scenarioReadyGroup(ctx context.Context, read func(context.Context) (kafkaGroupSnapshot, error)) (g kafkaGroupSnapshot, err error) {
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		if err = bounded.Err(); err != nil {
+			return g, err
+		}
+		g, err = read(bounded)
+		err = errors.Join(err, bounded.Err())
+		if err == nil {
+			return g, nil
+		}
+		if retry, e := scenarioPreparationRetry(bounded, err, attempt); !retry {
+			return g, e
+		}
+	}
+}
+func scenarioPreparationRetry(ctx context.Context, err error, attempt int) (bool, error) {
+	if ctx.Err() != nil || attempt >= 11 || !scenarioTransientPreparation(err) {
+		return false, errors.Join(err, ctx.Err())
+	}
+	if e := scenarioPoll(ctx, 250*time.Millisecond); e != nil {
+		return false, errors.Join(err, e)
+	}
+	return true, nil
+}
+func scenarioTransientPreparation(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Every joined failure must be transient. A network error beside a failed
+	// receipt or malformed response cannot authorize another attempt.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !scenarioTransientPreparation(e) {
+				return false
+			}
+		}
+		return len(joined.Unwrap()) > 0
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return scenarioTransientPreparation(wrapped.Unwrap())
+	}
+	switch err {
+	case context.Canceled, context.DeadlineExceeded:
+		return false
+	case io.EOF, io.ErrUnexpectedEOF, syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.EPIPE,
+		sarama.ErrOutOfBrokers, sarama.ErrUnknownTopicOrPartition, sarama.ErrLeaderNotAvailable,
+		sarama.ErrNotLeaderForPartition, sarama.ErrRequestTimedOut, sarama.ErrBrokerNotAvailable,
+		sarama.ErrOffsetsLoadInProgress, sarama.ErrConsumerCoordinatorNotAvailable, sarama.ErrNotCoordinatorForConsumer:
+		return true
+	}
+	network, ok := err.(net.Error)
+	return ok && (network.Timeout() || network.Temporary())
+}
+
 func (c *scenarioController) awaitAssigned(ctx context.Context, p *ownedProcess) error {
 	bounded, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -574,22 +694,11 @@ func (c *scenarioController) settledAudit(ctx context.Context, final bool) error
 			return err
 		}
 	}
-	// API readiness can precede topic leader/offset readiness. Retain preread
-	// failures and retry only when no record scan has begun.
-	for i := 0; i < 12; i++ {
-		verification, err := c.verify(ctx)
-		if err == nil {
-			_, err = c.audit(ctx, true, final)
-			return err
-		}
-		if c.journalErr != nil || len(verification.Snapshot.Scans) != 0 {
-			return err
-		}
-		if e := scenarioPoll(ctx, 250*time.Millisecond); e != nil {
-			return errors.Join(err, e)
-		}
+	if _, err := scenarioReadyInputs(ctx, c.verify); err != nil {
+		return err
 	}
-	return errors.New("source metadata did not stabilize for retained-input verification")
+	_, err := c.audit(ctx, true, final)
+	return err
 }
 func (c *scenarioController) startup(ctx context.Context) error {
 	if err := c.broker(ctx, c.source, "pause"); err != nil {

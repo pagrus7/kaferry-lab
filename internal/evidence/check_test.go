@@ -84,6 +84,11 @@ func TestFramingAndIdentityTamperingNeverPass(t *testing.T) {
 			})
 		}},
 		{"manifest-version", "manifest_version", func(t *testing.T, dir string) {
+			// An unknown version remains unsupported when version2 is implemented.
+			mutateBundle(t, dir, func(m, a map[string]any, events []map[string]any) { m["schema_version"] = 999 })
+		}},
+		{"recognized-version-wrong-layout", "manifest_json", func(t *testing.T, dir string) {
+			// A v1 body cannot impersonate the recognized v2 schema.
 			mutateBundle(t, dir, func(m, a map[string]any, events []map[string]any) { m["schema_version"] = 2 })
 		}},
 		{"checker-version", "checker_version", func(t *testing.T, dir string) {
