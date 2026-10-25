@@ -742,3 +742,14 @@ func TestScenarioExistingOutputRequiresIndependentCompleteSavedProgress(t *testi
 		})
 	}
 }
+
+func TestScenarioExitedWorkerCannotReachCompletionAudit(t *testing.T) {
+	// Given an already exited owned worker, When waiting for finite completion,
+	// Then fail before any Kafka audit can supply preexisting output as recovery.
+	p := &ownedProcess{done: make(chan struct{})}
+	close(p.done)
+	c := &scenarioController{}
+	if err := c.awaitComplete(context.Background(), p); err == nil || !strings.Contains(err.Error(), "worker exited before finite-input completion") {
+		t.Fatalf("exited invocation accepted: %v", err)
+	}
+}

@@ -139,7 +139,9 @@ and successful source-input verification. Each settled audit checks saved-prefix
 safety; a live snapshot cannot decide it while output may remain pending. The
 final settled audit requires full input membership and observed saved next
 positions at every prepared finite source end. Complete output with absent or
-unfinished saved progress is INCONCLUSIVE; it cannot establish completed recovery.
+unfinished saved progress is INCONCLUSIVE unless the audit independently proves
+a data violation, which retains its violation verdict. Unfinished progress cannot
+establish completed recovery.
 This completeness requirement is limited to M2's finite, gap-free, nontransactional
 input. Intermediate safety audits may retain absent or unfinished safe prefixes.
 Later recovery cannot repair an earlier proved violation.

@@ -43,7 +43,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 		r.Findings = append(r.Findings, Finding{Code: code, Message: message})
 		return r
 	}
-	missing, violated := false, false
+	missing, violated, completionMissing := false, false, false
 	need := func(condition bool, code, message string) {
 		if !condition {
 			missing = true
@@ -624,7 +624,10 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 				for _, saved := range a.audit.Saved {
 					for _, partition := range ledger.Partitions {
 						if key(saved.Source) == key(partition.Source) {
-							need(saved.Present && saved.ErrorCode == 0 && saved.Source.Offset == partition.End, "completion_progress", "final finite-input completion requires observed saved next positions at every prepared source end")
+							if !saved.Present || saved.ErrorCode != 0 || saved.Source.Offset != partition.End {
+								completionMissing = true
+								r.Findings = append(r.Findings, Finding{Code: "completion_progress", Message: "final finite-input completion requires observed saved next positions at every prepared source end"})
+							}
 						}
 					}
 				}
@@ -647,6 +650,8 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 		r.Verdict = Inconclusive
 	} else if violated {
 		r.Verdict = Violation
+	} else if completionMissing {
+		r.Verdict = Inconclusive
 	}
 	if m.Namespace == "calibration" {
 		r.Limitations = append(r.Limitations, "Synthetic controls are calibration evidence and never qualify a published release.")

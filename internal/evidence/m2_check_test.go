@@ -1151,3 +1151,36 @@ func TestM2ExistingVisibleOutputDoesNotProveRecoveryCompletion(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestM2UnfinishedProgressCannotHideIndependentlyProvedViolation(t *testing.T) {
+	// Given unfinished safe progress in partition0 and an independently proved
+	// data violation elsewhere, When checking the final complete settled audit,
+	// Then missing completion cannot demote that violation to INCONCLUSIVE.
+	for _, fault := range []string{"unsafe saved prefix", "corruption"} {
+		c := newM2Control("healthy")
+		c.worker("w1", "start", "")
+		c.worker("w1", "exit", "")
+		c.worker("w1", "cleanup", "")
+		records := []int{0, 1, 2}
+		if fault == "unsafe saved prefix" {
+			records = []int{0, 2}
+		}
+		c.settle("final", records, []identity.Int64{0, 1, 1}, true, false)
+		if fault == "corruption" {
+			for _, e := range c.e {
+				if e.Output != nil && e.Output.Destination.Partition == 1 {
+					e.Output.Record.Value = identity.NullableBytes{Base64: "WA=="}
+				}
+			}
+		}
+		c.finish()
+		r := CheckM2(c.m, c.a, c.e)
+		code := "unsafe_saved_prefix"
+		if fault == "corruption" {
+			code = "corrupt_or_unexpected_output"
+		}
+		if r.Verdict != Violation || !m2HasCode(r, code) || !m2HasCode(r, "completion_progress") {
+			t.Fatalf("%s: %+v", fault, r)
+		}
+	}
+}
