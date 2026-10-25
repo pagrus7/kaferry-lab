@@ -69,13 +69,16 @@ release or prove a source-save/threshold/worker-ACK mechanism.
 Local synthetic controls cover real stock-CMS roundtrip and algorithm IDs,
 wrong keys, ZIP-digest admission, unsafe input/archive paths, bounds, injected
 OS failures, original private notices/public suppression and authenticated API
-tuple rejection using fake HTTPS. The isolated repaired source passed 112 local controls, including terminal-close,
+tuple rejection using fake HTTPS. The isolated repaired source passed 114 local controls, including terminal-close,
 interruption/cleanup, late sample-mutation and early-stdin-closure failures. Native checks are required
 for the final source. A test-only nonblocking stdout writer removes an
 unbounded preload of the valid 10 KiB recovery tar. Local writer delivery and
 checked joins passed; the mandatory Linux pipe-capacity control (at most 8 KiB,
 with readback) is unexercised on macOS and must run natively, with no fallback
-after a denied operation. The CI unit job runs those controls without real HTTPS, Docker or
+after a denied operation. The fake child’s stdin read also honors its wait
+timeout: setup failure/interruption while stdin stays open must return with
+truthful unavailable reap, closed streams and joined writer. These two cleanup
+controls passed locally; they do not represent actual process waits. The CI unit job runs those controls without real HTTPS, Docker or
 released Kaferry. Test keys/private bytes stay outside its public artifact tree.
 
 A trusted feature-branch push also creates one transport calibration using

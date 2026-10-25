@@ -573,6 +573,8 @@ def run():
                 self.writer.start()
                 self.stdin_fd = write_in
                 self.consumed = bytearray()
+                self.wait_stdin_open = []
+                os.set_blocking(self.reader, False)
                 if mode == "closed":
                     self.drop_reader()
             def drop_reader(self):
@@ -588,12 +590,24 @@ def run():
                 raise AssertionError("zero-exited fake child must not be killed")
             def wait(self, timeout):
                 self.waits += 1
+                self.wait_stdin_open.append(not self.stdin.closed)
                 if self.mode == "full":
-                    while True:
-                        chunk = os.read(self.reader, 65536)
-                        if not chunk:
-                            break
-                        self.consumed.extend(chunk)
+                    deadline = time.monotonic() + timeout
+                    with original_selector() as selector:
+                        selector.register(self.reader, s.selectors.EVENT_READ)
+                        while True:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise s.subprocess.TimeoutExpired("PRIVATE-WAIT synthetic stdin EOF", timeout)
+                            if not selector.select(min(remaining, 0.05)):
+                                continue
+                            try:
+                                chunk = os.read(self.reader, 65536)
+                            except BlockingIOError:
+                                continue
+                            if not chunk:
+                                break
+                            self.consumed.extend(chunk)
                 self.returncode = 0
                 return 0
             def release_fixture(self):
@@ -703,6 +717,68 @@ def run():
         early_stdin_cli("producer-empty-acceptance")
         early_stdin_cli("consumer-empty-acceptance", consumer=True)
         early_stdin_cli("producer-partial-acceptance", partial=True)
+        # Setup can fail before production closes stdin. Its cleanup must still
+        # observe a bounded fake wait, then close streams and retain the failure.
+        def open_stdin_cleanup_cli(consumer):
+            case_base, _ = input_tree("open-stdin-" + ("consumer" if consumer else "producer"))
+            child = StdinChild("full", b"")
+            original_blocking, original_open = s.os.set_blocking, s.os.open
+            setup_failure = KeyboardInterrupt("PRIVATE-WAIT original stdin setup interrupt") if consumer else OSError(errno.EIO, "PRIVATE-WAIT original stdin setup failure")
+            injected = False
+            def blocking(fd, enabled):
+                nonlocal injected
+                if fd == child.stdin_fd:
+                    assert not injected
+                    injected = True
+                    raise setup_failure
+                return original_blocking(fd, enabled)
+            def opened(*args, **kwargs):
+                if injected:
+                    raise AssertionError("new path opened after stdin setup failure")
+                return original_open(*args, **kwargs)
+            argv = ["unseal" if consumer else "seal", "--run-id", run_id, "--source-head", head,
+                    "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
+            if consumer:
+                argv += ["--artifact-zip", str(zip_path), "--trusted-artifact-zip-sha256", trusted, "--private-key", str(key)]
+            stdout, stderr = io.StringIO(), io.StringIO()
+            try:
+                started = time.monotonic()
+                with contextlib.ExitStack() as stack:
+                    for module, name_, value in [(s, "CERT_PIN", identity["recipient_sha256"]), (s, "__file__", str(root / "seal-link-notices.py")), (u, "__file__", str(root / "unseal-link-notices.py")), (Path, "cwd", lambda: case_base), (sys, "argv", argv)]:
+                        stack.enter_context(mock.patch.object(module, name_, value))
+                    stack.enter_context(contextlib.redirect_stdout(stdout))
+                    stack.enter_context(contextlib.redirect_stderr(stderr))
+                    stack.enter_context(mock.patch.object(s.os, "set_blocking", side_effect=blocking))
+                    stack.enter_context(mock.patch.object(s.os, "open", side_effect=opened))
+                    popen = stack.enter_context(mock.patch.object(s.subprocess, "Popen", return_value=child))
+                    commands = stack.enter_context(mock.patch.object(s, "openssl", wraps=s.openssl))
+                    assert (u.cli() if consumer else s.cli()) == 1
+                    assert popen.call_count == commands.call_count == 1
+                elapsed = time.monotonic() - started
+                assert injected and 1.8 <= elapsed < 5, elapsed
+                assert child.wait_stdin_open == [True] and child.polls == child.waits == 1 and child.kills == 0
+                assert all(stream.closed and stream.closes == 1 for stream in (child.stdin, child.stdout, child.stderr))
+                public = stdout.getvalue() + stderr.getvalue()
+                assert "private evidence incomplete" in public and "PRIVATE-WAIT" not in public and str(case_base) not in public
+                directory = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-sealing-private") / run_id
+                record = json.loads((directory / ("unseal-command.json" if consumer else "seal-command.json")).read_bytes())
+                assert record["failure"] == {"type": type(setup_failure).__name__, "errno": getattr(setup_failure, "errno", None), "exact_text": str(setup_failure)}
+                assert not record["child_reaped"] and not record["streams_complete"] and not record["input_complete"]
+                assert record["input_accepted_bytes"] == 0 and record["interrupted"] == consumer
+                timeout = s.subprocess.TimeoutExpired("PRIVATE-WAIT synthetic stdin EOF", 2)
+                assert record["cleanup_failures"] == [{"action": "wait owned child", "type": "TimeoutExpired", "errno": None, "exact_text": str(timeout)}]
+                notice = json.loads((directory / "OS-ERROR.json").read_bytes())
+                assert notice["complete"] and any(node["exact_text"] == str(setup_failure) for node in notice["exceptions"])
+                marker = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-quarantine") / run_id / "COMPLETE.json"
+                assert not marker.exists()
+            finally:
+                child.release_fixture()
+            assert child.reader is None and child.writer_result["joined"] and child.writer_result["closed"]
+            passed("actual CLI open stdin bounded cleanup " + ("consumer-interrupt" if consumer else "producer-setup-error"),
+                   elapsed_seconds=elapsed, wait_timeout_seconds=2, child_reaped=False, waits=child.waits, kills=child.kills,
+                   all_streams_closed=True, writer_joined=True, no_new_path_after_failure=True, synthetic_child=True)
+        open_stdin_cleanup_cli(False)
+        open_stdin_cleanup_cli(True)
         version_receipt = json.loads((root / "version-command.json").read_bytes())
         assert version_receipt["input_intended_bytes"] == version_receipt["input_accepted_bytes"] == 0
         assert version_receipt["input_complete"] and version_receipt["streams_complete"]
