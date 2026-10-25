@@ -66,7 +66,9 @@ native data-only probe reads
 the already verified release. Neither source nor static addresses establish
 a reached instruction, debugger capability, acknowledgment, fault or data
 property. No breakpoint, target-memory access, application import or source
-build is used. Native mapping remains unmeasured until that probe runs.
+build is used. Predecessor probes in retained native runs 40224306022 and 40225832123
+mapped four static function ranges. The changed shared reader and owned-image
+calibration require new native validation.
 
 ## M3 — Ownership, links, transactions and discovery
 
