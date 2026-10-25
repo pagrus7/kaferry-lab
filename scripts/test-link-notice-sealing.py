@@ -8,6 +8,7 @@ import importlib.util
 import contextlib
 import copy
 import errno
+import fcntl
 import io
 import json
 import os
@@ -16,6 +17,8 @@ import re
 import stat
 import sys
 import tarfile
+import threading
+import time
 import uuid
 from unittest import mock
 import zipfile
@@ -374,7 +377,8 @@ def run():
                 read_out, write_out = os.pipe()
                 read_err, write_err = os.pipe()
                 self.child_ends = [read_in, write_out, write_err]
-                os.write(write_err, b"PRIVATE-CANCEL exact captured stderr")
+                assert len(b"PRIVATE-CANCEL exact captured stderr") < 512
+                assert os.write(write_err, b"PRIVATE-CANCEL exact captured stderr") == len(b"PRIVATE-CANCEL exact captured stderr")
                 self.stdin, self.stdout, self.stderr = PipeStream(write_in, "stdin", fault), PipeStream(read_out, "stdout", fault), PipeStream(read_err, "stderr", fault)
             def poll(self):
                 self.polls += 1
@@ -492,16 +496,81 @@ def run():
         class StdinChild:
             pid = 999999992  # synthetic; never passed to an actual kill
             returncode = None
-            def __init__(self, mode, response):
+            def __init__(self, mode, response, small_pipe=False):
                 self.mode, self.kills, self.waits, self.polls = mode, 0, 0, 0
                 self.reader, write_in = os.pipe()
                 read_out, write_out = os.pipe()
                 read_err, write_err = os.pipe()
-                assert os.write(write_out, response) == len(response)
+                self.pipe_capacity = None
+                try:
+                    if small_pipe:
+                        action = "read owned stdout pipe capacity"
+                        current = fcntl.fcntl(write_out, fcntl.F_GETPIPE_SZ)
+                        if current > 8192:
+                            action = "reduce owned stdout pipe capacity to8192"
+                            fcntl.fcntl(write_out, fcntl.F_SETPIPE_SZ, 8192)
+                        action = "read back owned stdout pipe capacity"
+                        self.pipe_capacity = fcntl.fcntl(write_out, fcntl.F_GETPIPE_SZ)
+                        assert 0 < self.pipe_capacity <= 8192, "native small-pipe capacity not established"
+                except BaseException as error:
+                    report["native_pipe_capacity_failure"] = {"action": action, "type": type(error).__name__,
+                            "errno": getattr(error, "errno", None), "exact_text": str(error), "retry": False}
+                    cleanup = []
+                    for fd in (self.reader, write_in, read_out, write_out, read_err, write_err):
+                        try:
+                            os.close(fd)
+                        except OSError as close_error:
+                            cleanup.append({"errno": close_error.errno, "exact_text": str(close_error)})
+                    report["native_pipe_capacity_failure"]["cleanup_failures"] = cleanup
+                    raise s.EvidenceIncomplete("owned native pipe capacity control failed; exact private notice retained; route stopped") from None
+                # Only fixed stderr literals smaller than the512byte POSIX
+                # PIPE_BUF minimum are synchronously written to fresh pipes.
+                assert len(b"PRIVATE-EPIPE exact stderr") < 512
                 assert os.write(write_err, b"PRIVATE-EPIPE exact stderr") == len(b"PRIVATE-EPIPE exact stderr")
-                os.close(write_out)
                 os.close(write_err)
                 self.stdin, self.stdout, self.stderr = PipeStream(write_in, "stdin", ""), PipeStream(read_out, "stdout", ""), PipeStream(read_err, "stderr", "")
+                self.writer_stop = threading.Event()
+                self.writer_result = {"intended_bytes": len(response), "written_bytes": 0,
+                                      "failure": None, "close_failure": None, "closed": False,
+                                      "cancelled": False, "timed_out": False}
+                raw_write, raw_close = os.write, os.close
+                os.set_blocking(write_out, False)
+                def write_response():
+                    # Test-local producer only: never preload a capacity-sized
+                    # blocking write before the production reader can run.
+                    deadline = time.monotonic() + 5
+                    try:
+                        with original_selector() as selector:
+                            selector.register(write_out, s.selectors.EVENT_WRITE)
+                            while self.writer_result["written_bytes"] < len(response):
+                                if self.writer_stop.is_set():
+                                    self.writer_result["cancelled"] = True
+                                    break
+                                remaining = deadline - time.monotonic()
+                                if remaining <= 0:
+                                    self.writer_result["timed_out"] = True
+                                    break
+                                if not selector.select(min(remaining, 0.05)):
+                                    continue
+                                offset = self.writer_result["written_bytes"]
+                                try:
+                                    count = raw_write(write_out, response[offset:offset + 512])
+                                except BlockingIOError:
+                                    continue
+                                if count <= 0:
+                                    raise OSError(errno.EIO, "synthetic stdout writer made no progress")
+                                self.writer_result["written_bytes"] += count
+                    except BaseException as error:
+                        self.writer_result["failure"] = {"type": type(error).__name__,
+                                "errno": getattr(error, "errno", None), "exact_text": str(error)}
+                    finally:
+                        try:
+                            raw_close(write_out)
+                            self.writer_result["closed"] = True
+                        except OSError as error:
+                            self.writer_result["close_failure"] = {"errno": error.errno, "exact_text": str(error)}
+                self.writer = threading.Thread(target=write_response, name="notice-synthetic-stdout")
+                self.writer.start()
                 self.stdin_fd = write_in
                 self.consumed = bytearray()
                 if mode == "closed":
@@ -528,10 +597,21 @@ def run():
                 self.returncode = 0
                 return 0
             def release_fixture(self):
+                self.writer_stop.set()
                 self.drop_reader()
                 for stream in (self.stdin, self.stdout, self.stderr):
                     if not stream.closed:
                         stream.stream.close()
+                self.writer.join(timeout=2)
+                self.writer_result["joined"] = not self.writer.is_alive()
+                report.setdefault("fake_stdout_writers", []).append(dict(self.writer_result, pipe_capacity=self.pipe_capacity))
+                assert self.writer_result["joined"] and self.writer_result["closed"]
+                assert not self.writer_result["timed_out"] and self.writer_result["close_failure"] is None
+                if self.writer_result["failure"] is not None:
+                    assert self.mode != "full" and self.writer_result["failure"]["errno"] == errno.EPIPE
+                if self.mode == "full":
+                    assert self.writer_result["failure"] is None
+                    assert self.writer_result["written_bytes"] == self.writer_result["intended_bytes"]
         class InputSelector:
             def __init__(self):
                 self.real, self.calls = original_selector(), 0
@@ -548,10 +628,11 @@ def run():
                 return self.real.get_map()
             def select(self, timeout):
                 self.calls += 1
-                keys = list(self.real.get_map().values())
+                ready = self.real.select(timeout)
+                if not ready:
+                    return []
                 wanted = "err" if self.calls == 1 else "in"
-                key = next((key for key in keys if key.data == wanted), keys[0])
-                return [(key, s.selectors.EVENT_WRITE if key.data == "in" else s.selectors.EVENT_READ)]
+                return [next((item for item in ready if item[0].data == wanted), ready[0])]
         def early_stdin_cli(name, consumer=False, partial=False):
             case_base, tree = input_tree("stdin-" + name)
             if partial:
@@ -626,7 +707,7 @@ def run():
         assert version_receipt["input_intended_bytes"] == version_receipt["input_accepted_bytes"] == 0
         assert version_receipt["input_complete"] and version_receipt["streams_complete"]
         passed("zero-input real stock version retains complete zero counts")
-        full_body = b"reviewed bounded synthetic full input\n" * 20
+        full_body = b"reviewed bounded synthetic full input\n" * 10
         full_child = StdinChild("full", b"reviewed full-input response")
         try:
             with mock.patch.object(s.subprocess, "Popen", return_value=full_child):
@@ -640,6 +721,28 @@ def run():
             passed("full real-pipe input accepted and independently consumed exactly", intended_bytes=len(full_body), synthetic_child=True)
         finally:
             full_child.release_fixture()
+        if sys.platform == "linux":
+            # On the native Linux CI route this control is mandatory, never a
+            # green skip: actual capacity/readback must be <=8KiB, without
+            # enlarging the pipe or retrying any denied operation.
+            assert hasattr(fcntl, "F_GETPIPE_SZ") and hasattr(fcntl, "F_SETPIPE_SZ")
+            small_child = StdinChild("full", tiny_recovery, small_pipe=True)
+            try:
+                assert len(tiny_recovery) > small_child.pipe_capacity
+                with mock.patch.object(s.subprocess, "Popen", return_value=small_child):
+                    with mock.patch.object(s.selectors, "DefaultSelector", InputSelector):
+                        actual = s.openssl(["synthetic-small-pipe-fixture"], full_body, root, "small-pipe-control", s.MAX_TAR)
+                assert actual == tiny_recovery
+                assert u.unpack(actual, identity)[0] == {"PRIVATE.json": expected["PRIVATE.json"]}
+                assert small_child.consumed == full_body and small_child.waits == 1
+                assert small_child.kills == small_child.polls == 0
+            finally:
+                small_child.release_fixture()
+            passed("native small-pipe valid recovery stdout fully drained and writer joined", synthetic_child=True,
+                   actual_pipe_capacity=small_child.pipe_capacity, stdout_bytes=len(tiny_recovery), writer_joined=True)
+        else:
+            report.setdefault("unexercised_controls", []).append({"case": "native small-pipe valid recovery stdout", "status": "UNEXERCISED",
+                    "reason": "Linux F_GETPIPE_SZ/F_SETPIPE_SZ unavailable on this route", "native_acceptance_required": True})
         for consumer in [False, True]:
             argv = ["unseal" if consumer else "seal", "--run-id", "../PRIVATE-SENTINEL", "--source-head", head,
                     "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
