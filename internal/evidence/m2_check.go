@@ -470,7 +470,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			return unsupported("sql_scope", err.Error())
 		}
 	}
-	killCount, visibleCount := 0, 0
+	lagKillCount, visibleCount := 0, 0
 	killedWorkers := map[string]bool{}
 	for _, e := range episodes {
 		w := workers[e.WorkerID]
@@ -481,26 +481,36 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			if m.ScenarioID != "repeated-kill" {
 				return bad("episode_scenario", "kill episode belongs only to repeated-kill")
 			}
-			killCount++
 			if killedWorkers[e.WorkerID] {
 				return bad("episode_duplicate", "one process death cannot satisfy two required crash episodes")
 			}
 			killedWorkers[e.WorkerID] = true
 			a, exists := audits[e.TriggerAuditID]
 			signal := m2Signal(w, "SIGKILL")
-			need(exists && a.complete && a.tailCovered && a.assigned && a.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && len(unmatchedRequired(ledger.Entries, a.outputs, nil)) > 0 && signal != nil && a.audit.SavedInterval.EndNS <= signal.Interval.StartNS && a.audit.GroupInterval.EndNS <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == a.audit.ID, "kill_trigger", "kill requires a preceding complete output-lag audit covering the observed tail, stable assignment, and an actual SIGKILL request")
+			trigger := exists && a.complete && a.tailCovered && a.assigned && a.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && signal != nil && a.audit.SavedInterval.EndNS <= signal.Interval.StartNS && a.audit.GroupInterval.EndNS <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == a.audit.ID
+			lagging := exists && len(unmatchedRequired(ledger.Entries, a.outputs, nil)) > 0
+			need(trigger && (e.Kind != "unresolved-kill" || lagging), "kill_trigger", "kill requires a complete pre-request audit covering the observed tail and stable assignment; unresolved kills also require missing output")
+			fresh := false
 			if exists && signal != nil {
-				need(m2TriggerFresh(events, a, signal.Interval.StartNS), "trigger_changed", "newer raw output or scan observations precede the kill request; the selected lag audit must be refreshed")
+				fresh = m2TriggerFresh(events, a, signal.Interval.StartNS)
+				need(fresh, "trigger_changed", "newer raw output or scan observations precede the kill request; the selected trigger audit must be refreshed")
 			}
-			need(signal != nil && w.exit != nil && w.exit.Reaped && w.exit.Signal == "SIGKILL" && w.exit.ExitCode == -1 && signal.Interval.StartNS <= w.exit.Interval.EndNS, "kill_unreached", "actual wait must confirm the requested SIGKILL on the same owned invocation")
+			killed := signal != nil && w.exit != nil && w.exit.Reaped && w.exit.Signal == "SIGKILL" && w.exit.ExitCode == -1 && signal.Interval.StartNS <= w.exit.Interval.EndNS
+			need(killed, "kill_unreached", "actual wait must confirm the requested SIGKILL on the same owned invocation")
+			if trigger && fresh && killed && lagging {
+				lagKillCount++
+			}
 			replacement := workers[e.RecoveryWorkerID]
 			need(replacement != nil && replacement != w && w.exit != nil && replacement.start.Interval.StartNS >= w.exit.Interval.EndNS, "kill_recovery", "each kill requires a distinct same-configuration replacement after its completed wait")
 			stopped, exists := audits[e.StoppedAuditID]
 			need(exists && stopped.complete && stopped.settled && w.exit != nil && stopped.audit.ScanInterval.StartNS >= w.exit.Interval.EndNS && (replacement == nil || stopped.audit.SavedInterval.EndNS <= replacement.start.Interval.StartNS), "kill_audit", "each crash needs a settled safety audit before its replacement starts")
 			if e.Kind == "visible-unsaved-kill" {
-				visibleCount++
 				v, ok := audits[e.VisibleAuditID]
-				need(ok && e.VisibleAuditID == e.TriggerAuditID && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && max(v.audit.SavedInterval.EndNS, v.audit.GroupInterval.EndNS) <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == v.audit.ID && m2TriggerFresh(events, v, signal.Interval.StartNS), "visible_unsaved", "the latest pre-kill trigger audit must itself observe visible destination bytes followed by a saved-position sample below that record")
+				visible := ok && e.VisibleAuditID == e.TriggerAuditID && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && max(v.audit.SavedInterval.EndNS, v.audit.GroupInterval.EndNS) <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == v.audit.ID && m2TriggerFresh(events, v, signal.Interval.StartNS)
+				need(visible, "visible_unsaved", "the latest pre-kill trigger audit must itself observe visible destination bytes followed by a saved-position sample below that record")
+				if trigger && killed && visible {
+					visibleCount++
+				}
 			}
 		} else {
 			if e.Kind != m.ScenarioID {
@@ -571,7 +581,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			}
 		}
 	case "repeated-kill":
-		need(killCount >= 2 && visibleCount >= 1, "repeated_kill", "repeated kill requires at least two reached crashes including a visible-unsaved case")
+		need(lagKillCount >= 2 && visibleCount >= 1, "repeated_kill", "repeated kill requires two reached crashes with missing required output and a reached visible-unsaved crash")
 	default:
 		need(len(episodes) == 1, "episode_missing", "this compiled scenario requires exactly one observed fault episode")
 	}

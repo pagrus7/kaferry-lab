@@ -1006,3 +1006,68 @@ func TestVisibleCrashTailCandidateCannotReplaceDecodedKnownOutput(t *testing.T) 
 		t.Fatalf("unscanned tail became a visible known write: %+v", r)
 	}
 }
+
+func fullVisibleCrashM2Control() *m2Control {
+	c := newM2Control("repeated-kill")
+	for _, name := range []string{"1", "2"} {
+		worker := "w" + name
+		c.worker(worker, "start", "")
+		c.audit("lag"+name, []int{}, []identity.Int64{-1, -1, -1}, false, false)
+		c.worker(worker, "signal", "SIGKILL")
+		c.worker(worker, "exit", "SIGKILL")
+		c.worker(worker, "cleanup", "")
+		c.settle("stop"+name, []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	}
+	c.worker("w3", "start", "")
+	c.audit("visible", []int{0, 1, 2}, []identity.Int64{0, 0, 0}, false, false)
+	c.worker("w3", "signal", "SIGKILL")
+	c.worker("w3", "exit", "SIGKILL")
+	c.worker("w3", "cleanup", "")
+	c.settle("stop3", []int{0, 1, 2}, []identity.Int64{0, 0, 0}, false, false)
+	c.worker("w4", "start", "")
+	c.worker("w4", "exit", "")
+	c.worker("w4", "cleanup", "")
+	c.settle("final", []int{0, 0, 1, 1, 2, 2}, []identity.Int64{1, 1, 1}, true, false)
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill1", Kind: "unresolved-kill", WorkerID: "w1", RecoveryWorkerID: "w2", TriggerAuditID: "lag1", StoppedAuditID: "stop1"}})
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill2", Kind: "unresolved-kill", WorkerID: "w2", RecoveryWorkerID: "w3", TriggerAuditID: "lag2", StoppedAuditID: "stop2"}})
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "visible", Kind: "visible-unsaved-kill", WorkerID: "w3", RecoveryWorkerID: "w4", TriggerAuditID: "visible", VisibleAuditID: "visible", StoppedAuditID: "stop3"}})
+	c.finish()
+	return c
+}
+
+func TestM2CompleteVisibleOutputWithUnsavedPositionsIsASeparateCrash(t *testing.T) {
+	// Given two independently observed lag crashes, then all known output
+	// visible with a later saved-next0 sample, followed by a third actual crash.
+	c := fullVisibleCrashM2Control()
+	// When recovery replays all inputs, Then complete visibility does not
+	// invalidate that separate unsaved crash or turn permitted copies into loss.
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Pass || r.ReleaseQualified {
+		t.Fatal(r)
+	}
+	// The same full-output audit cannot establish an unresolved-output crash.
+	wrongKind := fullVisibleCrashM2Control()
+	for _, e := range wrongKind.e {
+		if e.Episode != nil && e.Episode.ID == "visible" {
+			e.Episode.Kind = "unresolved-kill"
+		}
+	}
+	if got := CheckM2(wrongKind.m, wrongKind.a, wrongKind.e); got.Verdict != Inconclusive || !m2HasCode(got, "kill_trigger") {
+		t.Fatalf("complete output was admitted as unresolved output: %+v", got)
+	}
+	// Removing one prior lag observation cannot be repaired by the complete
+	// visible-unsaved crash and complete final output.
+	for i := range c.e {
+		if c.e[i].Episode != nil && c.e[i].Episode.ID == "kill2" {
+			c.e = append(c.e[:i], c.e[i+1:]...)
+			break
+		}
+	}
+	for i := range c.e {
+		c.e[i].Seq = identity.Int64(i + 1)
+	}
+	r = CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Inconclusive || !m2HasCode(r, "repeated_kill") || m2HasCode(r, "visible_unsaved") {
+		t.Fatalf("complete output erased a missing lag crash: %+v", r)
+	}
+}

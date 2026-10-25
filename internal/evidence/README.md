@@ -142,9 +142,10 @@ cannot repair an earlier proved violation.
 
 The compiled scenario IDs are `healthy`, `repeated-kill`, `delivery-stop`,
 `delivery-threshold`, `source-startup` and `source-save`. Healthy histories need no
-invented fault. Crash histories need at least two independently reached lag kills,
-including an identified visible-output/unsaved-position episode, each with matching signal exit,
-restart and audits. Newer output or scan observations before the actual fault
+invented fault. Crash histories need two independently reached output-lag kills and an identified
+visible-output/unsaved-position crash, each with matching signal exit, restart and
+audits. The visible crash may have complete output; it counts as a lag kill only
+when its own fresh audit also shows missing required output. Newer output or scan observations before the actual fault
 request invalidate an older trigger even when the new audit's saved/group read
 finishes after that request. Startup histories need source impairment before invocation,
 observed bounded worker exit, recovery and successful same-group copying.
