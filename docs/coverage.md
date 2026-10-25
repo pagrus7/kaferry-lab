@@ -46,7 +46,11 @@ same live primary, with output/saved/group scans after completed launch. Recover
 requires completed broker health before launch and fresh settled safety after
 any later impairment/restoration. Full-source readback must begin at or after completed
 relevant restart/restore; its later end cannot hide an overlapping start. Profiles
-differ only at SQL argument slot2.
+differ only at SQL argument slot2. The fixed v3 history requires a serial controller: each
+pause/restore/restart interval must begin at or after the preceding event's
+`elapsed_ns`, with its receipt retained before the next controller operation.
+Delayed broker receipts cannot backdate mutations across readback, launch or
+settled-safety witnesses; a later fault after completed readback remains valid.
 Literal negative histories challenge omitted scans, replaced prefixes/identities,
 prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
 publication/STOP/CONT ordering, rebound configuration-path changes, profiles and

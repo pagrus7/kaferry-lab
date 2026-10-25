@@ -115,6 +115,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 		if finished || event.Seq != identity.Int64(i+1) || event.RunID != m.RunID || event.ElapsedNS < elapsed || event.ElapsedNS > m.BudgetNS || !phasePayload(event) {
 			return bad("phase_event", "event sequence/run/time/payload must be bounded, unique and closed")
 		}
+		previousElapsed := elapsed
 		elapsed = event.ElapsedNS
 		if final && event.Kind != "run_finished" {
 			return bad("phase_completion", "no later work can invalidate the final settled observation")
@@ -262,6 +263,12 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 			b := *event.Broker
 			if err := m2BrokerValid(b, m.RunID, elapsed); err != nil {
 				return bad("phase_broker", err.Error())
+			}
+			// This version3 history requires a serial controller: retain the completed
+			// observation before initiating its next broker mutation. A later
+			// receipt cannot backdate an action across an already used witness.
+			if (b.Action == "pause" || b.Action == "restore" || b.Action == "restart") && b.Interval.StartNS < previousElapsed {
+				return bad("phase_broker_order", "serial broker mutation must begin at or after the preceding event elapsed time")
 			}
 			history := brokers[b.Identity.Role]
 			cluster := declared.Partitions[0].Source.Cluster

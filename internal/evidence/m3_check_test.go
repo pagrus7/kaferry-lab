@@ -580,3 +580,101 @@ func TestVersion3SourceReadbackStartCannotOverlapRestoration(t *testing.T) {
 		t.Fatalf("overlapping source readback start was treated as fresh: %+v", r)
 	}
 }
+
+func phaseTestMutationWindow(b *M2Broker, start, end identity.Int64) {
+	// Preserve exact owned identity/state/probe result; change only the
+	// retained controller action/probe window, not its later event envelope.
+	b.Interval = M2Interval{StartNS: start, EndNS: end}
+	b.Request = M2Interval{StartNS: start, EndNS: start}
+	b.Probe.Interval = M2Interval{StartNS: end, EndNS: end}
+}
+
+func TestVersion3SerialMutationReceiptsCannotBackdateWitnesses(t *testing.T) {
+	for _, stage := range []string{"after-readback", "after-recovery-launch", "after-settled-safety", "future-fault-after-readback"} {
+		t.Run(stage, func(t *testing.T) {
+			// Given an already recorded witness, when valid owned broker
+			// mutation receipts are appended later with overlapping older
+			// intervals and monotonic envelopes, then serial admission rejects
+			// them. A genuine later fault remains a valid data-only history.
+			c := preparedPhaseControl()
+			c.worker("primary", "primary-threshold4", "start", "")
+			c.audit("warmup-progress", "warmup", 1, 1, false, false)
+			var witness M2Interval
+			if stage == "after-readback" || stage == "future-fault-after-readback" {
+				c.worker("primary", "primary-threshold4", "signal", "SIGSTOP")
+				c.publish("full", "primary")
+				c.verify("full")
+				witness = c.e[len(c.e)-1].Verified.Interval
+			} else {
+				phasePrimarySafetyControl(c)
+				for _, e := range c.e {
+					if e.Verified != nil && e.Verified.PhaseID == "full" {
+						witness = e.Verified.Interval
+					}
+				}
+				if stage == "after-recovery-launch" {
+					c.worker("recovery", "recovery-unlimited", "start", "")
+					witness = c.e[len(c.e)-1].Worker.Observation.Interval
+				}
+			}
+			previousEnvelope := c.e[len(c.e)-1].ElapsedNS
+			c.broker("destination", "pause")
+			pauseIndex := len(c.e) - 1
+			pause := c.e[pauseIndex].Broker
+			c.broker("destination", "restore")
+			restoreIndex := len(c.e) - 1
+			restore := c.e[restoreIndex].Broker
+			if stage == "after-recovery-launch" {
+				phaseTestMutationWindow(pause, witness.StartNS-2, witness.StartNS-1)
+				phaseTestMutationWindow(restore, witness.StartNS-1, witness.StartNS+1)
+			} else if stage != "future-fault-after-readback" {
+				phaseTestMutationWindow(pause, witness.StartNS+1, witness.StartNS+2)
+				phaseTestMutationWindow(restore, witness.StartNS+2, witness.StartNS+3)
+			}
+			if c.e[pauseIndex].ElapsedNS < previousEnvelope || c.e[restoreIndex].ElapsedNS < c.e[pauseIndex].ElapsedNS || restore.Interval.EndNS > c.e[restoreIndex].ElapsedNS || (pause.Interval.EndNS != restore.Interval.StartNS && stage != "future-fault-after-readback") {
+				t.Fatal("literal late receipts lost valid monotonic envelopes/action order")
+			}
+			if stage == "after-readback" || stage == "after-settled-safety" {
+				if !(witness.StartNS < pause.Interval.StartNS && pause.Interval.StartNS < pause.Interval.EndNS && pause.Interval.EndNS < restore.Interval.EndNS && restore.Interval.EndNS < witness.EndNS) {
+					t.Fatal("literal pause/restore no longer lies strictly inside the earlier complete readback")
+				}
+			}
+			if stage == "future-fault-after-readback" {
+				if pause.Interval.StartNS <= witness.EndNS {
+					t.Fatal("positive future fault no longer follows completed readback")
+				}
+			} else if pause.Interval.StartNS >= previousEnvelope {
+				t.Fatal("negative receipt no longer backdates its broker action")
+			}
+			if stage == "after-readback" || stage == "future-fault-after-readback" {
+				c.worker("primary", "primary-threshold4", "signal", "SIGCONT")
+				c.worker("primary", "primary-threshold4", "exit", "")
+				c.worker("primary", "primary-threshold4", "cleanup", "")
+				c.broker("destination", "restart")
+				c.verify("full")
+				c.audit("stopped-safety", "full", 1, 1, true, false)
+				phaseRecoveryControl(c)
+			} else if stage == "after-settled-safety" {
+				phaseRecoveryControl(c)
+			} else {
+				c.worker("recovery", "recovery-unlimited", "exit", "")
+				c.worker("recovery", "recovery-unlimited", "cleanup", "")
+				c.broker("destination", "restart")
+				c.verify("full")
+				c.audit("final", "full", 32, 32, true, true)
+				c.n += 1_000_000
+				c.add(PhaseEvent{Kind: "run_finished", Finished: &RunFinished{CleanupComplete: true, Proof: "literal synthetic restoration/wait/cleanup observations complete"}})
+			}
+			r := CheckPhaseHistory(c.m, c.a, c.e)
+			if stage == "future-fault-after-readback" {
+				if r.Verdict != Unsupported || !phaseFinding(r, "phase_admission_complete") || !phaseFinding(r, "mechanism_unobserved") || len(r.Findings) != 2 || r.ReleaseQualified {
+					t.Fatalf("legitimate future fault lost data-only admission: %+v", r)
+				}
+				return
+			}
+			if r.Verdict != HarnessError || !phaseFinding(r, "phase_broker_order") || phaseFinding(r, "phase_admission_complete") || r.ReleaseQualified {
+				t.Fatalf("late mutation backdated an accepted witness: %+v", r)
+			}
+		})
+	}
+}

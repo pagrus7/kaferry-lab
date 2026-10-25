@@ -83,6 +83,10 @@ type PhaseAudit struct {
 	Observation M2Audit `json:"observation"`
 }
 
+// Version3 selects a serial controller. Each pause/restore/restart broker
+// interval must start at or after the preceding event's ElapsedNS; its receipt
+// is appended before the next controller operation. Delayed/backdated mutation
+// receipts are not admitted by this fixed history form, not an alternate clock.
 type PhaseEvent struct {
 	Seq         identity.Int64     `json:"seq"`
 	RunID       string             `json:"run_id"`
