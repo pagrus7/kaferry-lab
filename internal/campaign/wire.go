@@ -40,6 +40,10 @@ type wireTools struct {
 
 type wireCaptureReceipt struct {
 	Schema                               int
+	RunID, Role, StartTicks              string
+	PID                                  int
+	InterruptElapsedNS, KillElapsedNS    int64
+	InterruptError, KillError            string
 	Endpoint, ContainerID, CaptureSHA256 string
 	ToolReceiptSHA256                    string
 	DependencyPinsSHA256                 string
@@ -110,7 +114,7 @@ func startWireCapture(ctx context.Context, plan wirePlan, broker *ownedBroker) (
 	if err = os.Mkdir(plan.Directory, 0700); err != nil {
 		return nil, err
 	}
-	c := &wireCapture{plan: plan, tools: tools, done: make(chan struct{}), receipt: wireCaptureReceipt{Schema: 1, Endpoint: broker.endpoint, ContainerID: broker.id, ToolReceiptSHA256: processDigest(body), DependencyPinsSHA256: wireDependencyPinsSHA256, Limitation: "native capture completeness, actual Produce11 and sensitivity controls have not been accepted; wire requests are neither output nor Kafka acknowledgments"}}
+	c := &wireCapture{plan: plan, tools: tools, done: make(chan struct{}), receipt: wireCaptureReceipt{Schema: 1, RunID: broker.runID, Role: broker.role, ExitCode: -1, Endpoint: broker.endpoint, ContainerID: broker.id, ToolReceiptSHA256: processDigest(body), DependencyPinsSHA256: wireDependencyPinsSHA256, Limitation: "native capture completeness, actual Produce11 and sensitivity controls have not been accepted; wire requests are neither output nor Kafka acknowledgments"}}
 	c.stderr, err = newProcessLog(filepath.Join(plan.Directory, "capture.stderr"), 16384)
 	if err != nil {
 		return nil, err
@@ -136,10 +140,19 @@ func startWireCapture(ctx context.Context, plan wirePlan, broker *ownedBroker) (
 		_ = persistProcessJSON(plan.Directory, "capture.json", c.receipt)
 		return nil, errors.New(c.receipt.Error)
 	}
+	c.receipt.PID = c.cmd.Process.Pid
+	_, c.receipt.StartTicks, err = readProcessState(c.receipt.PID)
 	go func() {
 		c.waitErr = c.cmd.Wait()
 		close(c.done)
 	}()
+	if err == nil {
+		err = persistProcessJSON(plan.Directory, "capture-started.json", c.receipt)
+	}
+	if err != nil {
+		_, cleanupErr := c.Stop()
+		return nil, errors.Join(err, cleanupErr)
+	}
 	// Do not start the worker merely because Cmd.Start succeeded. Dumpcap opens
 	// its output after capture initialization; native warmup must still validate
 	// that the complete initiating handshake was actually captured.
@@ -181,11 +194,17 @@ func (c *wireCapture) Stop() (wireCaptureReceipt, error) {
 	select {
 	case <-c.done:
 	default:
-		_ = c.cmd.Process.Signal(syscall.SIGINT)
+		c.receipt.InterruptElapsedNS = time.Since(c.origin).Nanoseconds()
+		if err := c.cmd.Process.Signal(syscall.SIGINT); err != nil {
+			c.receipt.InterruptError = err.Error()
+		}
 		select {
 		case <-c.done:
 		case <-time.After(3 * time.Second):
-			_ = c.cmd.Process.Kill()
+			c.receipt.KillElapsedNS = time.Since(c.origin).Nanoseconds()
+			if err := c.cmd.Process.Kill(); err != nil {
+				c.receipt.KillError = err.Error()
+			}
 			select {
 			case <-c.done:
 			case <-time.After(2 * time.Second):

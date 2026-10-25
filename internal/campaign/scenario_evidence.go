@@ -180,7 +180,7 @@ func (c *scenarioController) finishEvent(timedOut, cleaned bool) {
 	}
 	c.appendEvent(evidence.M2Event{Kind: "run_finished", Finished: &evidence.RunFinished{TimedOut: timedOut, CleanupComplete: cleaned, Proof: "Owned child wait/cleanup receipts and owned broker restoration probes; fixture remains for caller-owned cleanup."}})
 }
-func (c *scenarioController) writeBundle() error {
+func (c *scenarioController) writeBundle() (bool, error) {
 	if len(c.events) == 0 {
 		// No finite ledger was verified. Retain the typed setup/finalization
 		// receipts as an invalid-for-qualification closed history, never invent
@@ -193,20 +193,23 @@ func (c *scenarioController) writeBundle() error {
 		}
 		c.preledger = nil
 		if len(c.events) == 0 {
-			return errors.New("no typed events available for incomplete campaign")
+			return false, errors.New("no typed events available for incomplete campaign")
 		}
 	}
 	directory := filepath.Join(c.plan.Directory, "bundle")
-	if err := evidence.WriteM2Bundle(directory, c.manifest, c.plan.Artifact, c.events); err != nil {
-		return err
+	reserved, err := evidence.WriteM2Bundle(directory, c.manifest, c.plan.Artifact, c.events)
+	if err == nil {
+		c.report.Bundle = directory
 	}
-	c.report.Bundle = directory
-	return nil
+	return reserved, err
 }
 
 // Only the completion marker in this newly reserved scenario bundle is removed.
 // Failure histories, raw streams and all other evidence remain available.
-func invalidateScenarioCompletion(directory string) error {
+func invalidateScenarioCompletion(directory string, reserved bool) error {
+	if !reserved {
+		return nil
+	}
 	err := os.Remove(filepath.Join(directory, evidence.CompleteName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

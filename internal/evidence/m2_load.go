@@ -90,26 +90,27 @@ func loadM2(dir string, manifestRaw []byte) Result {
 	return CheckM2(m, artifact, events)
 }
 
-// WriteM2Bundle reserves a new flat directory and never replaces existing
-// evidence. A failed write leaves the incomplete directory for inspection.
-// Completion binds a closed stream, not a passing property verdict.
-func WriteM2Bundle(dir string, m M2Manifest, artifact ArtifactMetadata, events []M2Event) error {
+// WriteM2Bundle exclusively reserves a new flat directory and never replaces
+// existing evidence. Reserved reports ownership even if a later write fails;
+// callers must preserve a prior attempt on collision. Failed writes retain the
+// incomplete directory. Completion binds a stream, not a passing verdict.
+func WriteM2Bundle(dir string, m M2Manifest, artifact ArtifactMetadata, events []M2Event) (reserved bool, err error) {
 	if m.SchemaVersion != M2SchemaVersion || m.CheckerVersion != M2CheckerVersion || len(events) == 0 || len(events) > maxEvents || events[len(events)-1].Kind != "run_finished" {
-		return fmt.Errorf("v2 writer requires a supported manifest and a bounded closed event stream")
+		return reserved, fmt.Errorf("v2 writer requires a supported manifest and a bounded closed event stream")
 	}
 	artifactRaw, err := json.Marshal(artifact)
 	if err != nil || len(artifactRaw) > (4<<20)-1 {
-		return fmt.Errorf("artifact metadata cannot be encoded within its bound: %v", err)
+		return reserved, fmt.Errorf("artifact metadata cannot be encoded within its bound: %v", err)
 	}
 	artifactRaw = append(artifactRaw, '\n')
 	var stream bytes.Buffer
 	for i, e := range events {
 		raw, err := json.Marshal(e)
 		if err != nil || len(raw) > maxEventBytes {
-			return fmt.Errorf("event %d cannot be encoded within its bound: %v", i+1, err)
+			return reserved, fmt.Errorf("event %d cannot be encoded within its bound: %v", i+1, err)
 		}
 		if stream.Len()+len(raw)+1 > maxEventsBytes {
-			return fmt.Errorf("v2 stream exceeds its byte bound")
+			return reserved, fmt.Errorf("v2 stream exceeds its byte bound")
 		}
 		stream.Write(raw)
 		stream.WriteByte('\n')
@@ -119,24 +120,25 @@ func WriteM2Bundle(dir string, m M2Manifest, artifact ArtifactMetadata, events [
 	m.EventCount = identity.Int64(len(events))
 	manifestRaw, err := json.Marshal(m)
 	if err != nil || len(manifestRaw) > (1<<20)-1 {
-		return fmt.Errorf("v2 manifest cannot be encoded within its bound: %v", err)
+		return reserved, fmt.Errorf("v2 manifest cannot be encoded within its bound: %v", err)
 	}
 	manifestRaw = append(manifestRaw, '\n')
 	// Apply the same required-field/duplicate-key discipline before reserving
 	// the destination. Semantic INCONCLUSIVE/UNSUPPORTED results are retained.
 	var decoded M2Manifest
 	if err := strictJSON(manifestRaw, &decoded); err != nil {
-		return err
+		return reserved, err
 	}
 	for _, line := range bytes.Split(stream.Bytes()[:stream.Len()-1], []byte{'\n'}) {
 		var decoded M2Event
 		if err := strictJSON(line, &decoded); err != nil {
-			return err
+			return reserved, err
 		}
 	}
 	if err := os.Mkdir(dir, 0700); err != nil {
-		return fmt.Errorf("reserve evidence bundle: %w", err)
+		return reserved, fmt.Errorf("reserve evidence bundle: %w", err)
 	}
+	reserved = true
 	for _, item := range []struct {
 		name string
 		raw  []byte
@@ -144,23 +146,23 @@ func WriteM2Bundle(dir string, m M2Manifest, artifact ArtifactMetadata, events [
 		{ArtifactName, artifactRaw}, {EventsName, stream.Bytes()}, {ManifestName, manifestRaw},
 	} {
 		if err := writeM2File(dir, item.name, item.raw); err != nil {
-			return err
+			return reserved, err
 		}
 	}
 	c := M2Completion{SchemaVersion: M2SchemaVersion, RunID: m.RunID, ManifestSHA256: digest(manifestRaw), EventsSHA256: m.Events.SHA256, EventCount: m.EventCount}
 	completeRaw, err := json.Marshal(c)
 	if err != nil {
-		return err
+		return reserved, err
 	}
 	if err := writeM2File(dir, CompleteName, append(completeRaw, '\n')); err != nil {
-		return err
+		return reserved, err
 	}
 	f, err := os.Open(dir)
 	if err != nil {
-		return err
+		return reserved, err
 	}
 	defer f.Close()
-	return f.Sync()
+	return reserved, f.Sync()
 }
 
 func writeM2File(dir, name string, raw []byte) error {

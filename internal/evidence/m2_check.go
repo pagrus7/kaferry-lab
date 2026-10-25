@@ -482,7 +482,7 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			if e.Kind == "visible-unsaved-kill" {
 				visibleCount++
 				v, ok := audits[e.VisibleAuditID]
-				need(ok && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && v.audit.SavedInterval.EndNS <= signal.Interval.StartNS, "visible_unsaved", "visible destination bytes must precede a subsequent saved-position sample below that record and then the kill")
+				need(ok && e.VisibleAuditID == e.TriggerAuditID && v.complete && v.audit.ScanInterval.StartNS >= w.start.Interval.EndNS && m2VisibleUnsaved(ledger, v) && signal != nil && max(v.audit.SavedInterval.EndNS, v.audit.GroupInterval.EndNS) <= signal.Interval.StartNS && m2LatestAudit(audits, signal.Interval.StartNS) == v.audit.ID, "visible_unsaved", "the latest pre-kill trigger audit must itself observe visible destination bytes followed by a saved-position sample below that record")
 			}
 		} else {
 			if e.Kind != m.ScenarioID {
@@ -865,7 +865,7 @@ func m2SettingsValid(m M2Manifest) error {
 }
 
 func m2SQLValid(m M2Manifest, l Ledger, source, destination string) error {
-	want := fmt.Sprintf("WITH CONNECTION source AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000','socket.timeout.ms'='500'), CONNECTION destination AS ('bootstrap.servers'='%s','linger.ms'='2000','request.timeout.ms'='1000','socket.timeout.ms'='500') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = %s) SELECT * FROM TOPIC '%s@source' WITH (GROUP='%s') WHERE PARTITION IN (0,1,2);\n", source, destination, l.Destinations[0].Topic, m.Settings.Routing, l.Partitions[0].Source.Topic, m.Group)
+	want := fmt.Sprintf("WITH CONNECTION source AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000','socket.timeout.ms'='500'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='lab-m2','linger.ms'='1500','request.timeout.ms'='1000','socket.timeout.ms'='500') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = %s) SELECT * FROM TOPIC '%s@source' WITH (GROUP='%s') WHERE PARTITION IN (0,1,2);\n", source, destination, l.Destinations[0].Topic, m.Settings.Routing, l.Partitions[0].Source.Topic, m.Group)
 	if m.Settings.SQL != want {
 		return fmt.Errorf("M2 supports only the compiled finite three-partition SQL with matching observed endpoints, topics, group and routing")
 	}

@@ -135,8 +135,9 @@ partition scans, raw group assignments and saved-next-offset observations.
 Absent progress is explicitly `present:false` with offset `-1`; saved zero is a
 different fact. A settled safety audit requires all workers stopped/reaped/cleaned,
 service restoration, broker restart after worker exit to settle pending requests,
-and successful source-input verification. Each audit checks saved-prefix safety;
-only the final settled audit requires full input membership. Later recovery
+and successful source-input verification. Each settled audit checks saved-prefix
+safety; a live snapshot cannot decide it while output may remain pending. Only
+the final settled audit requires full input membership. Later recovery
 cannot repair an earlier proved violation.
 
 The compiled scenario IDs are `healthy`, `repeated-kill`, `delivery-stop`,

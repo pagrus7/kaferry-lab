@@ -230,6 +230,7 @@ jobs:
             test "$(uname -sm)" = "Linux x86_64"
             go version
             go build -cover -coverpkg=./... -o .cache/bin/lab ./cmd/lab
+            go version -m .cache/bin/lab > .cache/m2-release/build-info.log
             go run ./cmd/fixture up "$LAB_RUN_ID"
           } 2>&1 | tee .cache/m2-release/preparation.log
       - name: Install pinned standard wire tools for the healthy measurement
@@ -267,11 +268,25 @@ jobs:
           assert result['verdict'] in ('PASS', 'VIOLATION'), result
           assert result['release_qualified'] is False, result
           import os
+          with open('.cache/m2-release/attempt/bundle/manifest.json') as stream:
+              manifest = json.load(stream)
+          assert manifest['lab_source']['commit'] == os.environ['GITHUB_SHA'], manifest['lab_source']
+          assert manifest['lab_source']['dirty'] is False, manifest['lab_source']
+          assert 'vcs.revision=' + os.environ['GITHUB_SHA'] in manifest['lab_source']['proof'], manifest['lab_source']
           if os.environ['SCENARIO'] == 'healthy' and os.environ['ROUTING'] == 'PRESERVE':
               with open('.cache/m2-release/attempt/runtime/observations.jsonl') as stream:
                   observations = [json.loads(line) for line in stream]
               candidates = [o['WireCandidates'] for o in observations if o['Kind'] == 'experimental_wire_candidates']
               assert len(candidates) == 1, candidates
+              with open('.cache/m2-release/attempt/runtime/wire/capture-started.json') as stream:
+                  started = json.load(stream)
+              with open('.cache/m2-release/attempt/runtime/wire/capture.json') as stream:
+                  capture = json.load(stream)
+              assert started['RunID'] == os.environ['LAB_RUN_ID'] and started['Role'] == 'destination', started
+              assert started['PID'] > 0 and started['StartTicks'].isdigit(), started
+              assert (capture['PID'], capture['StartTicks']) == (started['PID'], started['StartTicks']), capture
+              assert capture['Reaped'] is True and capture['ExitCode'] == 0 and capture['BoundReached'] is False, capture
+              assert capture['ElapsedNanoseconds'] > 0, capture
               wire = candidates[0]
               assert wire['Supported'] is False and wire['CompletenessEstablished'] is False, wire
               assert len(wire['KnownIDs']) == 91 and wire['DistinctIDs'] == wire['KnownIDs'], wire

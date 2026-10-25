@@ -1,16 +1,20 @@
 package campaign
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pagrus7/kaferry-lab/internal/evidence"
+	"github.com/pagrus7/kaferry-lab/internal/fixture"
 	"github.com/pagrus7/kaferry-lab/internal/identity"
 	"github.com/pagrus7/kaferry-lab/internal/observer"
 )
@@ -237,7 +241,7 @@ func TestLateScenarioPersistenceFailureInvalidatesOnlyCompletion(t *testing.T) {
 	if err := persistProcessJSON(root, "scenario.json", ScenarioReport{}); err == nil {
 		t.Fatal("exclusive report replacement unexpectedly allowed")
 	}
-	if err := invalidateScenarioCompletion(bundle); err != nil {
+	if err := invalidateScenarioCompletion(bundle, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(bundle, evidence.CompleteName)); !os.IsNotExist(err) {
@@ -249,7 +253,210 @@ func TestLateScenarioPersistenceFailureInvalidatesOnlyCompletion(t *testing.T) {
 	if raw, err := os.ReadFile(filepath.Join(root, "scenario.json")); err != nil || string(raw) != "existing report" {
 		t.Fatal("earlier report replaced", err)
 	}
-	if err := invalidateScenarioCompletion(bundle); err != nil {
+	if err := invalidateScenarioCompletion(bundle, true); err != nil {
 		t.Fatal("missing marker invalidation is not idempotent", err)
+	}
+}
+
+func TestScenarioWorkDeadlineIsLatchedBeforeIndependentCleanup(t *testing.T) {
+	cases := []struct {
+		name                                   string
+		work, cleanup                          time.Duration
+		cancelWork, wantTimedOut, wantComplete bool
+	}{
+		{name: "cleanup crosses completed work deadline", work: 59 * time.Second, cleanup: 2 * time.Second, wantComplete: true},
+		{name: "work really expired", work: 61 * time.Second, cleanup: 2 * time.Second, wantTimedOut: true},
+		{name: "cleanup really expired", work: 59 * time.Second, cleanup: 21 * time.Second},
+		{name: "work cancelled", work: 59 * time.Second, cleanup: 2 * time.Second, cancelWork: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given independently bounded work and cleanup phases under the fake clock.
+				work, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				time.Sleep(tc.work)
+				if tc.cancelWork {
+					cancel()
+				}
+				synctest.Wait()
+				workErr, timedOut := scenarioWorkEnd(work)
+				cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				// When only cleanup crosses the old deadline, its own allowance still applies.
+				time.Sleep(tc.cleanup)
+				synctest.Wait()
+				cleanupErr := cleanup.Err()
+				c := &scenarioController{origin: time.Now(), report: &ScenarioReport{RunID: "phase-control"}}
+				c.finishEvent(timedOut, errors.Join(workErr, cleanupErr) == nil)
+				finished := c.preledger[len(c.preledger)-1].Finished
+				// Then the finished receipt preserves the work result captured before cleanup.
+				if finished.TimedOut != tc.wantTimedOut || finished.CleanupComplete != tc.wantComplete {
+					t.Fatalf("phase result %+v; latched work %v; cleanup %v", finished, workErr, cleanupErr)
+				}
+				if work.Err() == nil {
+					t.Fatal("control did not actually cross the old work deadline")
+				}
+				if tc.name == "cleanup really expired" && !errors.Is(cleanupErr, context.DeadlineExceeded) {
+					t.Fatal("cleanup timeout not reached")
+				}
+			})
+		})
+	}
+}
+
+func TestScenarioPriorBundleCollisionPreservesEveryPriorByte(t *testing.T) {
+	// Given evidence that belongs to an earlier run in a caller-supplied directory.
+	directory := t.TempDir()
+	bundle := filepath.Join(directory, "bundle")
+	if err := os.Mkdir(bundle, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prior := map[string]string{evidence.CompleteName: "original completion", evidence.EventsName: "original events"}
+	for name, body := range prior {
+		if err := os.WriteFile(filepath.Join(bundle, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// When admission sees the collision, Then it refuses before reserving runtime
+	// or operating a broker. A later exclusive-writer collision owns no marker.
+	if err := reserveScenarioRuntime(directory); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("prior bundle was admitted: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "runtime")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime reserved before collision refusal: %v", err)
+	}
+	c := &scenarioController{
+		plan:   ScenarioPlan{Directory: directory},
+		report: &ScenarioReport{},
+		manifest: evidence.M2Manifest{
+			SchemaVersion:  evidence.M2SchemaVersion,
+			CheckerVersion: evidence.M2CheckerVersion,
+			Settings:       evidence.M2Settings{Args: []string{}, Environment: []string{}},
+		},
+		events: []evidence.M2Event{{Kind: "run_finished", Finished: &evidence.RunFinished{}}},
+	}
+	reserved, err := c.writeBundle()
+	if !errors.Is(err, os.ErrExist) || reserved {
+		t.Fatalf("collision did not preserve reservation ownership: reserved=%v error=%v", reserved, err)
+	}
+	if err := invalidateScenarioCompletion(bundle, reserved); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range prior {
+		if raw, err := os.ReadFile(filepath.Join(bundle, name)); err != nil || string(raw) != body {
+			t.Fatalf("prior %s changed: %q / %v", name, raw, err)
+		}
+	}
+}
+
+func TestScenarioRejectsOutputSymlinksBeforeRuntimeReservation(t *testing.T) {
+	// Given a bundle symlink that refers to another retained evidence directory.
+	directory := t.TempDir()
+	prior := t.TempDir()
+	if err := os.WriteFile(filepath.Join(prior, evidence.CompleteName), []byte("prior"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(prior, filepath.Join(directory, "bundle")); err != nil {
+		t.Fatal(err)
+	}
+	// When reserving this scenario's outputs, Then no linked prior bytes change.
+	if err := reserveScenarioRuntime(directory); !errors.Is(err, os.ErrExist) {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(prior, evidence.CompleteName)); err != nil || string(raw) != "prior" {
+		t.Fatal("linked marker changed", err)
+	}
+}
+
+func TestScenarioRawJournalRetainsFailedAndCompleteAttempts(t *testing.T) {
+	// Given a mandatory append-only journal without a second memory history.
+	path := filepath.Join(t.TempDir(), "observations.jsonl")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	c := &scenarioController{log: file}
+	observations := []scenarioObservation{{Kind: "readiness", Error: "not ready"}, {Kind: "output_scan", Output: &kafkaScanSnapshot{Scans: []observer.Scan{}}}}
+	// When each attempt is retained, Then every original fact can be read back.
+	for _, observation := range observations {
+		if err := c.retain(observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != len(observations) {
+		t.Fatalf("journal lost attempts: %s", raw)
+	}
+	for i, line := range lines {
+		var got scenarioObservation
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, observations[i]) {
+			t.Fatalf("attempt %d changed: %+v", i, got)
+		}
+	}
+}
+
+func TestScenarioGeneratedSQLMatchesIndependentlyReviewedCheckerFixture(t *testing.T) {
+	// Given an independently authored literal also admitted by the checker history.
+	expected, err := os.ReadFile(filepath.Join("..", "evidence", "testdata", "m2-configuration.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation := kafkaPreparation{Source: kafkaTopic{Topic: "input"}, Destination: kafkaTopic{Topic: "output"}}
+	// When the actual controller generates its invocation, Then endpoint, topic,
+	// group, route and explicit wire-client settings match that reviewed contract.
+	sql, _ := scenarioConfiguration(fixture.State{Source: "127.0.0.1:19092", Destination: "127.0.0.1:29092"}, preparation, "explicit-group", "PRESERVE")
+	if sql != string(expected) {
+		t.Fatalf("generated SQL differs from independent checker fixture\ngot: %q\nwant: %q", sql, expected)
+	}
+}
+
+func TestScenarioJournalFailureCannotBecomeSuccessfulReadinessRetry(t *testing.T) {
+	// Given a failed mandatory journal followed by an available new file.
+	directory := t.TempDir()
+	failed, err := os.Create(filepath.Join(directory, "failed.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := failed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c := &scenarioController{log: failed}
+	first := c.retain(scenarioObservation{Kind: "readiness"})
+	if first == nil {
+		t.Fatal("closed journal accepted")
+	}
+	recovered, err := os.Create(filepath.Join(directory, "later.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovered.Close()
+	c.log = recovered
+	// When readiness would otherwise retry successfully, Then the original
+	// missing evidence remains fatal and no replacement history is written.
+	if next := c.retain(scenarioObservation{Kind: "readiness"}); next != first {
+		t.Fatalf("journal failure was forgotten: %v / %v", first, next)
+	}
+	if info, err := recovered.Stat(); err != nil || info.Size() != 0 {
+		t.Fatal("replacement journal concealed missing facts", err)
+	}
+}
+
+func TestScenarioCleanupCannotIgnoreExpiredBudgetWithoutResources(t *testing.T) {
+	// Given cleanup's own already-expired numerical budget and no live resource.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	// When cleanup finishes without a resource operation, Then expiration still
+	// prevents a claim that cleanup completed within its configured allowance.
+	if err := (&scenarioController{}).cleanup(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("expired cleanup passed", err)
 	}
 }

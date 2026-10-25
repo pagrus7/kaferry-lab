@@ -62,7 +62,8 @@ func runScenario(ctx context.Context, args []string) int {
 		ID: scenario, Routing: routing, Directory: directory,
 		Executable: filepath.Join(verified.Directory, "kaferry"),
 		Subject:    verified.artifactEvidence.Subject, Artifact: verified.artifactEvidence,
-		Records: 96, Budget: 5 * time.Minute,
+		LabSource: source,
+		Records:   96, Budget: 5 * time.Minute,
 		WireToolReceipt: os.Getenv("KAFERRY_LAB_WIRE_RECEIPT"),
 	}, state, fixture.Docker)
 	result := evidence.LoadAndCheck(filepath.Join(directory, "bundle"))

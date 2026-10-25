@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/pagrus7/kaferry-lab/internal/identity"
 )
+
+//go:embed testdata/m2-configuration.sql
+var m2ControlSQL string
 
 // These controls contain three distinct literal records and independently
 // specified source/output positions. No checker function creates expectations.
@@ -39,7 +43,7 @@ func newM2Control(scenario string) *m2Control {
 	}
 	c.m.Settings.Args = []string{"run", "--file", "/synthetic/copy.sql", "--config", "/synthetic/worker.toml"}
 	c.m.Settings.WorkBudgetNS, c.m.Settings.CleanupBudgetNS = 200_000_000_000, 100_000_000_000
-	c.m.Settings.SQL = "WITH CONNECTION source AS ('bootstrap.servers'='127.0.0.1:19092','session.timeout.ms'='6000','heartbeat.interval.ms'='1000','socket.timeout.ms'='500'), CONNECTION destination AS ('bootstrap.servers'='127.0.0.1:29092','linger.ms'='2000','request.timeout.ms'='1000','socket.timeout.ms'='500') INSERT INTO TOPIC 'output@destination' WITH (PARTITIONING = PRESERVE) SELECT * FROM TOPIC 'input@source' WITH (GROUP='explicit-group') WHERE PARTITION IN (0,1,2);\n"
+	c.m.Settings.SQL = m2ControlSQL
 	c.m.Settings.ConfigTOML = "[worker]\nrecord_cap=1024\npartition_record_cap=1024\nbyte_cap=16777216\npartition_byte_cap=8388608\ndelivery_timeout='2ms'\nshutdown_timeout='10ms'\nidle_exit='8s'\ntip_wait='8s'\nprogress_interval='1s'\n"
 	c.m.Settings.SQLSHA256, c.m.Settings.ConfigSHA256 = digest([]byte(c.m.Settings.SQL)), digest([]byte(c.m.Settings.ConfigTOML))
 	c.add(M2Event{Kind: "ledger", Ledger: &c.l})
@@ -340,14 +344,14 @@ func TestM2IdentityOrderAndUnsupportedScopeControls(t *testing.T) {
 func TestM2BundleRoundTripAndStrictStreamControls(t *testing.T) {
 	c := healthyM2Control()
 	dir := filepath.Join(t.TempDir(), "bundle")
-	if err := WriteM2Bundle(dir, c.m, c.a, c.e); err != nil {
+	if _, err := WriteM2Bundle(dir, c.m, c.a, c.e); err != nil {
 		t.Fatal(err)
 	}
 	want := LoadAndCheck(dir)
 	if want.Verdict != Pass || !reflect.DeepEqual(want, LoadAndCheck(dir)) {
 		t.Fatalf("got %+v", want)
 	}
-	if err := WriteM2Bundle(dir, c.m, c.a, c.e); err == nil {
+	if _, err := WriteM2Bundle(dir, c.m, c.a, c.e); err == nil {
 		t.Fatal("writer overwrote existing evidence")
 	}
 	eventsPath := filepath.Join(dir, EventsName)
@@ -734,5 +738,102 @@ func TestM2StartupFailureDiagnosticCorroboratesAnActualFailedExit(t *testing.T) 
 	}
 	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Inconclusive || !m2HasCode(r, "startup_exit") {
 		t.Fatalf("startup diagnostic concealed configuration failure: %+v", r)
+	}
+}
+
+func TestM2NewSavedObservationClosesVisibleUnsavedCrashWindow(t *testing.T) {
+	// Given A visible with saved-next zero, when a later pre-kill audit proves
+	// A saved-next one while B/C still lag, then the earlier window is closed.
+	c := newM2Control("repeated-kill")
+	c.worker("w1", "start", "")
+	c.audit("lag1", []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	c.worker("w1", "signal", "SIGKILL")
+	c.worker("w1", "exit", "SIGKILL")
+	c.worker("w1", "cleanup", "")
+	c.settle("stop1", []int{}, []identity.Int64{-1, -1, -1}, false, false)
+	c.worker("w2", "start", "")
+	c.audit("visible-old", []int{0}, []identity.Int64{0, -1, -1}, false, false)
+	c.audit("lag-new", []int{0}, []identity.Int64{1, -1, -1}, false, false)
+	c.worker("w2", "signal", "SIGKILL")
+	c.worker("w2", "exit", "SIGKILL")
+	c.worker("w2", "cleanup", "")
+	c.settle("stop2", []int{0}, []identity.Int64{1, -1, -1}, false, false)
+	c.worker("w3", "start", "")
+	c.worker("w3", "exit", "")
+	c.worker("w3", "cleanup", "")
+	c.settle("final", []int{0, 1, 2}, []identity.Int64{1, 1, 1}, true, false)
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill1", Kind: "unresolved-kill", WorkerID: "w1", RecoveryWorkerID: "w2", TriggerAuditID: "lag1", StoppedAuditID: "stop1"}})
+	c.add(M2Event{Kind: "episode", Episode: &M2Episode{ID: "kill2", Kind: "visible-unsaved-kill", WorkerID: "w2", RecoveryWorkerID: "w3", TriggerAuditID: "lag-new", VisibleAuditID: "visible-old", StoppedAuditID: "stop2"}})
+	c.finish()
+	for _, visible := range []string{"visible-old", "lag-new"} {
+		c.e[len(c.e)-2].Episode.VisibleAuditID = visible
+		r := CheckM2(c.m, c.a, c.e)
+		if r.Verdict != Inconclusive || !m2HasCode(r, "visible_unsaved") || m2HasCode(r, "kill_trigger") {
+			t.Fatalf("%s: got %+v", visible, r)
+		}
+	}
+}
+
+func TestM2AuthoredSQLFixtureBindsObservedConfiguration(t *testing.T) {
+	// The same authored SQL fixture is compared against the actual campaign
+	// generator in campaign tests; this side checks independent literal records.
+	c := healthyM2Control()
+	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Pass {
+		t.Fatalf("authored configuration rejected: %+v", r)
+	}
+	for _, change := range []struct{ name, old, new string }{
+		{"source endpoint", "127.0.0.1:19092", "127.0.0.1:19093"},
+		{"destination endpoint", "127.0.0.1:29092", "127.0.0.1:29093"},
+		{"source topic", "input@source", "other@source"},
+		{"destination topic", "output@destination", "other@destination"},
+		{"group", "explicit-group", "different-group"},
+		{"routing", "PARTITIONING = PRESERVE", "PARTITIONING = KEY"},
+		{"client attribution", "'client.id'='lab-m2'", "'client.id'='other'"},
+		{"linger", "'linger.ms'='1500'", "'linger.ms'='2000'"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			c := healthyM2Control()
+			c.m.Settings.SQL = strings.Replace(c.m.Settings.SQL, change.old, change.new, 1)
+			c.m.Settings.SQLSHA256 = digest([]byte(c.m.Settings.SQL))
+			r := CheckM2(c.m, c.a, c.e)
+			if r.Verdict != Unsupported || !m2HasCode(r, "sql_scope") {
+				t.Fatalf("got %+v", r)
+			}
+		})
+	}
+}
+
+func TestM2WriterReservationPreservesExistingEvidence(t *testing.T) {
+	c := healthyM2Control()
+	dir := filepath.Join(t.TempDir(), "bundle")
+	owned, err := WriteM2Bundle(dir, c.m, c.a, c.e)
+	if err != nil || !owned {
+		t.Fatalf("exclusive writer ownership=%v error=%v", owned, err)
+	}
+	beforeComplete, err := os.ReadFile(filepath.Join(dir, CompleteName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeEvents, err := os.ReadFile(filepath.Join(dir, EventsName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err = WriteM2Bundle(dir, c.m, c.a, c.e)
+	if err == nil || owned {
+		t.Fatalf("collision ownership=%v error=%v", owned, err)
+	}
+	afterComplete, err := os.ReadFile(filepath.Join(dir, CompleteName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterEvents, err := os.ReadFile(filepath.Join(dir, EventsName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(beforeComplete) != string(afterComplete) || string(beforeEvents) != string(afterEvents) {
+		t.Fatal("colliding writer changed prior evidence")
+	}
+	if r := LoadAndCheck(dir); r.Verdict != Pass {
+		t.Fatalf("prior bundle no longer rechecks: %+v", r)
 	}
 }

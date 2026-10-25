@@ -18,7 +18,7 @@ import (
 // ScenarioPlan is a targeted development run, never a release qualification.
 // The caller verifies the published archive/provenance/version immediately
 // before calling this function. Every worker independently pins executable bytes.
-// Directory exists already; its runtime subdirectory must not exist.
+// Directory exists already; its runtime and bundle output paths must not exist.
 type ScenarioPlan struct {
 	ID, Routing, Directory, Executable string
 	WireToolReceipt                    string
@@ -37,9 +37,6 @@ type ScenarioReport struct {
 	Complete, CleanupComplete                            bool
 	Error                                                string
 	Limitations                                          []string
-	// Every attempted observation is also flushed to observations.jsonl before
-	// later operations. Failed attempts are retained rather than overwritten.
-	Observations []scenarioObservation `json:"-"`
 }
 
 type scenarioInterval struct{ StartNS, EndNS int64 }
@@ -72,6 +69,7 @@ type scenarioController struct {
 	report              *ScenarioReport
 	origin              time.Time
 	log                 *os.File
+	journalErr          error
 	k                   *kafkaRun
 	source, destination *ownedBroker
 	workers             []*ownedProcess
@@ -135,11 +133,11 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 	if run == nil {
 		return report, errors.New("scenario requires a fixture executor")
 	}
-	if err = os.Mkdir(filepath.Join(plan.Directory, "runtime"), 0700); err != nil {
+	if err = reserveScenarioRuntime(plan.Directory); err != nil {
 		return report, err
 	}
 	origin := time.Now()
-	report = ScenarioReport{RunID: state.RunID, ScenarioID: plan.ID, Routing: plan.Routing, Directory: plan.Directory, StartedAt: origin.UTC(), Records: plan.Records, BudgetNS: int64(plan.Budget + 150*time.Second), WorkBudgetNS: int64(plan.Budget), CleanupBudgetNS: int64(150 * time.Second), Limitations: []string{"Targeted M2 evidence; release_qualified remains false.", "Output lag does not identify accepted writes or pending callbacks.", "Container restart preserves broker storage; this does not model power loss."}, Observations: []scenarioObservation{}}
+	report = ScenarioReport{RunID: state.RunID, ScenarioID: plan.ID, Routing: plan.Routing, Directory: plan.Directory, StartedAt: origin.UTC(), Records: plan.Records, BudgetNS: int64(plan.Budget + 150*time.Second), WorkBudgetNS: int64(plan.Budget), CleanupBudgetNS: int64(150 * time.Second), Limitations: []string{"Targeted M2 evidence; release_qualified remains false.", "Output lag does not identify accepted writes or pending callbacks.", "Container restart preserves broker storage; this does not model power loss."}}
 	log, e := os.OpenFile(filepath.Join(plan.Directory, "runtime", "observations.jsonl"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
 		return report, e
@@ -148,6 +146,8 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 	ctx, cancel := context.WithTimeout(ctx, plan.Budget)
 	defer cancel()
 	defer func() {
+		workErr, workTimedOut := scenarioWorkEnd(ctx)
+		err = errors.Join(err, workErr)
 		// A fresh numerical cleanup budget survives campaign cancellation.
 		cleanup, done := context.WithTimeout(context.Background(), 150*time.Second)
 		cleanupErr := c.cleanup(cleanup)
@@ -161,8 +161,8 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 		}
 		// Required raw receipts are durable before a closed typed stream can
 		// claim success. Any incomplete orchestration remains nonpassing.
-		c.finishEvent(errors.Is(ctx.Err(), context.DeadlineExceeded), report.CleanupComplete && err == nil)
-		bundleErr := c.writeBundle()
+		c.finishEvent(workTimedOut, report.CleanupComplete && err == nil)
+		bundleReserved, bundleErr := c.writeBundle()
 		err = errors.Join(err, bundleErr)
 		if err != nil {
 			report.Error = err.Error()
@@ -172,7 +172,7 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 		if bundleErr != nil || persistErr != nil {
 			// A late persistence failure must not leave a passing completion
 			// marker. Preserve every other byte of the failed attempt.
-			markerErr := invalidateScenarioCompletion(filepath.Join(plan.Directory, "bundle"))
+			markerErr := invalidateScenarioCompletion(filepath.Join(plan.Directory, "bundle"), bundleReserved)
 			err = errors.Join(err, persistErr, markerErr)
 			report.Complete = false
 			report.Error = err.Error()
@@ -207,17 +207,43 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 	return report, err
 }
 
+// Reject earlier evidence before any worker or broker operation. The bundle
+// writer still reserves exclusively later, so a subsequent collision is retained.
+func reserveScenarioRuntime(directory string) error {
+	for _, name := range []string{"runtime", "bundle"} {
+		_, err := os.Lstat(filepath.Join(directory, name))
+		if err == nil {
+			return fmt.Errorf("scenario output %s already exists: %w", name, os.ErrExist)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return os.Mkdir(filepath.Join(directory, "runtime"), 0700)
+}
+
+// Capture work cancellation once, before the separate cleanup budget starts.
+// A later work-deadline expiry cannot change this already completed phase.
+func scenarioWorkEnd(ctx context.Context) (error, bool) {
+	err := ctx.Err()
+	return err, errors.Is(err, context.DeadlineExceeded)
+}
+
 func (c *scenarioController) interval(start time.Time) scenarioInterval {
 	return scenarioInterval{start.Sub(c.origin).Nanoseconds(), time.Since(c.origin).Nanoseconds()}
 }
 func (c *scenarioController) retain(o scenarioObservation) error {
-	c.report.Observations = append(c.report.Observations, o)
+	if c.journalErr != nil {
+		return c.journalErr
+	}
 	raw, err := json.Marshal(o)
 	if err != nil {
+		c.journalErr = err
 		return err
 	}
 	_, err = c.log.Write(append(raw, '\n'))
-	return errors.Join(err, c.log.Sync())
+	c.journalErr = errors.Join(err, c.log.Sync())
+	return c.journalErr
 }
 func (c *scenarioController) prepare(ctx context.Context, state fixture.State, run fixture.Executor) (err error) {
 	for _, role := range []string{"source", "destination"} {
@@ -271,7 +297,8 @@ func (c *scenarioController) prepare(ctx context.Context, state fixture.State, r
 			return e
 		}
 	}
-	return c.verify(ctx)
+	_, err = c.verify(ctx)
+	return err
 }
 func scenarioConfiguration(state fixture.State, p kafkaPreparation, group, routing string) (string, string) {
 	// Values originate only from validated owned endpoints and generated topic/group
@@ -280,7 +307,7 @@ func scenarioConfiguration(state fixture.State, p kafkaPreparation, group, routi
 	config := "[worker]\nrecord_cap=1024\npartition_record_cap=1024\nbyte_cap=16777216\npartition_byte_cap=8388608\ndelivery_timeout='4s'\nshutdown_timeout='6s'\nidle_exit='8s'\ntip_wait='8s'\nprogress_interval='1s'\n"
 	return sql, config
 }
-func (c *scenarioController) verify(ctx context.Context) error {
+func (c *scenarioController) verify(ctx context.Context) (kafkaInputVerification, error) {
 	start := time.Now()
 	v, err := c.k.VerifyInputs(ctx, false)
 	interval := c.interval(start)
@@ -291,7 +318,7 @@ func (c *scenarioController) verify(ctx context.Context) error {
 	}
 	// Failed readiness/scan attempts remain in the mandatory raw journal.
 	// They are not presented as successful verification of a different ledger.
-	return err
+	return v, err
 }
 func (c *scenarioController) start(ctx context.Context) (*ownedProcess, error) {
 	for _, file := range []struct{ name, digest string }{{"copy.sql", c.manifest.Settings.SQLSHA256}, {"worker.toml", c.manifest.Settings.ConfigSHA256}} {
@@ -402,48 +429,40 @@ func (c *scenarioController) broker(ctx context.Context, b *ownedBroker, operati
 	}
 	return errors.Join(err, c.retain(scenarioObservation{Kind: "broker_" + operation, Interval: interval, Broker: &observation, Error: scenarioError(err)}))
 }
-func (c *scenarioController) audit(ctx context.Context, settled, final bool) (string, error) {
+
+type scenarioAuditResult struct {
+	ID     string
+	Output kafkaScanSnapshot
+	Group  kafkaGroupSnapshot
+}
+
+func (c *scenarioController) audit(ctx context.Context, settled, final bool) (result scenarioAuditResult, err error) {
 	c.nextAudit++
-	id := fmt.Sprintf("audit-%03d", c.nextAudit)
+	result.ID = fmt.Sprintf("audit-%03d", c.nextAudit)
 	if c.nextAudit > 96 {
-		return id, errors.New("bounded audit count exceeded")
+		return result, errors.New("bounded audit count exceeded")
 	}
 	start := time.Now()
-	output, err := c.k.SnapshotOutput(ctx)
+	result.Output, err = c.k.SnapshotOutput(ctx)
 	oi := c.interval(start)
-	err = errors.Join(err, c.retain(scenarioObservation{Kind: "output_scan", Interval: oi, AuditID: id, Output: &output, Error: scenarioError(err)}))
+	err = errors.Join(err, c.retain(scenarioObservation{Kind: "output_scan", Interval: oi, AuditID: result.ID, Output: &result.Output, Error: scenarioError(err)}))
 	if err != nil {
-		return id, err
+		return result, err
 	}
 	start = time.Now()
-	group, err := c.k.SnapshotGroup(ctx, c.report.Group)
+	result.Group, err = c.k.SnapshotGroup(ctx, c.report.Group)
 	gi := c.interval(start)
-	err = errors.Join(err, c.retain(scenarioObservation{Kind: "group_snapshot", Interval: gi, AuditID: id, Group: &group, Error: scenarioError(err)}))
+	err = errors.Join(err, c.retain(scenarioObservation{Kind: "group_snapshot", Interval: gi, AuditID: result.ID, Group: &result.Group, Error: scenarioError(err)}))
 	if err != nil {
-		return id, err
+		return result, err
 	}
-	if err = c.auditEvent(id, output, group, oi, gi, settled, final); err != nil {
-		return id, err
+	if err = c.auditEvent(result.ID, result.Output, result.Group, oi, gi, settled, final); err != nil {
+		return result, err
 	}
 	if final {
-		c.manifest.FinalAuditID = id
+		c.manifest.FinalAuditID = result.ID
 	}
-	return id, nil
-}
-func (c *scenarioController) lastAudit(id string) (kafkaScanSnapshot, kafkaGroupSnapshot) {
-	var output kafkaScanSnapshot
-	var group kafkaGroupSnapshot
-	for _, o := range c.report.Observations {
-		if o.AuditID == id {
-			if o.Output != nil {
-				output = *o.Output
-			}
-			if o.Group != nil {
-				group = *o.Group
-			}
-		}
-	}
-	return output, group
+	return result, nil
 }
 func (c *scenarioController) awaitAssigned(ctx context.Context, p *ownedProcess) error {
 	bounded, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -519,12 +538,11 @@ func (c *scenarioController) awaitComplete(ctx context.Context, p *ownedProcess)
 	bounded, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	for i := 0; i < 24; i++ {
-		id, err := c.audit(bounded, false, false)
+		audit, err := c.audit(bounded, false, false)
 		if err != nil {
 			return err
 		}
-		output, _ := c.lastAudit(id)
-		membership, err := scenarioMembership(c.ledger, output)
+		membership, err := scenarioMembership(c.ledger, audit.Output)
 		if err != nil {
 			return err
 		}
@@ -559,13 +577,12 @@ func (c *scenarioController) settledAudit(ctx context.Context, final bool) error
 	// API readiness can precede topic leader/offset readiness. Retain preread
 	// failures and retry only when no record scan has begun.
 	for i := 0; i < 12; i++ {
-		err := c.verify(ctx)
+		verification, err := c.verify(ctx)
 		if err == nil {
 			_, err = c.audit(ctx, true, final)
 			return err
 		}
-		last := c.report.Observations[len(c.report.Observations)-1]
-		if last.Input == nil || len(last.Input.Snapshot.Scans) != 0 {
+		if c.journalErr != nil || len(verification.Snapshot.Scans) != 0 {
 			return err
 		}
 		if e := scenarioPoll(ctx, 250*time.Millisecond); e != nil {
@@ -626,8 +643,7 @@ func (c *scenarioController) repeatedKill(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		output, _ := c.lastAudit(audit)
-		m, err := scenarioMembership(c.ledger, output)
+		m, err := scenarioMembership(c.ledger, audit.Output)
 		if err != nil {
 			return err
 		}
@@ -648,7 +664,7 @@ func (c *scenarioController) repeatedKill(ctx context.Context) error {
 		}
 		// Record the actual audit references now; recovery ID is filled when the
 		// next process has really started, never a predicted worker identity.
-		c.pendingEpisode(fmt.Sprintf("kill-%d", i+1), "unresolved-kill", p, audit, c.latestAudit())
+		c.pendingEpisode(fmt.Sprintf("kill-%d", i+1), "unresolved-kill", p, audit.ID, c.latestAudit())
 	}
 	// A separate visible-but-unsaved window is sought once, independently of the
 	// lag kills. Failing to observe it retains the two kills but cannot pass M2.
@@ -662,17 +678,16 @@ func (c *scenarioController) repeatedKill(ctx context.Context) error {
 	}
 	var visible string
 	for i := 0; i < 24; i++ {
-		id, e := c.audit(ctx, false, false)
+		audit, e := c.audit(ctx, false, false)
 		if e != nil {
 			return e
 		}
-		output, group := c.lastAudit(id)
-		m, e := scenarioMembership(c.ledger, output)
+		m, e := scenarioMembership(c.ledger, audit.Output)
 		if e != nil {
 			return e
 		}
-		if scenarioVisibleUnsaved(c.ledger, m, group) {
-			visible = id
+		if scenarioVisibleUnsaved(c.ledger, m, audit.Group) {
+			visible = audit.ID
 			break
 		}
 		if e = scenarioPoll(ctx, 100*time.Millisecond); e != nil {
@@ -685,16 +700,16 @@ func (c *scenarioController) repeatedKill(ctx context.Context) error {
 	if err = c.signal(ctx, p, syscall.SIGSTOP); err != nil {
 		return err
 	}
-	visible, err = c.audit(ctx, false, false)
+	audit, err := c.audit(ctx, false, false)
 	if err != nil {
 		return err
 	}
-	output, group := c.lastAudit(visible)
-	m, err := scenarioMembership(c.ledger, output)
+	visible = audit.ID
+	m, err := scenarioMembership(c.ledger, audit.Output)
 	if err != nil {
 		return err
 	}
-	if !scenarioVisibleUnsaved(c.ledger, m, group) {
+	if !scenarioVisibleUnsaved(c.ledger, m, audit.Group) {
 		return errors.New("visible-unsaved condition disappeared before worker suspension")
 	}
 	if err = c.stop(ctx, p, syscall.SIGKILL); err != nil {
@@ -731,8 +746,7 @@ func (c *scenarioController) deliveryStop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	output, _ := c.lastAudit(trigger)
-	m, err := scenarioMembership(c.ledger, output)
+	m, err := scenarioMembership(c.ledger, trigger.Output)
 	if err != nil {
 		return err
 	}
@@ -761,7 +775,7 @@ func (c *scenarioController) deliveryStop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.episode("delivery-stop-1", "delivery-stop", p, recovery, trigger, "", stopped)
+	c.episode("delivery-stop-1", "delivery-stop", p, recovery, trigger.ID, "", stopped)
 	c.diagnostic(p.Identity().WorkerID, "unsupported-observation", "Broker outage exceeded configured delivery timeout; no packet observation proves when missing records were accepted. Timeout and TERM overlap require actual exit/diagnostic inspection.")
 	if err = c.awaitComplete(ctx, recovery); err != nil {
 		return err
@@ -783,8 +797,7 @@ func (c *scenarioController) sourceSave(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	output, _ := c.lastAudit(trigger)
-	m, err := scenarioMembership(c.ledger, output)
+	m, err := scenarioMembership(c.ledger, trigger.Output)
 	if err != nil {
 		return err
 	}
@@ -808,7 +821,7 @@ func (c *scenarioController) sourceSave(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.episode("source-save-1", "source-save", p, recovery, trigger, "", stopped)
+	c.episode("source-save-1", "source-save", p, recovery, trigger.ID, "", stopped)
 	c.diagnostic(p.Identity().WorkerID, "unsupported-observation", "Source transport was unavailable while output was missing. No independent OffsetCommit request observation establishes a periodic save was hit; this attempt cannot establish the required save-outage mechanism.")
 	if err = c.awaitComplete(ctx, recovery); err != nil {
 		return err
@@ -840,6 +853,7 @@ func (c *scenarioController) cleanup(ctx context.Context) error {
 		errs = append(errs, c.finishWire(ctx))
 		errs = append(errs, c.k.Close())
 	}
+	errs = append(errs, ctx.Err())
 	return errors.Join(errs...)
 }
 
