@@ -9,7 +9,7 @@ reviewed durable retention route is available.
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
 reviewed, redacted evidence containing synthetic inputs.” Encryption provides
 confidentiality, not content review or redaction. No exception to that rule has
-been authorized, and no public encrypted-notice upload is enabled. The inert
+been authorized, and no unknown-notice public encrypted upload is enabled. The unknown-notice
 upload proposal remains ignored under `.cache/m2/notice-sealing-implementation/`.
 These helpers prepare a concrete retention option; they are not qualification.
 
@@ -45,6 +45,13 @@ file directly. No malformed tuple, missing digest or extra encrypted artifact
 can authorize decryption. This acquisition path has synthetic transport tests;
 real API recovery of an encrypted artifact has not been exercised.
 
+Completion metadata is staged, synced and closed while the private error sink
+is live. The sink is detached and closed exactly once before a final rename
+publishes COMPLETE. Failure of that terminal close or rename is explicitly
+incomplete with exact notice unavailable; it never opens a replacement sink.
+Interrupted command drains mark streams incomplete and retain actual cleanup
+outcomes, including unavailable reap results.
+
 Both command/OS notice paths reserve private error storage before sensitive
 operations. Exact original failures stay private when that sink works; public
 diagnostics are fixed. Credential-bearing API error text is withheld and
@@ -58,9 +65,24 @@ release or prove a source-save/threshold/worker-ACK mechanism.
 Local synthetic controls cover real stock-CMS roundtrip and algorithm IDs,
 wrong keys, ZIP-digest admission, unsafe input/archive paths, bounds, injected
 OS failures, original private notices/public suppression and authenticated API
-tuple rejection using fake HTTPS. Native checks are required for the final
-source. The CI unit job runs those controls without real HTTPS, Docker or
+tuple rejection using fake HTTPS. The isolated repaired source passed 107 local controls, including terminal-close,
+interruption/cleanup and late sample-mutation failures. Native checks are required
+for the final source. The CI unit job runs those controls without real HTTPS, Docker or
 released Kaferry. Test keys/private bytes stay outside its public artifact tree.
+
+A trusted feature-branch push also creates one transport calibration using
+`scripts/create-notice-transport-sample.py --reviewed-synthetic-transport-only`.
+It creates a fresh private tree containing only `PRIVATE.json` and
+`transport-sample.json`; their exact literal payloads are checked again at the
+production sealer snapshot. Only validated run/head/unit-job/attempt fields vary.
+The notice is exactly “Reviewed fixed synthetic notice transport sample.”
+The namespace is `calibration/private-notice-transport`, with `synthetic:true`
+and `release_qualified:false`. Existing, extra or changed inputs are refused
+before encryption. CI uploads only this sample ciphertext under the canonical
+unit artifact name, using the pinned public certificate; it never reads the
+recipient private key. This reviewed synthetic sample fits the existing
+publication rule. It grants no exception for unknown notices. Actual native
+creation and authenticated API recovery remain pending.
 
 The task-generated recipient certificate is public and pinned in source; its
 private key remains only in ignored owner-only coordinator storage. Local
@@ -72,6 +94,6 @@ synthetic evidence before any ordinary release-evidence publication.
 A future enabled producer needs an exact reviewed source/CI binding, explicit
 writer-stop/reap evidence, native tool checks, the approved recipient and either
 an actual private durable transfer or explicit authorization for the proposed
-public ciphertext exception. Until then, linked runtime and encrypted public
+public ciphertext exception. Until then, linked runtime and unknown-notice encrypted public
 retention remain off. Real product fault coverage and M2–M6 acceptance remain
 separate requirements.

@@ -31,6 +31,31 @@ jobs:
           set -euo pipefail
           mkdir -p .cache/unit
           ./scripts/check.sh 2>&1 | tee .cache/unit/check.log
+      - name: Create reviewed fixed synthetic transport sample
+        id: reviewed-notice-sample
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
+        shell: bash
+        env:
+          SAMPLE_RUN_ID: transport-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_JOB" = unit
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/create-notice-transport-sample.py --run-id "$SAMPLE_RUN_ID" --source-head "$GITHUB_SHA" --job "$GITHUB_JOB" --attempt "$GITHUB_RUN_ATTEMPT" --reviewed-synthetic-transport-only
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Upload only reviewed synthetic transport ciphertext
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && steps.reviewed-notice-sample.outputs.complete == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 2
+        with:
+          name: encrypted-link-notices-unit-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/link-quarantine/transport-${{ github.run_id }}-${{ github.run_attempt }}/notice.cms
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: false
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -140,6 +165,14 @@ jobs:
           assert result["tag"] == "v0.6.0", result
           assert result["commit"] == "d7d485b96a52b711cb10d76dca09aa9b155dec5e", result
           PY
+      - name: Inspect pinned release function metadata as data only
+        env:
+          LAB_SUBJECT_POINTS: "1"
+          LAB_SUBJECT_POINTS_BINARY: ${{ github.workspace }}/.cache/m1/release/kaferry
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -v -covermode=atomic -coverpkg=./... -coverprofile=.cache/m1/subject-points-coverage.out -count=1 -timeout=2m ./internal/campaign -run '^TestPinnedReleaseSubjectPointMetadataDataOnly$' 2>&1 | tee .cache/m1/subject-points.log
       - name: Retain statement coverage from the actual M1 executions
         if: always()
         shell: bash

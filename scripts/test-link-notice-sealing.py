@@ -199,6 +199,7 @@ def run():
         def cli_os_failure(name, consumer=False, point="read", number=errno.EACCES, expected_commands=0, sink_failure=False):
             case_base, _ = input_tree("os-" + name)
             action_started = False
+            operation_fd, terminal_closes, preserved_denial = None, 0, False
             original_notice = "PRIVATE-SENTINEL original literal OS notice " + name
             private_path = "/private/PRIVATE-SENTINEL/" + name
             error = OSError(number, original_notice, private_path)
@@ -206,6 +207,7 @@ def run():
             error.__context__ = ValueError("PRIVATE-SENTINEL original context")
             original_read, original_write = s.read_regular, s.write_private
             original_open, original_persist = s.os.open, s.persist_receipt
+            original_close, original_close_operation = s.os.close, s.close_operation
             original_reserve, original_rename = s.reserve, s.os.rename
             def fail():
                 nonlocal action_started
@@ -216,15 +218,36 @@ def run():
                     raise AssertionError("new path opened after injected denial")
                 if point == "open" and str(path).endswith(run_id + "-links"):
                     fail()
-                return original_open(path, *args, **kwargs)
+                result = original_open(path, *args, **kwargs)
+                if Path(path).name == "OS-ERROR.json":
+                    nonlocal operation_fd
+                    operation_fd = result
+                return result
+            def closed(fd):
+                nonlocal terminal_closes
+                if fd == operation_fd and point in ("terminal-close", "prior-failure-close"):
+                    terminal_closes += 1
+                    original_close(fd)  # simulate uncertain close after releasing fixture FD
+                    fail()
+                return original_close(fd)
+            def closed_operation(fd, prior_failure=None):
+                nonlocal preserved_denial
+                try:
+                    return original_close_operation(fd, prior_failure)
+                except s.PlatformDenied:
+                    preserved_denial = isinstance(prior_failure, s.PlatformDenied)
+                    raise
             def read(path, *args, **kwargs):
-                if point == "read" or (point == "key" and Path(path) == key):
+                if point in ("read", "prior-failure-close") or (point == "key" and Path(path) == key):
                     fail()
                 return original_read(path, *args, **kwargs)
             def write(path, body):
                 if ((point == "write" and Path(path).name == "notice.cms")
                         or (point == "recovered" and "receipts" in Path(path).parts)):
                     fail()
+                if point == "pending-close" and Path(path).name == "COMPLETE.pending.json":
+                    original_write(path, body)
+                    fail()  # a supplied pending-file close error, before terminal FD close
                 if point == "complete" and Path(path).name == "COMPLETE.pending.json":
                     # Fully written bytes then fsync denial must not publish COMPLETE.
                     with mock.patch.object(s.os, "fsync", side_effect=error):
@@ -270,6 +293,8 @@ def run():
                 stack.enter_context(contextlib.redirect_stdout(stdout))
                 stack.enter_context(contextlib.redirect_stderr(stderr))
                 stack.enter_context(mock.patch.object(s.os, "open", side_effect=opened))
+                stack.enter_context(mock.patch.object(s.os, "close", side_effect=closed))
+                stack.enter_context(mock.patch.object(s, "close_operation", side_effect=closed_operation))
                 stack.enter_context(mock.patch.object(s, "read_regular", side_effect=selected_read))
                 stack.enter_context(mock.patch.object(s, "write_private", side_effect=write))
                 stack.enter_context(mock.patch.object(s, "persist_receipt", side_effect=persisted))
@@ -294,6 +319,10 @@ def run():
                 assert saved["exceptions"][0]["filename"] == private_path
                 assert any("original cause" in e["exact_text"] for e in saved["exceptions"])
                 assert any("original context" in e["exact_text"] for e in saved["exceptions"])
+            if point in ("terminal-close", "prior-failure-close"):
+                assert terminal_closes == 1
+            if point == "prior-failure-close":
+                assert preserved_denial
             passed("actual CLI OS boundary " + name, injected=True, errno=number, stock_commands=expected_commands,
                    evidence_incomplete=sink_failure, no_new_path_after_fault=True, no_complete=True)
         for name, consumer, point, number, commands, sink in [
@@ -305,13 +334,157 @@ def run():
             ("consumer-recovered-write-EPERM", True, "recovered", errno.EPERM, 1, False),
             ("producer-complete-fsync-EACCES", False, "complete", errno.EACCES, 1, False),
             ("consumer-complete-fsync-EACCES", True, "complete", errno.EACCES, 1, False),
-            ("producer-complete-rename-EPERM", False, "rename", errno.EPERM, 1, False),
+            ("producer-complete-rename-EPERM", False, "rename", errno.EPERM, 1, True),
+            ("consumer-complete-rename-EPERM", True, "rename", errno.EPERM, 1, True),
+            ("producer-pending-close-EIO", False, "pending-close", errno.EIO, 1, False),
+            ("consumer-pending-close-EIO", True, "pending-close", errno.EIO, 1, False),
+            ("producer-terminal-close-EIO", False, "terminal-close", errno.EIO, 1, True),
+            ("consumer-terminal-close-EIO", True, "terminal-close", errno.EIO, 1, True),
+            ("producer-prior-denial-terminal-close", False, "prior-failure-close", errno.EACCES, 0, False),
+            ("consumer-prior-denial-terminal-close", True, "prior-failure-close", errno.EACCES, 0, False),
             ("initial-reservation-EACCES", False, "reservation", errno.EACCES, 0, True),
             ("initial-receipt-persistence-EPERM", True, "receipt-initial", errno.EPERM, 0, True),
             ("original-notice-receipt-failure", False, "receipt-failed", errno.EACCES, 0, True),
             ("stock-command-receipt-write-EACCES", False, "receipt-write", errno.EACCES, 1, False),
         ]:
             cli_os_failure(name, consumer, point, number, commands, sink)
+        # Real entrypoints and pipe descriptors; fake child methods expose exact
+        # kill/wait/close counts without launching a process or denying a facility.
+        original_selector = s.selectors.DefaultSelector
+        class PipeStream:
+            def __init__(self, fd, name, fault):
+                self.stream, self.name, self.fault = os.fdopen(fd, "wb" if name == "stdin" else "rb", buffering=0), name, fault
+                self.closes = 0
+            def fileno(self):
+                return self.stream.fileno()
+            @property
+            def closed(self):
+                return self.stream.closed
+            def close(self):
+                self.closes += 1
+                self.stream.close()
+                if self.fault == "stream" and self.name == "stderr":
+                    raise OSError(errno.EIO, "PRIVATE-CANCEL original stream close")
+        class OwnedChild:
+            pid = 999999991  # synthetic identity only; never an actual kill target
+            returncode = None
+            def __init__(self, fault):
+                self.fault, self.kills, self.waits, self.polls = fault, 0, 0, 0
+                read_in, write_in = os.pipe()
+                read_out, write_out = os.pipe()
+                read_err, write_err = os.pipe()
+                self.child_ends = [read_in, write_out, write_err]
+                os.write(write_err, b"PRIVATE-CANCEL exact captured stderr")
+                self.stdin, self.stdout, self.stderr = PipeStream(write_in, "stdin", fault), PipeStream(read_out, "stdout", fault), PipeStream(read_err, "stderr", fault)
+            def poll(self):
+                self.polls += 1
+                if self.fault == "poll":
+                    raise OSError(errno.EIO, "PRIVATE-CANCEL original poll")
+                return self.returncode
+            def kill(self):
+                self.kills += 1
+                if self.fault == "kill":
+                    raise OSError(errno.EACCES, "PRIVATE-CANCEL original kill denial")
+            def wait(self, timeout):
+                self.waits += 1
+                if self.fault == "wait":
+                    raise s.subprocess.TimeoutExpired("PRIVATE-CANCEL owned wait", timeout)
+                self.returncode = -9
+                return self.returncode
+            def release_fixture(self):
+                for fd in self.child_ends:
+                    os.close(fd)
+                for stream in (self.stdin, self.stdout, self.stderr):
+                    if not stream.closed:
+                        stream.stream.close()
+        def cancelled_cli(name, consumer=False, fault="", cancellation="keyboard"):
+            case_base, _ = input_tree("cancel-" + name)
+            child = OwnedChild(fault)
+            interrupted = False
+            original_open = s.os.open
+            def opened(*args, **kwargs):
+                if interrupted:
+                    raise AssertionError("new path opened after child cancellation")
+                return original_open(*args, **kwargs)
+            class Selector:
+                def __init__(self):
+                    self.real, self.calls = original_selector(), 0
+                def __enter__(self):
+                    self.real.__enter__()
+                    return self
+                def __exit__(self, *args):
+                    return self.real.__exit__(*args)
+                def register(self, *args):
+                    return self.real.register(*args)
+                def unregister(self, *args):
+                    return self.real.unregister(*args)
+                def get_map(self):
+                    return self.real.get_map()
+                def select(self, timeout):
+                    nonlocal interrupted
+                    self.calls += 1
+                    if self.calls == 1:
+                        key = next(key for key in self.real.get_map().values() if key.data == "err")
+                        return [(key, s.selectors.EVENT_READ)]
+                    interrupted = True
+                    if cancellation == "term":
+                        s.signal.raise_signal(s.signal.SIGTERM)
+                    if cancellation == "exit":
+                        raise SystemExit("PRIVATE-CANCEL original SystemExit")
+                    raise KeyboardInterrupt("PRIVATE-CANCEL original KeyboardInterrupt")
+            argv = ["unseal" if consumer else "seal", "--run-id", run_id, "--source-head", head,
+                    "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
+            if consumer:
+                argv += ["--artifact-zip", str(zip_path), "--trusted-artifact-zip-sha256", trusted, "--private-key", str(key)]
+            stdout, stderr = io.StringIO(), io.StringIO()
+            previous_term = s.signal.getsignal(s.signal.SIGTERM)
+            try:
+                with contextlib.ExitStack() as stack:
+                    for module, name_, value in [(s, "CERT_PIN", identity["recipient_sha256"]), (s, "__file__", str(root / "seal-link-notices.py")), (u, "__file__", str(root / "unseal-link-notices.py")), (Path, "cwd", lambda: case_base), (sys, "argv", argv)]:
+                        stack.enter_context(mock.patch.object(module, name_, value))
+                    stack.enter_context(contextlib.redirect_stdout(stdout))
+                    stack.enter_context(contextlib.redirect_stderr(stderr))
+                    stack.enter_context(mock.patch.object(s.os, "open", side_effect=opened))
+                    stack.enter_context(mock.patch.object(s.selectors, "DefaultSelector", Selector))
+                    popen = stack.enter_context(mock.patch.object(s.subprocess, "Popen", return_value=child))
+                    assert (u.cli() if consumer else s.cli()) == 1
+                    assert popen.call_count == 1
+                assert s.signal.getsignal(s.signal.SIGTERM) == previous_term
+                public = stdout.getvalue() + stderr.getvalue()
+                assert "private evidence incomplete" in public and "PRIVATE-CANCEL" not in public
+                directory = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-sealing-private") / run_id
+                record = json.loads((directory / ("unseal-command.json" if consumer else "seal-command.json")).read_bytes())
+                assert record["interrupted"] and not record["streams_complete"]
+                assert s.base64.b64decode(record["stderr_base64"]) == b"PRIVATE-CANCEL exact captured stderr"
+                assert record["failure"]["type"] == ("SystemExit" if cancellation == "exit" else "KeyboardInterrupt")
+                expected_notice = "CLI received SIGTERM" if cancellation == "term" else "PRIVATE-CANCEL original " + ("SystemExit" if cancellation == "exit" else "KeyboardInterrupt")
+                assert record["failure"]["exact_text"] == expected_notice
+                os_notice = json.loads((directory / "OS-ERROR.json").read_bytes())
+                assert os_notice["complete"] and any(node["type"] == record["failure"]["type"] for node in os_notice["exceptions"])
+                assert record["child_reaped"] == (fault not in ("poll", "kill", "wait"))
+                assert child.polls == 1 and child.kills == (0 if fault == "poll" else 1)
+                assert child.waits == (0 if fault in ("poll", "kill") else 1)
+                assert bool(record["cleanup_failures"]) == bool(fault)
+                if fault:
+                    assert "PRIVATE-CANCEL" in record["cleanup_failures"][0]["exact_text"]
+                assert all(stream.closes == 1 for stream in (child.stdin, child.stdout, child.stderr))
+                marker = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-quarantine") / run_id / "COMPLETE.json"
+                assert not marker.exists()
+                passed("actual CLI cancellation " + name, synthetic_child=True, actual_network=False,
+                       kills=child.kills, waits=child.waits, reaped=record["child_reaped"], no_new_path_after_interrupt=True)
+            finally:
+                child.release_fixture()
+        for name, consumer, fault, cancellation in [
+            ("producer-keyboard", False, "", "keyboard"),
+            ("consumer-system-exit", True, "", "exit"),
+            ("producer-own-SIGTERM", False, "", "term"),
+            ("consumer-own-SIGTERM", True, "", "term"),
+            ("poll-failure-retains-original", False, "poll", "keyboard"),
+            ("kill-denial-retains-original", False, "kill", "keyboard"),
+            ("wait-timeout-retains-original", True, "wait", "keyboard"),
+            ("stream-close-retains-original", True, "stream", "keyboard"),
+        ]:
+            cancelled_cli(name, consumer, fault, cancellation)
         for consumer in [False, True]:
             argv = ["unseal" if consumer else "seal", "--run-id", "../PRIVATE-SENTINEL", "--source-head", head,
                     "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
@@ -350,16 +523,52 @@ def run():
         cdn_url = "https://synthetic.blob.core.windows.net/notices/artifact.zip?signed=LOCAL-SYNTHETIC"
         routes = {api_run: "run", api_run + "/attempts/1": "attempt", api_run + "/attempts/1/jobs?per_page=100": "jobs",
                   api_run + "/artifacts?per_page=100": "artifacts", r.ROOT + "/artifacts/" + str(artifact_id): "artifact"}
-        def retrieved_case(name, changed=None, *, success=False, downloads=0, corrupt=False, reflected_error=False, http_failure=False, malformed=False):
+        def retrieved_case(name, changed=None, *, success=False, downloads=0, corrupt=False, reflected_error=False, http_failure=False, malformed=False, close_fault=False, rename_fault=False, term=False):
             data = copy.deepcopy(fixtures)
             if changed is not None:
                 changed(data)
             case_base = base("api-" + name)
             download_calls, request_calls = 0, 0
+            terminal_fd, terminal_closes, fault_reached, preserved_denial = None, 0, False, False
+            original_reserve_operation, original_close = r.s.reserve_operation, r.s.os.close
+            original_open, original_rename, original_close_operation = r.s.os.open, r.s.os.rename, r.s.close_operation
+            def reserved_operation(path, run_name):
+                nonlocal terminal_fd
+                result = original_reserve_operation(path, run_name)
+                if Path(path).name == "retrieved-link-notices":
+                    terminal_fd = result[1]
+                return result
+            def closed(fd):
+                nonlocal terminal_closes, fault_reached
+                if close_fault and fd == terminal_fd:
+                    terminal_closes += 1
+                    original_close(fd)
+                    fault_reached = True
+                    raise OSError(errno.EIO, "PRIVATE HTTP terminal close original")
+                return original_close(fd)
+            def closed_operation(fd, prior_failure=None):
+                nonlocal preserved_denial
+                try:
+                    return original_close_operation(fd, prior_failure)
+                except r.s.PlatformDenied:
+                    preserved_denial = isinstance(prior_failure, r.s.PlatformDenied)
+                    raise
+            def opened(*args, **kwargs):
+                if fault_reached:
+                    raise AssertionError("new path after terminal retrieval failure")
+                return original_open(*args, **kwargs)
+            def renamed(source, destination):
+                nonlocal fault_reached
+                if rename_fault and Path(source).parent.parent.name == "retrieved-link-notices":
+                    fault_reached = True
+                    raise OSError(errno.EPERM, "PRIVATE HTTP terminal rename original")
+                return original_rename(source, destination)
             def transport(url, token, maximum, deadline, download=False):
                 nonlocal download_calls, request_calls
                 request_calls += 1
                 assert token == synthetic_token
+                if term:
+                    r.signal.raise_signal(r.signal.SIGTERM)
                 if reflected_error or http_failure:
                     error = OSError(errno.EACCES, "PRIVATE HTTP original status notice", "/private/HTTP-SENTINEL")
                     error.__cause__ = ValueError("original protocol context")
@@ -379,17 +588,44 @@ def run():
                 if malformed:
                     return 200, None, b"PRIVATE HTTP original non-JSON response"
                 return 200, None, s.encode(data[routes[url]])
-            with mock.patch.object(r, "https_get", side_effect=transport):
-                with mock.patch.object(r.http.client, "HTTPSConnection", side_effect=AssertionError("real network forbidden")):
-                    with mock.patch.object(r.u, "unseal", wraps=r.u.unseal) as consumer:
-                        try:
-                            result = r.retrieve(case_base, identity, str(github_run), key, cert, synthetic_token)
-                        except r.s.Rejected as error:
-                            assert not success, name
-                            assert "PRIVATE HTTP" not in str(error) and "HTTP-SENTINEL" not in str(error) and synthetic_token not in str(error)
-                        else:
-                            assert success and result == expected, name
-                        assert consumer.call_count == (1 if success else 0), name
+            expected_consumers = 1 if success or ((close_fault or rename_fault) and not http_failure) else 0
+            stdout, stderr = io.StringIO(), io.StringIO()
+            previous_term = r.signal.getsignal(r.signal.SIGTERM)
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(r, "https_get", side_effect=transport))
+                stack.enter_context(mock.patch.object(r.http.client, "HTTPSConnection", side_effect=AssertionError("real network forbidden")))
+                stack.enter_context(mock.patch.object(r.s, "reserve_operation", side_effect=reserved_operation))
+                stack.enter_context(mock.patch.object(r.s.os, "close", side_effect=closed))
+                stack.enter_context(mock.patch.object(r.s.os, "open", side_effect=opened))
+                stack.enter_context(mock.patch.object(r.s.os, "rename", side_effect=renamed))
+                stack.enter_context(mock.patch.object(r.s, "close_operation", side_effect=closed_operation))
+                consumer = stack.enter_context(mock.patch.object(r.u, "unseal", wraps=r.u.unseal))
+                if close_fault or rename_fault or term:
+                    argv = ["retrieve", "--run-id", run_id, "--source-head", head, "--recipient-sha256", identity["recipient_sha256"],
+                            "--job", identity["job"], "--attempt", identity["attempt"], "--github-run-id", str(github_run), "--token-stdin", "--private-key", str(key)]
+                    for module, name_, value in [(r.s, "CERT_PIN", identity["recipient_sha256"]), (r, "__file__", str(root / "retrieve-link-notices.py")), (Path, "cwd", lambda: case_base), (sys, "argv", argv)]:
+                        stack.enter_context(mock.patch.object(module, name_, value))
+                    stack.enter_context(mock.patch.object(r, "token_from_stdin", return_value=synthetic_token))
+                    stack.enter_context(contextlib.redirect_stdout(stdout))
+                    stack.enter_context(contextlib.redirect_stderr(stderr))
+                    assert r.cli() == 1
+                else:
+                    try:
+                        result = r.retrieve(case_base, identity, str(github_run), key, cert, synthetic_token)
+                    except r.s.Rejected as error:
+                        assert not success, name
+                        assert "PRIVATE HTTP" not in str(error) and "HTTP-SENTINEL" not in str(error) and synthetic_token not in str(error)
+                    else:
+                        assert success and result == expected, name
+                assert consumer.call_count == expected_consumers, name
+            assert r.signal.getsignal(r.signal.SIGTERM) == previous_term
+            if close_fault or rename_fault or term:
+                public = stdout.getvalue() + stderr.getvalue()
+                assert "private evidence incomplete" in public and "PRIVATE HTTP" not in public and synthetic_token not in public
+            if close_fault:
+                assert terminal_closes == 1
+                if http_failure:
+                    assert preserved_denial
             assert download_calls == downloads, (name, download_calls)
             operation = case_base / ".cache/retrieved-link-notices" / run_id
             assert (operation / "COMPLETE.json").exists() == success
@@ -402,7 +638,7 @@ def run():
             if malformed:
                 assert (operation / "run.json").read_bytes() == b"PRIVATE HTTP original non-JSON response"
             passed("authenticated retrieval synthetic " + name, download_requests=download_calls,
-                   requests=request_calls, consumer_calls=1 if success else 0, actual_network=False)
+                   requests=request_calls, consumer_calls=expected_consumers, actual_network=False)
         for name, mutate in [
             ("wrong-repository", lambda d: d["run"]["repository"].update(full_name="other/repository")),
             ("wrong-head-repository", lambda d: d["run"]["head_repository"].update(id=1)),
@@ -446,6 +682,10 @@ def run():
         retrieved_case("malformed-HTTP-response-private", malformed=True)
         retrieved_case("original-HTTP-failure-private", http_failure=True)
         retrieved_case("credential-in-HTTP-context-withheld", reflected_error=True)
+        retrieved_case("terminal-close-success-path", close_fault=True, downloads=2)
+        retrieved_case("terminal-close-prior-denial", close_fault=True, http_failure=True)
+        retrieved_case("terminal-rename-unavailable", rename_fault=True, downloads=2)
+        retrieved_case("actual-own-CLI-SIGTERM", term=True)
 
         # Exercise the real header-selection code with a fake HTTPSConnection.
         # No CA override or alternate transport is available in production code.
@@ -512,6 +752,133 @@ def run():
         assert r.signal.getsignal(r.signal.SIGALRM) == previous_handler
         assert r.signal.getitimer(r.signal.ITIMER_REAL)[0] == 0
         passed("absolute HTTPS deadline interrupts stalled headers and restores timer", actual_network=False)
+        # Reviewed fixed transport calibration: production public cert encryption
+        # only. This block never reads/decrypts with the coordinator task key.
+        sample_spec = importlib.util.spec_from_file_location("create_transport_sample", Path(__file__).with_name("create-notice-transport-sample.py"))
+        c = importlib.util.module_from_spec(sample_spec)
+        sample_spec.loader.exec_module(c)
+        sample_run = "transport-sample"
+        def sample_case(name, mode):
+            case_base = base("sample-" + name)
+            tree = case_base / ".cache/fixtures-private" / (sample_run + "-links")
+            marker = {"RunID": sample_run, "Classification": "PRIVATE RAW EVIDENCE", "Publication": "withhold pending explicit redaction review"}
+            reviewed = {"RunID": sample_run, "SourceHead": head, "Job": "unit", "Attempt": "1",
+                        "namespace": "calibration/private-notice-transport", "synthetic": True,
+                        "release_qualified": False, "notice": "Reviewed fixed synthetic notice transport sample."}
+            if mode in ("existing-unknown", "existing-identical"):
+                c.s.private_root(tree.parent)
+                tree.mkdir(mode=0o700)
+                c.s.write_private(tree / "PRIVATE.json", c.s.encode(marker))
+                c.s.write_private(tree / ("unknown.json" if mode == "existing-unknown" else "transport-sample.json"),
+                                  c.s.encode({"PRIVATE-UNKNOWN": "must never be sealed"}) if mode == "existing-unknown" else c.s.encode(reviewed))
+            original_write, original_close, original_reserve = c.s.write_private, c.s.os.close, c.s.reserve_operation
+            original_producer = c.s.seal
+            sample_fd, close_calls = None, 0
+            def written(path, body):
+                if mode == "write-denied" and Path(path).name == "transport-sample.json":
+                    raise OSError(errno.EACCES, "PRIVATE-SAMPLE exact creation write notice", "/private/PRIVATE-SAMPLE")
+                original_write(path, body)
+                if Path(path).parent == tree and Path(path).name == "transport-sample.json":
+                    if mode == "injected-extra":
+                        original_write(tree / "unknown.json", c.s.encode({"PRIVATE-UNKNOWN": "must never be sealed"}))
+                    if mode == "changed-literal":
+                        (tree / "transport-sample.json").write_bytes(c.s.encode(dict(reviewed, notice="PRIVATE-UNKNOWN changed literal")))
+            def reserved(path, run_name):
+                nonlocal sample_fd
+                result = original_reserve(path, run_name)
+                if Path(path).name == "notice-transport-samples":
+                    sample_fd = result[1]
+                return result
+            def closed(fd):
+                nonlocal close_calls
+                if mode == "terminal-close" and fd == sample_fd:
+                    close_calls += 1
+                    original_close(fd)
+                    raise OSError(errno.EIO, "PRIVATE-SAMPLE uncertain final close")
+                return original_close(fd)
+            def produced(*args, **kwargs):
+                if mode == "late-extra":
+                    original_write(tree / "unknown.json", c.s.encode({"PRIVATE-UNKNOWN": "late piggyback must not be sealed"}))
+                if mode == "late-change":
+                    changed = c.s.encode(dict(reviewed, notice="X" * len(reviewed["notice"])))
+                    assert len(changed) == len(c.s.encode(reviewed))
+                    (tree / "transport-sample.json").write_bytes(changed)
+                return original_producer(*args, **kwargs)
+            stdout, stderr = io.StringIO(), io.StringIO()
+            argv = ["sample", "--run-id", sample_run, "--source-head", head, "--job", "unit", "--attempt", "1", "--reviewed-synthetic-transport-only"]
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(Path, "cwd", return_value=case_base))
+                stack.enter_context(mock.patch.object(sys, "argv", argv))
+                stack.enter_context(contextlib.redirect_stdout(stdout))
+                stack.enter_context(contextlib.redirect_stderr(stderr))
+                stack.enter_context(mock.patch.object(c.s, "write_private", side_effect=written))
+                stack.enter_context(mock.patch.object(c.s, "reserve_operation", side_effect=reserved))
+                stack.enter_context(mock.patch.object(c.s.os, "close", side_effect=closed))
+                snapshots = stack.enter_context(mock.patch.object(c.s, "snapshot", wraps=c.s.snapshot))
+                producer = stack.enter_context(mock.patch.object(c.s, "seal", side_effect=produced))
+                commands = stack.enter_context(mock.patch.object(c.s, "openssl", wraps=c.s.openssl))
+                reads = stack.enter_context(mock.patch.object(c.s, "read_regular", wraps=c.s.read_regular))
+                if mode == "wrong-pin":
+                    stack.enter_context(mock.patch.object(c.s, "CERT_PIN", "0" * 64))
+                code = c.cli()
+                assert code == (0 if mode == "positive" else 1)
+                assert commands.call_count == (1 if mode == "positive" else 0)
+                assert producer.call_count == (1 if mode in ("positive", "wrong-pin", "late-extra", "late-change") else 0)
+                if mode in ("existing-unknown", "existing-identical"):
+                    assert snapshots.call_count == 0
+                if mode == "positive":
+                    assert snapshots.call_count == 2
+                    assert producer.call_args.kwargs["expected_payloads"] == {"PRIVATE.json": c.s.encode(marker), "transport-sample.json": c.s.encode(reviewed)}
+                    args = commands.call_args.args[0]
+                    assert "-encrypt" in args and "-decrypt" not in args and "-inkey" not in args
+                    assert all(Path(call.args[0]).name == "link-notices-recipient.pem" for call in reads.call_args_list)
+            public = stdout.getvalue() + stderr.getvalue()
+            assert "PRIVATE-SAMPLE" not in public and "PRIVATE-UNKNOWN" not in public
+            complete = case_base / ".cache/link-quarantine" / sample_run / "COMPLETE.json"
+            assert complete.exists() == (mode == "positive")
+            if mode == "positive":
+                result = json.loads(stdout.getvalue())
+                assert result["namespace"] == "calibration/private-notice-transport" and result["synthetic"] is True
+                assert result["release_qualified"] is False and result["complete"] is True
+                assert result["sample_files"] == ["PRIVATE.json", "transport-sample.json"]
+                assert {path.name for path in tree.iterdir()} == {"PRIVATE.json", "transport-sample.json"}
+                assert json.loads((tree / "PRIVATE.json").read_bytes()) == marker
+                assert (tree / "transport-sample.json").read_bytes() == c.s.encode(reviewed)
+                assert json.loads(complete.read_bytes())["files"] == 2
+                assert (complete.parent / "notice.cms").stat().st_size > 0
+            else:
+                assert "rejected" in public and not stdout.getvalue()
+            if mode == "write-denied":
+                receipt = case_base / ".cache/notice-transport-samples" / sample_run / "OS-ERROR.json"
+                notice = json.loads(receipt.read_bytes())
+                assert notice["complete"] and "PRIVATE-SAMPLE exact creation write notice" in notice["exceptions"][0]["exact_text"]
+            if mode == "terminal-close":
+                assert close_calls == 1 and "private evidence incomplete" in public
+            passed("reviewed fixed sample creator " + name, actual_network=False, public_certificate_only=True,
+                   stock_encryptions=1 if mode == "positive" else 0, release_qualified=False)
+        for name, mode in [("positive-real-stock-public-cert-encryption", "positive"),
+                           ("refuse-existing-unknown-tree", "existing-unknown"),
+                           ("refuse-existing-identical-tree", "existing-identical"),
+                           ("reject-added-unknown-file", "injected-extra"),
+                           ("reject-changed-reviewed-literal", "changed-literal"),
+                           ("reject-late-extra-at-actual-seal-snapshot", "late-extra"),
+                           ("reject-late-same-size-change-at-actual-seal-snapshot", "late-change"),
+                           ("pinned-public-cert-mismatch", "wrong-pin"),
+                           ("private-original-write-denial", "write-denied"),
+                           ("terminal-close-no-sealer-or-complete", "terminal-close")]:
+            sample_case(name, mode)
+        for name, run_value, job_value, allowed in [("invalid-run", "../PRIVATE-SAMPLE", "unit", True),
+                                                    ("wrong-job", sample_run, "runtime", True),
+                                                    ("missing-calibration-gate", sample_run, "unit", False)]:
+            with mock.patch.object(c.s, "reserve_operation", side_effect=AssertionError("creator gate reached filesystem")) as reserved:
+                try:
+                    c.create_sample(root / "must-not-exist", run_value, head, job_value, "1", allowed)
+                except c.s.Rejected:
+                    pass
+                else:
+                    raise AssertionError("creator identity/calibration gate accepted")
+                assert reserved.call_count == 0
+            passed("reviewed sample pure gate " + name, filesystem_actions=0, release_qualified=False)
         # Small independent stock ASN.1 inspection, avoiding huge OCTET STRING output.
         mini, _ = s.pack({"PRIVATE.json": expected["PRIVATE.json"]}, identity)
         encoded = s.openssl(["cms", "-encrypt", "-binary", "-aes256", "-outform", "DER", "-recip", str(cert),
@@ -526,7 +893,7 @@ def run():
         report["failure"] = {"type": type(error).__name__, "fixed_message": "synthetic control failed; retain this run before fixing"}
         raise
     finally:
-        report["source_sha256"] = {p.name: s.digest(p.read_bytes()) for p in [Path(__file__), Path(__file__).with_name("seal-link-notices.py"), Path(__file__).with_name("unseal-link-notices.py"), Path(__file__).with_name("link-notices-recipient.pem"), Path(__file__).with_name("retrieve-link-notices.py")]}
+        report["source_sha256"] = {p.name: s.digest(p.read_bytes()) for p in [Path(__file__), Path(__file__).with_name("seal-link-notices.py"), Path(__file__).with_name("unseal-link-notices.py"), Path(__file__).with_name("link-notices-recipient.pem"), Path(__file__).with_name("retrieve-link-notices.py"), Path(__file__).with_name("create-notice-transport-sample.py")]}
         report["limits"] = ["Synthetic digest generated locally; external GitHub trust not established", "This self-report does not authenticate the runner; native identity requires collected CI bindings", "Recipient custody/backup not established by certificate or this test", "CBC is not AEAD; digest trust cannot be supplied by adjacent manifest", "No actual platform denial or stock-command timeout/output-overflow injection; deadline transport is synthetic", "Caller must stop notice writers before sealing; consistency checks detect observed changes, not hostile concurrent writers", "No publication exception or workflow enabled"]
         s.write_private(root / "report.json", s.encode(report))
         out = s.private_root(Path.cwd() / ".cache/m2/notice-sealing-implementation")

@@ -284,11 +284,16 @@ def retrieve(base, identity, github_run, key, cert, token=None):
         action = "privately unseal API-verified artifact"
         payloads = u.unseal(base, identity, archive, trusted, key, cert)
         action = "persist authenticated retrieval metadata"
-        s.write_complete(directory, s.encode(dict(identity, repository=REPOSITORY, github_run_id=github_run,
+        s.prepare_complete(directory, s.encode(dict(identity, repository=REPOSITORY, github_run_id=github_run,
                 workflow=WORKFLOW, artifact_id=artifact["id"], artifact_name=artifact["name"],
                 api_zip_sha256=trusted, job_id=job["id"], requests=requests, complete=True)))
+        owned_fd, error_fd = error_fd, None
+        s.close_operation(owned_fd)
+        s.publish_complete(directory)
         return payloads
-    except (OSError, http.client.HTTPException) as error:
+    except (OSError, http.client.HTTPException, KeyboardInterrupt, SystemExit) as error:
+        if error_fd is None:
+            raise s.EvidenceIncomplete("terminal sink unavailable; exact notice unavailable; evidence incomplete; stopped") from None
         # The token was never placed in URLs or exception construction. Withhold
         # even an unexpected reflected credential rather than persist it.
         pending, seen = [error], set()
@@ -308,7 +313,9 @@ def retrieve(base, identity, github_run, key, cert, token=None):
         s.retain_os_error(error_fd, action, error)
     finally:
         token = None
-        os.close(error_fd)
+        if error_fd is not None:
+            owned_fd, error_fd = error_fd, None
+            s.close_operation(owned_fd, sys.exc_info()[1])
 
 
 def main():
@@ -326,15 +333,18 @@ def main():
 
 
 def cli():
+    previous_term = signal.signal(signal.SIGTERM, s.terminal_signal)
     try:
         main()
         return 0
-    except s.EvidenceIncomplete:
+    except (s.EvidenceIncomplete, KeyboardInterrupt):
         print("retrieval rejected; private evidence incomplete; stopped", file=sys.stderr)
         return 1
     except (s.Rejected, OSError, ValueError, http.client.HTTPException):
         print("retrieval rejected; no complete retrieval accepted; stopped", file=sys.stderr)
         return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 if __name__ == "__main__":

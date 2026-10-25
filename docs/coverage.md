@@ -57,6 +57,14 @@ progress. They require a live worker and independently supplied completion facts
 the stale cases must fail within the numerical audit bound. These synthetic
 controls test the harness and add no release fault coverage.
 
+The source-only `ReadSubjectPointMap` observer reads the exact pinned public
+ELF with standard Go metadata readers. Calibration compares an owned harness
+function with its independent runtime pointer; the native data-only probe reads
+the already verified release. Neither source nor static addresses establish
+a reached instruction, debugger capability, acknowledgment, fault or data
+property. No breakpoint, target-memory access, application import or source
+build is used. Native mapping remains unmeasured until that probe runs.
+
 ## M3 — Ownership, links, transactions and discovery
 
 | Planned ID | Exact closest core test and path | Added mechanism and reached proof | Oracle |

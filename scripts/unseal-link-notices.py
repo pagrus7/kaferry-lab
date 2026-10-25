@@ -127,14 +127,21 @@ def unseal(base, identity, artifact, trusted_zip_sha256, key, cert):
         action = "persist verified inner manifest"
         s.write_private(destination / "MANIFEST.json", s.encode(manifest))
         action = "persist complete metadata"
-        s.write_complete(destination, s.encode(dict(identity, complete=True,
+        s.prepare_complete(destination, s.encode(dict(identity, complete=True,
                         trusted_zip_sha256=trusted_zip_sha256, derived_cms_sha256=cms_sha,
                         files=len(payloads), total_bytes=sum(map(len, payloads.values())))))
+        owned_fd, error_fd = error_fd, None
+        s.close_operation(owned_fd)
+        s.publish_complete(destination)
         return payloads
-    except OSError as error:
+    except (OSError, KeyboardInterrupt, SystemExit) as error:
+        if error_fd is None:
+            raise s.EvidenceIncomplete("terminal sink unavailable; exact notice unavailable; evidence incomplete; stopped") from None
         s.retain_os_error(error_fd, action, error)
     finally:
-        os.close(error_fd)
+        if error_fd is not None:
+            owned_fd, error_fd = error_fd, None
+            s.close_operation(owned_fd, sys.exc_info()[1])
 
 
 def main():
@@ -152,15 +159,18 @@ def main():
 
 
 def cli():
+    previous_term = s.signal.signal(s.signal.SIGTERM, s.terminal_signal)
     try:
         main()
         return 0
-    except s.EvidenceIncomplete:
+    except (s.EvidenceIncomplete, KeyboardInterrupt):
         print("unsealing rejected; private evidence incomplete; stopped", file=sys.stderr)
         return 1
     except (s.Rejected, OSError, ValueError):
         print("unsealing rejected; no complete output accepted; stopped", file=sys.stderr)
         return 1
+    finally:
+        s.signal.signal(s.signal.SIGTERM, previous_term)
 
 
 if __name__ == "__main__":

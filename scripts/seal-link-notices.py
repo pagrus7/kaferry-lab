@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import stat
 import subprocess
 import sys
@@ -177,15 +178,35 @@ def retain_os_error(fd, action, error):
         raise EvidenceIncomplete("private OS-error receipt persistence failed; exact evidence incomplete; stopped") from None
     if not complete:
         raise EvidenceIncomplete("filesystem action failed; private notice bound exceeded; evidence incomplete; stopped") from None
-    kind = PlatformDenied if error.errno in (1, 13) else EvidenceIncomplete
+    kind = PlatformDenied if getattr(error, "errno", None) in (1, 13) else EvidenceIncomplete
     raise kind("filesystem action failed; private OS-ERROR.json retained; stopped") from None
 
 
-def write_complete(directory, body):
-    # All fallible byte writes/fsync precede the final atomic completion marker.
-    pending = directory / "COMPLETE.pending.json"
-    write_private(pending, body)
-    os.rename(pending, directory / "COMPLETE.json")
+def prepare_complete(directory, body):
+    # Keep the primary private-error sink alive through pending write/fsync/close.
+    write_private(directory / "COMPLETE.pending.json", body)
+
+
+def close_operation(fd, prior_failure=None):
+    # Detach ownership before calling. A failed close is uncertain: never retry
+    # that descriptor or open a new sink to describe its own terminal failure.
+    try:
+        os.close(fd)
+    except OSError:
+        kind = PlatformDenied if isinstance(prior_failure, PlatformDenied) else EvidenceIncomplete
+        raise kind("terminal private sink close failed; exact close notice unavailable; evidence incomplete; stopped") from None
+
+
+def publish_complete(directory):
+    # Last filesystem operation: the error sink is already closed successfully.
+    try:
+        os.rename(directory / "COMPLETE.pending.json", directory / "COMPLETE.json")
+    except (OSError, KeyboardInterrupt, SystemExit):
+        raise EvidenceIncomplete("terminal completion failed; exact notice unavailable; evidence incomplete; stopped") from None
+
+
+def terminal_signal(_signum, _frame):
+    raise KeyboardInterrupt("CLI received SIGTERM")
 
 
 def read_regular(path, maximum, private=False):
@@ -320,12 +341,16 @@ def pack(payloads, identity):
 
 
 def openssl(args, body, directory, label, maximum):
-    """One stock command, bounded pipes/time, exact PRIVATE stderr on failure."""
+    """One bounded stock command; private original and cleanup facts survive cancel."""
     command = ["/usr/bin/openssl", *args]
     output, stderr = bytearray(), bytearray()
     started = time.monotonic()
-    status, reason, child, original_error = None, None, None, None
+    status, child, original_error = None, None, None
+    reaped = drained = False
+    cleanup = []
     receipt = reserve_receipt(directory, label + "-command.json")
+    def notice(error):
+        return {"type": type(error).__name__, "errno": getattr(error, "errno", None), "exact_text": str(error)}
     try:
         child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with selectors.DefaultSelector() as selector:
@@ -358,37 +383,70 @@ def openssl(args, body, directory, label, maximum):
                         target.extend(chunk[:available])
                         if len(chunk) > available:
                             raise Rejected("stock command output bound exceeded")
+            drained = True
         status = child.wait(timeout=max(0.001, 30 - (time.monotonic() - started)))
-    except (OSError, subprocess.TimeoutExpired, Rejected) as error:
+        reaped = True
+    except (OSError, subprocess.TimeoutExpired, Rejected, KeyboardInterrupt, SystemExit) as error:
         original_error = error
-        reason = {"type": type(error).__name__, "errno": getattr(error, "errno", None), "exact_text": str(error)}
     finally:
         if child is not None:
-            if child.poll() is None:
-                child.kill()
-            child.wait(timeout=2)
-            for stream in (child.stdin, child.stdout, child.stderr):
-                if not stream.closed:
-                    stream.close()
+            if not reaped:
+                action = "poll owned child"
+                try:
+                    if child.poll() is None:
+                        action = "kill owned child"
+                        child.kill()
+                    action = "wait owned child"
+                    status = child.wait(timeout=2)
+                    reaped = True
+                except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt, SystemExit) as error:
+                    cleanup.append((action, error))
+            for name, stream in [("stdin", child.stdin), ("stdout", child.stdout), ("stderr", child.stderr)]:
+                try:
+                    if not stream.closed:
+                        stream.close()
+                except (OSError, KeyboardInterrupt, SystemExit) as error:
+                    cleanup.append(("close owned " + name, error))
+        record = {"argv": command, "returncode": status,
+                  "failure": notice(original_error) if original_error is not None else None,
+                  "cleanup_failures": [dict(action=action, **notice(error)) for action, error in cleanup],
+                  "child_pid": child.pid if child is not None else None, "child_launched": child is not None,
+                  "child_reaped": reaped, "interrupted": any(isinstance(error, (KeyboardInterrupt, SystemExit)) for error in ([original_error] + [error for _, error in cleanup])),
+                  "stderr_base64": base64.b64encode(stderr).decode(), "stderr_bytes": len(stderr),
+                  "streams_complete": drained and original_error is None and not cleanup,
+                  "stdout_bytes": len(output), "stdout_sha256": digest(output)}
+        encoded = encode(record)
+        if len(encoded) > MAX_FILE:
+            encoded = encode({"streams_complete": False, "receipt_overflow": True, "child_reaped": reaped,
+                              "reported_bytes": len(encoded), "captured_prefix_base64": base64.b64encode(encoded[:65536]).decode()})
+            if original_error is None:
+                original_error = EvidenceIncomplete("stock command notice bound exceeded")
         try:
-            persist_receipt(receipt, encode({"argv": command, "returncode": status,
-                "failure": reason, "stderr_base64": base64.b64encode(stderr).decode(),
-                "stderr_bytes": len(stderr), "streams_complete": reason is None,
-                "stdout_bytes": len(output), "stdout_sha256": digest(output)}))
+            persist_receipt(receipt, encoded)
         except OSError as receipt_error:
-            if isinstance(original_error, OSError):
+            if original_error is not None:
                 raise receipt_error from original_error
             raise
         finally:
-            os.close(receipt)
-    if isinstance(original_error, OSError):
-        raise original_error  # operation boundary retains exact cause/context
-    denied = any(term in bytes(stderr).lower() for term in DENIAL)
-    if reason and reason.get("errno") in (1, 13):
-        denied = True
-    if denied:
+            prior_failure = sys.exc_info()[1] or original_error
+            try:
+                os.close(receipt)
+            except OSError as close_error:
+                if prior_failure is not None:
+                    raise close_error from prior_failure
+                raise
+    errors = ([original_error] if original_error is not None else []) + [error for _, error in cleanup]
+    if errors:
+        primary = next((error for error in errors if getattr(error, "errno", None) in (1, 13)), errors[0])
+        if isinstance(primary, (OSError, KeyboardInterrupt, SystemExit)):
+            other = next((error for error in errors if error is not primary), None)
+            if other is not None:
+                raise primary from other
+            raise primary
+        raise EvidenceIncomplete("stock command failed or cleanup unresolved; private receipt retained; stopped") from None
+    if any(term in bytes(stderr).lower() for term in DENIAL):
         raise PlatformDenied("stock command platform denial; stopped, private receipt retained")
-    if reason is not None or status != 0:
+    if status != 0:
         raise Rejected("stock command failed; stopped, private receipt retained")
     return bytes(output)
 
@@ -400,7 +458,7 @@ def certificate(path, expected):
     return body
 
 
-def seal(base, identity, cert):
+def seal(base, identity, cert, expected_payloads=None):
     identity = identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"])
     base = Path(base)
     diagnostics, error_fd = reserve_operation(base / ".cache/link-sealing-private", identity["run_id"])
@@ -409,6 +467,8 @@ def seal(base, identity, cert):
         cert_body = certificate(cert, identity["recipient_sha256"])
         action = "snapshot fixed private receipt tree"
         payloads = snapshot(base / ".cache/fixtures-private" / (identity["run_id"] + "-links"), identity["run_id"])
+        if expected_payloads is not None and payloads != expected_payloads:
+            raise Rejected("captured receipt bytes differ from reviewed expected payloads")
         clear, manifest = pack(payloads, identity)
         action = "reserve ciphertext quarantine"
         destination = reserve(base / ".cache/link-quarantine", identity["run_id"])
@@ -425,12 +485,19 @@ def seal(base, identity, cert):
                         publication="DISABLED; explicit encrypted-public-quarantine exception required",
                         cipher="AES-256-CBC; RSA-OAEP-SHA256; MGF1-SHA256; NOT AEAD")
         action = "persist complete metadata"
-        write_complete(destination, encode(complete))
+        prepare_complete(destination, encode(complete))
+        owned_fd, error_fd = error_fd, None
+        close_operation(owned_fd)
+        publish_complete(destination)
         return complete
-    except OSError as error:
+    except (OSError, KeyboardInterrupt, SystemExit) as error:
+        if error_fd is None:
+            raise EvidenceIncomplete("terminal sink unavailable; exact notice unavailable; evidence incomplete; stopped") from None
         retain_os_error(error_fd, action, error)
     finally:
-        os.close(error_fd)
+        if error_fd is not None:
+            owned_fd, error_fd = error_fd, None
+            close_operation(owned_fd, sys.exc_info()[1])
 
 
 def arguments(description):
@@ -453,15 +520,18 @@ def main():
 
 
 def cli():
+    previous_term = signal.signal(signal.SIGTERM, terminal_signal)
     try:
         main()
         return 0
-    except EvidenceIncomplete:
+    except (EvidenceIncomplete, KeyboardInterrupt):
         print("sealing rejected; private evidence incomplete; stopped", file=sys.stderr)
         return 1
     except (Rejected, OSError, tarfile.TarError):
         print("sealing rejected; no complete output accepted; stopped", file=sys.stderr)
         return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 if __name__ == "__main__":
