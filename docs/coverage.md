@@ -35,7 +35,7 @@ observations to version2 bundles checked by `internal/evidence/m2_*.go`.
 | Inventory ID | Case and current observation boundary |
 | --- | --- |
 | Healthy comparisons | `healthy PRESERVE` and `healthy KEY`: finite known bytes, complete scans, stopped/reaped worker and settled saved-prefix audit. |
-| `M2.crash-unresolved` | `repeated-kill`: seeks two output-lag kills and a separately observed visible-unsaved crash, each followed by same-group restart and safety audit. An observed new destination tail prompts suspension and a fresh complete scan; only decoded known bytes with a later unsaved position establish the visible-write case. An unreached window remains incomplete. |
+| `M2.crash-unresolved` | `repeated-kill`: seeks two output-lag kills and a separately observed visible-unsaved crash, each followed by same-group restart and safety audit. An observed new destination tail prompts suspension and a fresh complete scan; only decoded known bytes with a later unsaved position establish the visible-write case. Recovery completion also needs independently observed saved positions through every finite source end; existing output alone cannot establish it. An unreached window remains incomplete. |
 | `M2.delivery-outage-stop` | `delivery-stop` retains destination pause past the configured timeout, TERM and recovery; actual submission/timeout-path proof remains incomplete. `delivery-threshold` remains unsupported pending independent threshold observation. |
 | `M2.source-startup-save-outage` | `source-startup` observes source impairment before launch, bounded failed startup/exit, restoration and same-group copying. `source-save` retains an attempted outage/recovery but cannot establish the precise periodic commit and remains incomplete. |
 

@@ -136,9 +136,19 @@ Absent progress is explicitly `present:false` with offset `-1`; saved zero is a
 different fact. A settled safety audit requires all workers stopped/reaped/cleaned,
 service restoration, broker restart after worker exit to settle pending requests,
 and successful source-input verification. Each settled audit checks saved-prefix
-safety; a live snapshot cannot decide it while output may remain pending. Only
-the final settled audit requires full input membership. Later recovery
-cannot repair an earlier proved violation.
+safety; a live snapshot cannot decide it while output may remain pending. The
+final settled audit requires full input membership and observed saved next
+positions at every prepared finite source end. Complete output with absent or
+unfinished saved progress is INCONCLUSIVE; it cannot establish completed recovery.
+This completeness requirement is limited to M2's finite, gap-free, nontransactional
+input. Intermediate safety audits may retain absent or unfinished safe prefixes.
+Later recovery cannot repair an earlier proved violation.
+
+An exactly empty assignment in `PreparingRebalance` or `CompletingRebalance`
+means ownership is unknown. Raw member identity and empty bytes remain retained;
+they cannot satisfy an assignment-dependent trigger. Empty stable assignments
+and any nonempty malformed assignment are harness errors. Group-wide saved
+completion does not identify a particular callback, generation or member's save.
 
 The compiled scenario IDs are `healthy`, `repeated-kill`, `delivery-stop`,
 `delivery-threshold`, `source-startup` and `source-save`. Healthy histories need no

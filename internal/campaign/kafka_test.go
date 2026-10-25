@@ -432,3 +432,42 @@ func TestKafkaCoordinatorErrorCannotConcealMalformedReturnedOffsets(t *testing.T
 		t.Fatalf("malformed offset hidden: %+v / %v", snapshot, err)
 	}
 }
+
+func TestKafkaRebalanceEmptyAssignmentIsUnknownNotMalformedOwnership(t *testing.T) {
+	// Given literal group replies during rebalance, When ownership is absent,
+	// Then retain the raw member without claiming a decoded assignment.
+	for _, state := range []string{"PreparingRebalance", "CompletingRebalance"} {
+		raw := &sarama.GroupDescription{GroupId: "g", State: state, ProtocolType: "consumer", Members: map[string]*sarama.GroupMemberDescription{"m": {MemberId: "m"}}}
+		g, err := kafkaDecodeGroup("g", raw)
+		if err != nil || len(g.Members) != 1 || g.Members[0].ID != "m" || g.Members[0].MetadataBase64 != "" || g.Members[0].AssignmentBase64 != "" || g.Members[0].Topics != nil {
+			t.Fatalf("unknown ownership %s: %+v / %v", state, g, err)
+		}
+		// Any supplied but truncated bytes still represent malformed evidence.
+		raw.Members["m"].MemberAssignment = []byte{0}
+		if _, err := kafkaDecodeGroup("g", raw); err == nil {
+			t.Fatalf("nonempty truncation accepted in %s", state)
+		}
+	}
+	for _, state := range []string{"Stable", "unknown"} {
+		raw := &sarama.GroupDescription{GroupId: "g", State: state, ProtocolType: "consumer", Members: map[string]*sarama.GroupMemberDescription{"m": {MemberId: "m"}}}
+		if _, err := kafkaDecodeGroup("g", raw); err == nil {
+			t.Fatalf("empty assignment accepted in %s", state)
+		}
+	}
+	for _, fault := range []string{"group", "member", "protocol", "error"} {
+		raw := &sarama.GroupDescription{GroupId: "g", State: "PreparingRebalance", ProtocolType: "consumer", Members: map[string]*sarama.GroupMemberDescription{"m": {MemberId: "m"}}}
+		switch fault {
+		case "group":
+			raw.GroupId = "other"
+		case "member":
+			raw.Members["m"].MemberId = "other"
+		case "protocol":
+			raw.ProtocolType = "other"
+		case "error":
+			raw.ErrorCode = int16(sarama.ErrGroupAuthorizationFailed)
+		}
+		if _, err := kafkaDecodeGroup("g", raw); err == nil {
+			t.Fatalf("rebalance concealed %s failure", fault)
+		}
+	}
+}

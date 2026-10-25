@@ -681,3 +681,64 @@ func TestVisibleCrashCandidateNeedsKnownBytesAfterSuspension(t *testing.T) {
 		t.Fatal("missing boundary observation prompted a candidate")
 	}
 }
+
+func TestScenarioExistingOutputRequiresIndependentCompleteSavedProgress(t *testing.T) {
+	// Given all required output already present before a recovery worker starts.
+	ledger, output := scenarioSyntheticOutput(t)
+	membership, err := scenarioMembership(ledger, output)
+	if err != nil || len(membership.Missing) != 0 {
+		t.Fatal(membership, err)
+	}
+	complete := func() kafkaGroupSnapshot {
+		g := kafkaGroupSnapshot{GroupID: "g", Description: kafkaGroupDescription{GroupID: "g", State: "Stable", ProtocolType: "consumer", Protocol: "range", Members: []kafkaMemberSnapshot{{ID: "current", Topics: map[string][]int32{ledger.Partitions[0].Source.Topic: {0, 1, 2}}}}}, Offsets: kafkaOffsetSnapshot{GroupID: "g"}}
+		for _, p := range ledger.Partitions {
+			source := p.Source
+			source.Offset = p.End
+			g.Offsets.Offsets = append(g.Offsets.Offsets, kafkaSavedOffset{Source: source, Saved: true})
+		}
+		return g
+	}
+	// When an independent live group snapshot observes assignment and every
+	// finite end, Then the group-wide completion predicate can be satisfied.
+	if !scenarioProgressComplete(ledger, complete(), "g") {
+		t.Fatal("complete observed progress rejected")
+	}
+	for _, condition := range []string{"preparing", "completing", "saved zero", "absent", "missing", "duplicate", "error", "group error", "wrong source", "wrong group", "wrong protocol", "unknown topics"} {
+		t.Run(condition, func(t *testing.T) {
+			g := complete()
+			switch condition {
+			case "preparing", "completing":
+				g.Description.State = "PreparingRebalance"
+				if condition == "completing" {
+					g.Description.State = "CompletingRebalance"
+				}
+				g.Description.Members[0].Topics = nil
+			case "saved zero":
+				g.Offsets.Offsets[0].Source.Offset = 0
+			case "absent":
+				g.Offsets.Offsets[0].Saved = false
+				g.Offsets.Offsets[0].Source.Offset = -1
+			case "missing":
+				g.Offsets.Offsets = g.Offsets.Offsets[:2]
+			case "duplicate":
+				g.Offsets.Offsets[2] = g.Offsets.Offsets[0]
+			case "error":
+				g.Offsets.Offsets[0].ErrorCode = 30
+			case "group error":
+				g.Description.ErrorCode = 30
+			case "wrong source":
+				g.Offsets.Offsets[0].Source.TopicID = "other"
+			case "wrong group":
+				g.Offsets.GroupID = "other"
+			case "wrong protocol":
+				g.Description.ProtocolType = "other"
+			case "unknown topics":
+				g.Description.Members[0].Topics = nil
+			}
+			// Complete old output cannot supply these missing progress facts.
+			if scenarioProgressComplete(ledger, g, "g") {
+				t.Fatal("missing recovery observation accepted")
+			}
+		})
+	}
+}

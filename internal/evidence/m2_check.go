@@ -619,6 +619,15 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 				violation("unsafe_saved_prefix", "saved_prefix", "saved next offset covers required input absent from this settled output scan", a.audit.ID, id)
 			}
 			if a.audit.Final {
+				// This finite nontransactional workload has no filters or gaps.
+				// Existing output alone cannot establish recovery completion.
+				for _, saved := range a.audit.Saved {
+					for _, partition := range ledger.Partitions {
+						if key(saved.Source) == key(partition.Source) {
+							need(saved.Present && saved.ErrorCode == 0 && saved.Source.Offset == partition.End, "completion_progress", "final finite-input completion requires observed saved next positions at every prepared source end")
+						}
+					}
+				}
 				for _, id := range unmatchedRequired(ledger.Entries, a.outputs, nil) {
 					violation("required_record_missing", "required_membership", "final settled output scan lacks required input", a.audit.ID, id)
 				}
@@ -779,6 +788,10 @@ func m2GroupAssigned(g M2Group, group, topic string) (bool, error) {
 		raw, err := base64.StdEncoding.Strict().DecodeString(member.AssignmentBase64)
 		if err != nil || base64.StdEncoding.EncodeToString(raw) != member.AssignmentBase64 {
 			return false, fmt.Errorf("group assignment must use canonical base64")
+		}
+		if len(raw) == 0 && g.ProtocolType == "consumer" && (g.State == "PreparingRebalance" || g.State == "CompletingRebalance") {
+			assigned = false
+			continue
 		}
 		a, err := observer.DecodeAssignment(raw)
 		if err != nil {

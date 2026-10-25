@@ -608,7 +608,7 @@ func (c *scenarioController) awaitAssigned(ctx context.Context, p *ownedProcess)
 	return errors.New("complete assignment not observed within sample bound")
 }
 func scenarioAssigned(g kafkaGroupSnapshot, topic string) bool {
-	if g.Error != "" || g.Description.State != "Stable" || len(g.Description.Members) != 1 {
+	if g.Error != "" || g.Description.ErrorCode != 0 || g.Description.LegacyErrorCode != 0 || g.Description.State != "Stable" || g.Description.ProtocolType != "consumer" || g.Description.Protocol == "" || len(g.Description.Members) != 1 || len(g.Description.Members[0].Topics) != 1 {
 		return false
 	}
 	p := g.Description.Members[0].Topics[topic]
@@ -658,6 +658,11 @@ func (c *scenarioController) awaitComplete(ctx context.Context, p *ownedProcess)
 	bounded, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	for i := 0; i < 24; i++ {
+		select {
+		case <-p.done:
+			return errors.New("worker exited before finite-input completion was observed")
+		default:
+		}
 		audit, err := c.audit(bounded, false, false)
 		if err != nil {
 			return err
@@ -666,20 +671,43 @@ func (c *scenarioController) awaitComplete(ctx context.Context, p *ownedProcess)
 		if err != nil {
 			return err
 		}
-		if len(membership.Missing) == 0 {
-			return nil
-		}
 		select {
 		case <-p.done:
-			return errors.New("worker exited with required output absent")
+			return errors.New("worker exited before finite-input completion was observed")
 		default:
+		}
+		if len(membership.Missing) == 0 && scenarioProgressComplete(c.ledger, audit.Group, c.report.Group) {
+			return nil
 		}
 		if err = scenarioPoll(bounded, 150*time.Millisecond); err != nil {
 			return err
 		}
 	}
-	return errors.New("required output not complete within audit bound")
+	return errors.New("finite-input output, assignment and saved progress not observed within audit bound")
 }
+
+// scenarioProgressComplete concerns this finite, gap-free input only. It
+// observes group-wide completion, not which callback or generation saved it.
+func scenarioProgressComplete(ledger evidence.Ledger, g kafkaGroupSnapshot, group string) bool {
+	if len(ledger.Partitions) == 0 || g.GroupID != group || g.Description.GroupID != group || g.Offsets.GroupID != group || g.Offsets.ErrorCode != 0 || !scenarioAssigned(g, ledger.Partitions[0].Source.Topic) || len(g.Offsets.Offsets) != len(ledger.Partitions) {
+		return false
+	}
+	for _, partition := range ledger.Partitions {
+		matches := 0
+		for _, saved := range g.Offsets.Offsets {
+			want := partition.Source
+			want.Offset = partition.End
+			if saved.Source == want && saved.Saved && saved.ErrorCode == 0 {
+				matches++
+			}
+		}
+		if matches != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *scenarioController) settledAudit(ctx context.Context, final bool) error {
 	for _, p := range c.workers {
 		if !c.settledWorkers[p.Identity().WorkerID] {

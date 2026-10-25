@@ -308,6 +308,13 @@ func kafkaDecodeGroup(group string, raw *sarama.GroupDescription) (g kafkaGroupD
 			return g, errors.New("inconsistent raw group member identity")
 		}
 		member := kafkaMemberSnapshot{ID: id, ClientID: m.ClientId, ClientHost: m.ClientHost, InstanceID: m.GroupInstanceId, MetadataBase64: base64.StdEncoding.EncodeToString(m.MemberMetadata), AssignmentBase64: base64.StdEncoding.EncodeToString(m.MemberAssignment)}
+		// Kafka can omit ownership while the group is preparing or completing a
+		// rebalance. Keep the empty wire bytes and nil Topics as unknown; a
+		// zero AssignmentVersion alone is not a decoded assignment.
+		if len(m.MemberAssignment) == 0 && (raw.State == "PreparingRebalance" || raw.State == "CompletingRebalance") {
+			g.Members = append(g.Members, member)
+			continue
+		}
 		assignment, e := observer.DecodeAssignment(m.MemberAssignment)
 		if e != nil {
 			g.Members = append(g.Members, member)

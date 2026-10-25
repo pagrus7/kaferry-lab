@@ -1071,3 +1071,83 @@ func TestM2CompleteVisibleOutputWithUnsavedPositionsIsASeparateCrash(t *testing.
 		t.Fatalf("complete output erased a missing lag crash: %+v", r)
 	}
 }
+
+func TestM2TransientEmptyAssignmentRetainsUnknownOwnership(t *testing.T) {
+	// Given complete final data and an earlier live group observation, When
+	// Kafka omits assignments during rebalance, Then ownership remains unknown.
+	for _, state := range []string{"PreparingRebalance", "CompletingRebalance"} {
+		c := newM2Control("healthy")
+		c.worker("w1", "start", "")
+		c.audit("transition", []int{}, []identity.Int64{0, 0, 0}, false, false)
+		g := &c.e[len(c.e)-1].Audit.Group
+		g.State, g.Protocol = state, ""
+		g.Members[0].AssignmentBase64 = ""
+		c.worker("w1", "exit", "")
+		c.worker("w1", "cleanup", "")
+		c.settle("final", []int{0, 1, 2}, []identity.Int64{1, 1, 1}, true, false)
+		c.finish()
+		if r := CheckM2(c.m, c.a, c.e); r.Verdict != Pass {
+			t.Fatal(r)
+		}
+		assigned, err := m2GroupAssigned(*g, c.m.Group, "input")
+		if assigned || err != nil {
+			t.Fatalf("unknown became ownership: %v / %v", assigned, err)
+		}
+		for _, fault := range []string{"truncated", "stable", "unknown state", "protocol", "base64", "duplicate member"} {
+			original := *g
+			original.Members = append([]M2GroupMember(nil), g.Members...)
+			switch fault {
+			case "truncated":
+				g.Members[0].AssignmentBase64 = "AA=="
+			case "stable":
+				g.State = "Stable"
+			case "unknown state":
+				g.State = "other"
+			case "protocol":
+				g.ProtocolType = "other"
+			case "base64":
+				g.Members[0].AssignmentBase64 = "AA==\n"
+			case "duplicate member":
+				g.Members = append(g.Members, g.Members[0])
+			}
+			if r := CheckM2(c.m, c.a, c.e); r.Verdict != HarnessError || !m2HasCode(r, "group_observation") {
+				t.Fatalf("%s concealed %s: %+v", state, fault, r)
+			}
+			*g = original
+		}
+	}
+	// An unknown assignment also cannot supply the crash trigger's ownership.
+	c := repeatedM2Control()
+	for _, e := range c.e {
+		if e.Audit != nil && e.Audit.ID == "lag1" {
+			e.Audit.Group.State = "PreparingRebalance"
+			e.Audit.Group.Members[0].AssignmentBase64 = ""
+		}
+	}
+	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Inconclusive || !m2HasCode(r, "kill_trigger") {
+		t.Fatal(r)
+	}
+}
+
+func TestM2ExistingVisibleOutputDoesNotProveRecoveryCompletion(t *testing.T) {
+	// Given all output visible before the third kill and a started/reaped fourth
+	// worker, When final progress stays unsaved, Then recovery is inconclusive.
+	for _, offset := range []identity.Int64{-1, 0} {
+		c := fullVisibleCrashM2Control()
+		for _, e := range c.e {
+			if e.Audit != nil && e.Audit.Final {
+				e.Audit.Saved[1].Present = offset >= 0
+				e.Audit.Saved[1].Source.Offset = offset
+			}
+		}
+		if r := CheckM2(c.m, c.a, c.e); r.Verdict != Inconclusive || !m2HasCode(r, "completion_progress") {
+			t.Fatal(r)
+		}
+	}
+	// Complete group-wide saved progress plus complete membership permits
+	// replay; no duplicate count or availability deadline is imposed.
+	c := fullVisibleCrashM2Control()
+	if r := CheckM2(c.m, c.a, c.e); r.Verdict != Pass {
+		t.Fatal(r)
+	}
+}
