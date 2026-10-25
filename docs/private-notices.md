@@ -94,7 +94,8 @@ The unit controls use no real HTTPS, Docker or released Kaferry; the separate
 fixed-sample recovery exercised actual authenticated HTTPS. Test keys and full
 private reports remain outside the public unit artifact tree.
 
-A trusted feature-branch push also creates one transport calibration using
+A trusted feature-branch push with linked runtime disabled creates one
+transport calibration using
 `scripts/create-notice-transport-sample.py --reviewed-synthetic-transport-only`.
 It creates a fresh private tree containing only `PRIVATE.json` and
 `transport-sample.json`; their exact literal payloads are checked again at the
@@ -102,7 +103,8 @@ production sealer snapshot. Only validated run/head/unit-job/attempt fields vary
 The notice is exactly “Reviewed fixed synthetic notice transport sample.”
 The namespace is `calibration/private-notice-transport`, with `synthetic:true`
 and `release_qualified:false`. Existing, extra or changed inputs are refused
-before encryption. CI uploads only this sample ciphertext under the canonical
+before encryption. That disabled path uploads only this sample ciphertext under
+the canonical
 unit artifact name, using the pinned public certificate; it never reads the
 recipient private key. This reviewed synthetic sample fits the existing
 publication rule. It grants no exception for unknown notices. Native creation
