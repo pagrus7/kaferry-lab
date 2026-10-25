@@ -25,6 +25,32 @@ Use named restart groups, at least three selected partitions, short recorded tim
 | `M2.delivery-outage-stop` | `internal/franz/recovery_test.go`: `TestAmbiguousDeliveryReplaysWithoutLosingProgress`; `internal/copy/worker_stop_test.go`: `TestWorkerStopFailuresSaveOnlyConfirmedProgress/{delivery,timeout,commit}`; `tests/compat/soak_test.go`: `TestStreamingSoakFidelityCommitLagMemoryAndShutdown` | Measured destination impairment past delivery timeout with required output absent, separately combined with SIGTERM and threshold drain. Record actual timeout/exit, interval, restoration and resume. Core soak pauses for one second and shuts down after verified catch-up. | Kafka audit proves no loss/unsafe save; measure overshoot and replay amplification. Threshold/log counters do not prove drain. Tracked-work caps and RSS are different measurements. |
 | `M2.source-startup-save-outage` | `internal/franz/recovery_test.go`: `TestProductionCopyClosesBlockedStartupAndFetchRequests/{coordinator,join,offset fetch,offset lookup,initial commit,fetch}`; `tests/compat/fault_test.go`: `TestBlockingCommitAcrossBrokerOutage`; `internal/copy/runner_test.go`: `TestRevocationCommitFailures` | Release startup against observed cold/inaccessible coordinator; separate source disconnection with output active and saves due, restore/restart. Core real-broker test calls adapter Save directly; kfake intercepts exact requests. | Kafka audit and bounded recovery; distinguish startup/periodic failure from revocation replay behavior. A timer/outage alone cannot prove a particular commit was hit. |
 
+### M2 two-phase checker preparation
+
+The isolated evidence-version3 proposal (`internal/evidence/m3_*.go`) adds a
+fixed warmup3/full96 admission boundary for M2 delivery experiments; the filename
+is a schema version, not roadmap milestone M3. Closest tagged v0.6.0 tests read:
+`internal/copy/worker_stop_test.go`:
+`TestWorkerStopCapsBatchedWritesAcrossPartitions`,
+`TestWorkerStopCountsAcrossProgressSaves`,
+`TestWorkerStopFailuresSaveOnlyConfirmedProgress/{delivery,timeout,commit}`;
+`tests/compat/worker_stop_test.go`: `TestWorkerStopAcrossEndpointDirections`;
+and `internal/franz/recovery_test.go`:
+`TestAmbiguousDeliveryReplaysWithoutLosingProgress`. Those controls inspect
+in-process acceptance/flush failures or restart with a new cap. The added lab
+observation is an immutable final declaration followed by complete independent
+source scans of warmup and additive full input while the same primary is
+observed stopped, exact threshold4/unlimited profile binding, phase-bound audits,
+and settled full membership/saved-prefix checking. Literal negative histories
+challenge omitted scans, replaced prefixes/identities, publication/STOP/CONT
+ordering, profiles and warmup-only completion. Declared future input creates no
+early delivery obligation; saving past the verified published end is still a
+violation. This is source-only, uncompiled checker preparation with synthetic
+controls authored but unexecuted. Valid data admission remains `UNSUPPORTED`
+for delivery/failed-threshold mechanism acceptance; counts, timers and logs do
+not establish ACK receipt or drain-path entry. Historical evidence-v2 semantics
+and all required M2 live observations remain unchanged.
+
 ### M2 executable bindings
 
 `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` runs a partial case against the
