@@ -525,11 +525,58 @@ func TestVersion3RecoveryNeedsCompletedRestorationAndFreshSettledSafety(t *testi
 			if name == "restore-overlaps-launch" {
 				code = "phase_worker_order"
 			} else if name == "settled-scan-overlaps-restore" {
-				code = "phase_audit"
+				code = "phase_scan" // its source interval now fails before the overlapping settled scan
 			}
 			if r.Verdict != HarnessError || !phaseFinding(r, code) || phaseFinding(r, "phase_admission_complete") {
 				t.Fatalf("late health/stale settlement authorized recovery: %+v", r)
 			}
 		})
+	}
+}
+
+func TestVersion3SourceReadbackStartCannotOverlapRestoration(t *testing.T) {
+	// Given the valid restored-then-fresh-safety history, when ONLY its first
+	// post-restore full-source readback START moves inside restore, then the
+	// unchanged later end/readback bytes/audits/launch/completion cannot make
+	// the complete readback interval fresh.
+	c := preparedPhaseControl()
+	c.worker("primary", "primary-threshold4", "start", "")
+	c.audit("warmup-progress", "warmup", 1, 1, false, false)
+	phasePrimarySafetyControl(c)
+	c.broker("destination", "pause")
+	c.broker("destination", "restore")
+	restore := c.e[len(c.e)-1].Broker.Interval
+	c.verify("full")
+	readback := c.e[len(c.e)-1].Verified
+	c.audit("restored-safety", "full", 1, 1, true, false)
+	phaseRecoveryControl(c)
+	positive := CheckPhaseHistory(c.m, c.a, c.e)
+	if positive.Verdict != Unsupported || !phaseFinding(positive, "phase_admission_complete") || !phaseFinding(positive, "mechanism_unobserved") || len(positive.Findings) != 2 || positive.ReleaseQualified {
+		t.Fatalf("unchanged fresh history did not establish the positive admission control: %+v", positive)
+	}
+	before, err := json.Marshal(c.e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStart := readback.Interval.StartNS
+	if originalStart < restore.EndNS || readback.Interval.EndNS <= restore.EndNS {
+		t.Fatal("literal positive history lost fresh post-restoration readback")
+	}
+	readback.Interval.StartNS = restore.StartNS
+	mutated, err := json.Marshal(c.e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore precisely that one scalar to independently verify the entire
+	// recorded history (including raw bytes/hash/end and later facts) is equal.
+	readback.Interval.StartNS = originalStart
+	normalized, err := json.Marshal(c.e)
+	if err != nil || !bytes.Equal(before, normalized) || bytes.Equal(before, mutated) {
+		t.Fatal("start-only control changed other history facts or changed nothing")
+	}
+	readback.Interval.StartNS = restore.StartNS
+	r := CheckPhaseHistory(c.m, c.a, c.e)
+	if r.Verdict != HarnessError || !phaseFinding(r, "phase_scan") || phaseFinding(r, "phase_admission_complete") || r.ReleaseQualified {
+		t.Fatalf("overlapping source readback start was treated as fresh: %+v", r)
 	}
 }

@@ -44,7 +44,9 @@ observed stopped, exact threshold4/unlimited profile binding, phase-bound audits
 and settled full membership/saved-prefix checking. Warmup progress names the
 same live primary, with output/saved/group scans after completed launch. Recovery
 requires completed broker health before launch and fresh settled safety after
-any later impairment/restoration; profiles differ only at SQL argument slot2.
+any later impairment/restoration. Full-source readback must begin at or after completed
+relevant restart/restore; its later end cannot hide an overlapping start. Profiles
+differ only at SQL argument slot2.
 Literal negative histories challenge omitted scans, replaced prefixes/identities,
 prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
 publication/STOP/CONT ordering, rebound configuration-path changes, profiles and

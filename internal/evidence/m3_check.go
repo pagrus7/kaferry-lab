@@ -156,6 +156,15 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 			if v.PhaseID == "full" && current != "warmup" && current != "full" {
 				return bad("phase_order", "full follows the verified warmup")
 			}
+			if v.PhaseID == "full" {
+				for _, history := range brokers {
+					for _, b := range history {
+						if (b.Action == "restart" || b.Action == "restore") && b.Interval.EndNS > v.Interval.StartNS {
+							return bad("phase_scan", "the entire full-source readback must follow completed broker stabilization")
+						}
+					}
+				}
+			}
 			for id, w := range workers {
 				if w.exit == nil && (id != primary || !stopped) {
 					return bad("phase_stop", "source verification while a worker exists requires the same owned stopped primary")
