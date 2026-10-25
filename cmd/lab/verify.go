@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry-lab/internal/artifact"
+	"github.com/pagrus7/kaferry-lab/internal/evidence"
 )
 
 type verifiedMetadata struct {
+	artifactEvidence          evidence.ArtifactMetadata
 	Tag                       string              `json:"tag"`
 	Commit                    string              `json:"commit"`
 	Platform                  string              `json:"platform"`
@@ -168,6 +170,7 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 		return result, fmt.Errorf("verified executable changed during version observation")
 	}
 	result = verifiedMetadata{Tag: v.Tag, Commit: v.Commit, Platform: "linux/amd64", ReleaseID: v.ReleaseID, ReleaseImmutable: v.ReleaseImmutable, ArchiveSHA256: v.ArchiveSHA256, BinarySHA256: v.BinarySHA256, ContractSHA256: v.ContractSHA256, Contracts: v.Contracts, VersionOutput: strings.TrimSpace(string(out)), VersionRuntime: runtimeBoundary, ProvenanceVerifier: v.Provenance.Verifier, ProvenanceVerifierVersion: v.Provenance.Version, ReceiptSHA256: sha(v.Provenance.Output), Directory: directory}
+	result.artifactEvidence = scenarioArtifact(v, result.VersionOutput)
 	raw, e := json.MarshalIndent(result, "", "  ")
 	if e != nil {
 		return result, e
@@ -215,4 +218,26 @@ func observeVersion(ctx context.Context, path string) (out []byte, boundary stri
 		err = fmt.Errorf("verified version observation failed: %w: %s", err, out)
 	}
 	return out, "native linux/amd64 host", err
+}
+
+// scenarioArtifact is called only with the fresh verifier result. Scenario
+// execution never treats an arbitrary persisted verified.json as authorization.
+func scenarioArtifact(v *artifact.Verified, version string) evidence.ArtifactMetadata {
+	subject := evidence.Subject{Kind: "published-release", Tag: v.Tag, Commit: v.Commit,
+		ExecutableSHA256: v.BinarySHA256, ContractSHA256: v.ContractSHA256,
+		Platform: "linux/amd64", VersionOutput: version}
+	a := evidence.ArtifactMetadata{SchemaVersion: evidence.SchemaVersion, Subject: subject,
+		ArchiveName: evidence.ReleaseArchiveName, ArchiveSHA256: v.ArchiveSHA256,
+		PublishedAssetURL:  "https://github.com/pagrus7/kaferry/releases/download/" + v.Tag + "/" + evidence.ReleaseArchiveName,
+		ProvenanceStatus:   "verified",
+		VerificationDetail: v.Provenance.Verifier + "; " + v.Provenance.Version + "; receipt sha256=" + sha(v.Provenance.Output)}
+	for _, doc := range v.Contracts {
+		a.ContractDocuments = append(a.ContractDocuments, evidence.ContractDocument{Path: doc.Path, SHA256: doc.SHA256})
+	}
+	for _, doc := range v.Evidence {
+		if doc.URL == "https://github.com/pagrus7/kaferry/releases/download/"+v.Tag+"/SHA256SUMS" {
+			a.ChecksumsText = string(doc.Bytes)
+		}
+	}
+	return a
 }

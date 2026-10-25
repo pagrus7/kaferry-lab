@@ -1,6 +1,6 @@
 # Additional evidence beyond the core suite
 
-Comparison source is [v0.6.0 commit `d7d485b`](https://github.com/pagrus7/kaferry/tree/d7d485b96a52b711cb10d76dca09aa9b155dec5e). All core paths and exact names below refer to it. This inventory covers every required [M2–M6 scenario](../ROADMAP.md), with planned IDs; it claims no implemented scenario, reached fault or qualification run. Related core coverage is substantial; these comparisons do not establish absence of other coverage.
+Comparison source is [v0.6.0 commit `d7d485b`](https://github.com/pagrus7/kaferry/tree/d7d485b96a52b711cb10d76dca09aa9b155dec5e). All core paths and exact names below refer to it. This inventory covers every required [M2–M6 scenario](../ROADMAP.md). The executable bindings below distinguish implemented development paths from measured fault acceptance; a source path alone establishes no reached fault or qualification. Related core coverage is substantial; these comparisons do not establish absence of other coverage.
 
 ## Execution and oracle boundaries
 
@@ -24,6 +24,28 @@ Use named restart groups, at least three selected partitions, short recorded tim
 | `M2.crash-unresolved` | `tests/compat/acceptance_test.go`: `TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss`; `tests/compat/signal_test.go`: `TestCLIInterruptCommitsAndResumeDoesNotRecopy` | Repeated same-group release-process crashes while output lags verified input. Separately establish visible writes before a later observed save, then actual kill/exit/restart. Core crash injects one callback exit; signal case stops after output. | Kafka audit at crash/recovery and final resume, allowing duplicates without the core's one-crash bound. Lag does not identify pending callbacks; unestablished timing cannot count as reached. |
 | `M2.delivery-outage-stop` | `internal/franz/recovery_test.go`: `TestAmbiguousDeliveryReplaysWithoutLosingProgress`; `internal/copy/worker_stop_test.go`: `TestWorkerStopFailuresSaveOnlyConfirmedProgress/{delivery,timeout,commit}`; `tests/compat/soak_test.go`: `TestStreamingSoakFidelityCommitLagMemoryAndShutdown` | Measured destination impairment past delivery timeout with required output absent, separately combined with SIGTERM and threshold drain. Record actual timeout/exit, interval, restoration and resume. Core soak pauses for one second and shuts down after verified catch-up. | Kafka audit proves no loss/unsafe save; measure overshoot and replay amplification. Threshold/log counters do not prove drain. Tracked-work caps and RSS are different measurements. |
 | `M2.source-startup-save-outage` | `internal/franz/recovery_test.go`: `TestProductionCopyClosesBlockedStartupAndFetchRequests/{coordinator,join,offset fetch,offset lookup,initial commit,fetch}`; `tests/compat/fault_test.go`: `TestBlockingCommitAcrossBrokerOutage`; `internal/copy/runner_test.go`: `TestRevocationCommitFailures` | Release startup against observed cold/inaccessible coordinator; separate source disconnection with output active and saves due, restore/restart. Core real-broker test calls adapter Save directly; kfake intercepts exact requests. | Kafka audit and bounded recovery; distinguish startup/periodic failure from revocation replay behavior. A timer/outage alone cannot prove a particular commit was hit. |
+
+### M2 executable bindings
+
+`lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` runs a partial case against the
+fixture created for `RUN_ID`, with fresh verification of the published executable.
+`internal/campaign/scenario*.go` retains operation receipts and translates complete
+observations to version2 bundles checked by `internal/evidence/m2_*.go`.
+
+| Inventory ID | Case and current observation boundary |
+| --- | --- |
+| Healthy comparisons | `healthy PRESERVE` and `healthy KEY`: finite known bytes, complete scans, stopped/reaped worker and settled saved-prefix audit. |
+| `M2.crash-unresolved` | `repeated-kill`: seeks two output-lag kills and a separately observed visible-unsaved crash, each followed by same-group restart and safety audit. An unreached window remains incomplete. |
+| `M2.delivery-outage-stop` | `delivery-stop` retains destination pause past the configured timeout, TERM and recovery; actual submission/timeout-path proof remains incomplete. `delivery-threshold` remains unsupported pending independent threshold observation. |
+| `M2.source-startup-save-outage` | `source-startup` observes source impairment before launch, bounded failed startup/exit, restoration and same-group copying. `source-save` retains an attempted outage/recovery but cannot establish the precise periodic commit and remains incomplete. |
+
+The native CI development matrix initially includes the two healthy controls and
+source-startup. These new paths have not yet run. Experimental standard dumpcap/
+TShark observation on the healthy PRESERVE link retains raw capture and PDML;
+candidates do not satisfy a fault trigger until supported native capture and
+sensitivity measurements are accepted. Derived timeout overshoot, amplification
+and process resource summaries remain unfinished. All required M2 variants still
+need native evidence, offline rechecks and independent acceptance reviews.
 
 ## M3 — Ownership, links, transactions and discovery
 

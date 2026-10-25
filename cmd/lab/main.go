@@ -25,12 +25,16 @@ func execute(args []string) int {
 		return 0
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: lab verify OUT_DIR | check BUNDLE | calibrate NEW_OUT_DIR | qualify")
+		fmt.Fprintln(os.Stderr, "usage: lab verify OUT_DIR | check BUNDLE | calibrate NEW_OUT_DIR | scenario RUN_ID CASE ROUTING NEW_OUT_DIR | qualify")
 		return 2
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	ctx, bound := context.WithTimeout(ctx, 3*time.Minute)
+	budget := 3 * time.Minute
+	if args[0] == "scenario" {
+		budget = 10 * time.Minute
+	}
+	ctx, bound := context.WithTimeout(ctx, budget)
 	defer bound()
 	switch args[0] {
 	case "verify":
@@ -53,18 +57,9 @@ func execute(args []string) int {
 		if output(r) != 0 {
 			return 2
 		}
-		switch r.Verdict {
-		case evidence.Pass:
-			return 0
-		case evidence.Violation:
-			return 1
-		case evidence.Unsupported:
-			return 3
-		case evidence.Inconclusive:
-			return 4
-		default:
-			return 2
-		}
+		return verdictStatus(r.Verdict)
+	case "scenario":
+		return runScenario(ctx, args[1:])
 	case "calibrate":
 		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: lab calibrate NEW_OUT_DIR")

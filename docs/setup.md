@@ -1,6 +1,6 @@
 # Lab setup and implemented checks
 
-M0 and M1 are accepted. M2 helper implementation is underway; M2–M6 release fault scenarios and campaigns are not implemented. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
+M0 and M1 are accepted. M2 targeted release scenarios are in development; required M2–M6 fault evidence and campaigns are incomplete. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
 
 ## Prepare and check the harness
 
@@ -42,7 +42,7 @@ Version observation requires native Linux AMD64. The command checks the Go and k
 | 3 | `UNSUPPORTED`: schema, contract, scope or command is outside implemented support. |
 | 4 | `INCONCLUSIVE`: required observations, such as a reached trigger or complete scan, are missing. |
 
-The verdict is JSON on stdout when a checker result is available; command errors also use stderr. `PASS` covers one partial history and always reports `release_qualified:false`. Unknown schema versions, truncated streams, changed run identity and missing required evidence cannot pass. Archive/checkpoint checking and faults beyond the initial process-kill scope are unsupported. Byte-identical records have an explicit limitation: replay can conceal loss of a particular indistinguishable occurrence. See the [evidence-v1 contract](../internal/evidence/README.md) for exact bounds and supported observations.
+The verdict is JSON on stdout when a checker result is available; command errors also use stderr. `PASS` covers one partial history and always reports `release_qualified:false`. Unknown schema versions, truncated streams, changed run identity and missing required evidence cannot pass. Archive/checkpoint checking remains unsupported. The version1 process-kill histories retain their narrow contract; targeted M2 histories use version2 typed observations. Byte-identical records have an explicit limitation: replay can conceal loss of a particular indistinguishable occurrence. See the [offline evidence contract](../internal/evidence/README.md) for exact bounds and supported observations, and [targeted M2 runs](m2.md) for real release execution.
 
 ## Calibrate detection with real child processes
 
@@ -75,4 +75,4 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 
 Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness, golden offline histories, actual stand-in calibration, the full published-artifact verification/version path, and live observer capabilities. A four-minute M2 controller calibration uses the same owned fixtures to check actual pause/recovery/restart and known input readback; it does not execute Kaferry or establish M2 scenario coverage. The combined observer job has a 16-minute budget to include this calibration and cleanup. Offline CLI checks run in a network namespace with no network interfaces available beyond loopback. CI retains logs, verification output, calibration bundles and fixture evidence with `always()`, including failed attempts, for 14 days under unique run/attempt names.
 
-Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. Retained Go profiles cover the unit checks and actual M1 command executions for changed-line review. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.
+Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. Separate partial M2 jobs execute healthy PRESERVE/KEY controls and an inaccessible-source startup case with fresh artifact verification, retained operation evidence, restoration and cleanup. They remove the disposable target executable before repeated network-isolated offline rechecks. These jobs are development checks; all mandatory M2 variants still need measured acceptance. Retained Go profiles cover unit checks, actual M1 commands, live M2 helpers and these release cases for changed-line review. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.

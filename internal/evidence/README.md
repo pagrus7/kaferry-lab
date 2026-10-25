@@ -1,11 +1,13 @@
-# Offline evidence v1
+# Offline evidence contracts
 
 `LoadAndCheck(directory) Result` reads only four fixed flat regular files:
 `manifest.json`, `artifact.json`, `events.jsonl`, `complete.json`. It needs no
 network, Kafka, Docker, executable, or Kaferry imports. Public Go structs in
-`schema.go` are the wire schema. All non-omitempty fields are mandatory, including
+`schema.go` define version1; `m2_schema.go` defines version2. All non-omitempty fields are mandatory, including
 zero/false scalar observations; required slices serialize as arrays, not null.
 Integers represented by `identity.Int64` use JSON decimal strings.
+
+## Version 1 histories
 
 The manifest binds run/scenario/group, Given/When/Then, time budget, exact
 subject/contract identity, mandatory lab source commit/dirty/proof and explicit
@@ -104,3 +106,52 @@ is explicit and is a checker limitation, not a product duplicate bound.
 fixed expected controls. They are not release runs. Tests recompute framing
 hashes only when deliberately mutating a control to reach a semantic check;
 record obligations and expected verdicts never come from the checker.
+
+## M2 histories: version 2
+
+`m2_schema.go` defines a closed version2 manifest/event/completion schema. The
+artifact attachment keeps its version1 verification contract. `LoadAndCheck`
+dispatches by manifest version; `WriteM2Bundle` reserves a new directory and writes
+the completion marker last. It does not overwrite attempts or make an incomplete
+history valid. The same four flat filenames, hash checks, JSON limits and strict
+required-field rules apply. All results still have `release_qualified:false`.
+
+M2 records the generated SQL and TOML, their hashes, worker arguments/environment,
+routing, work/cleanup budgets and delivery/shutdown settings. The checker accepts
+the narrow generated configuration form and binds its endpoints, topics, named
+group and routing to the independently observed identities. It rejects unsupported
+configuration rather than treating unknown settings as the tested defaults.
+
+Worker events identify an owned invocation by worker ID, PID, Linux start ticks,
+executable/argument/environment hashes, observed stopped state, actual wait exit,
+reaping and final cleanup. Broker events bind run label, immutable container ID,
+pinned image, endpoint and cluster identity to state observations and independent
+Kafka availability probes. Requested actions alone never establish impairment or
+recovery. Campaign-wide monotonic intervals order these observations; per-handle
+elapsed times remain separate measurements.
+
+Input readbacks must preserve the exact finite ledger. Audits retain full
+partition scans, raw group assignments and saved-next-offset observations.
+Absent progress is explicitly `present:false` with offset `-1`; saved zero is a
+different fact. A settled safety audit requires all workers stopped/reaped/cleaned,
+service restoration, broker restart after worker exit to settle pending requests,
+and successful source-input verification. Each audit checks saved-prefix safety;
+only the final settled audit requires full input membership. Later recovery
+cannot repair an earlier proved violation.
+
+The compiled scenario IDs are `healthy`, `repeated-kill`, `delivery-stop`,
+`delivery-threshold`, `source-startup` and `source-save`. Healthy histories need no
+invented fault. Crash histories need at least two independently reached lag kills,
+including an identified visible-output/unsaved-position episode, each with matching signal exit,
+restart and audits. Startup histories need source impairment before invocation,
+observed bounded worker exit, recovery and successful same-group copying.
+Delivery-stop histories additionally need independent timeout-path observations;
+logs can corroborate the path but never replace record scans.
+
+The current threshold observer is experimental: its capture/PDML candidates do
+not establish accepted-work threshold handling, response absence or output.
+Threshold histories remain `UNSUPPORTED`. Precise source-save interruption
+remains `INCONCLUSIVE` without an independent commit observation. Missing
+mandatory facts, unsupported observations, timeout, cleanup or evidence-write
+failure cannot produce a passing run. Version2 synthetic controls remain
+calibration histories; they do not establish real released-binary fault coverage.

@@ -2,7 +2,7 @@
 
 Independent adversarial evidence for **published Kaferry releases**, starting with v0.6.0. The roadmap requires running the real executable in disposable Kafka and filesystem setups, injecting faults, observing records and saved progress independently, and retaining evidence that can be checked offline.
 
-**Status: M0 and M1 accepted. M2 runtime controls and independent observations are in development; required M2–M6 release fault scenarios and campaigns are not implemented. No Kaferry release is qualified.**
+**Status: M0 and M1 accepted. M2 targeted release scenarios and independent observations are in development; required M2–M6 fault evidence and campaigns are incomplete. No Kaferry release is qualified.**
 
 The purpose is additional evidence beyond Kaferry's core suite: adverse timing, combined failures, independent observers, and integrated release behavior. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 
@@ -14,7 +14,7 @@ go build -o .cache/bin/lab ./cmd/lab
 .cache/bin/lab check internal/evidence/testdata/valid
 ```
 
-`lab verify NEW_OUT_DIR` verifies the pinned published v0.6.0 Linux AMD64 artifact and observes its version on native Linux AMD64. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
+`lab verify NEW_OUT_DIR` verifies the pinned published v0.6.0 Linux AMD64 artifact and observes its version on native Linux AMD64. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` executes a bounded partial release case against a lab-owned fixture; see [targeted M2 runs](docs/m2.md). `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
 
 ## Implement with Codex
 

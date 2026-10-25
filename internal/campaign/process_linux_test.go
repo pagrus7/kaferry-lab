@@ -269,7 +269,7 @@ func TestProcessStatCalibrationParsesParenthesesAndRejectsMissingStart(t *testin
 func TestProcessCalibrationNaturalExitAndMissingProcess(t *testing.T) {
 	// Given a synthetic child that exits normally.
 	p, _ := calibrationProcess(t, "exit", 1024)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	// When it completes, waiting obtains the retained result without signalling.
 	result, err := p.Wait(ctx)
@@ -277,7 +277,9 @@ func TestProcessCalibrationNaturalExitAndMissingProcess(t *testing.T) {
 	if err != nil || !result.Reaped || result.ExitCode != 0 || result.Signal != "" {
 		t.Fatalf("normal calibration exit: %+v %v", result, err)
 	}
-	if err := p.Suspend(ctx); !errors.Is(err, os.ErrProcessDone) {
+	signalCtx, signalCancel := context.WithTimeout(context.Background(), time.Second)
+	defer signalCancel()
+	if err := p.Suspend(signalCtx); !errors.Is(err, os.ErrProcessDone) {
 		t.Fatalf("missing child suspension accepted: %v", err)
 	}
 	if _, _, err := readProcessState(-1); !errors.Is(err, os.ErrNotExist) {

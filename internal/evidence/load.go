@@ -18,8 +18,9 @@ const maxEventsBytes = 64 << 20
 const maxEventBytes = 4 << 20
 const maxEvents = 200000
 
-// LoadAndCheck checks a fixed flat v1 bundle. Hashes establish recorded byte
-// consistency, not that an untrusted author observed reality. The directory
+// LoadAndCheck checks a versioned bundle with four fixed flat files. Hashes
+// establish recorded byte consistency, not that an untrusted author observed
+// reality. The directory
 // must remain stable during this read. No referenced executable is opened.
 func LoadAndCheck(dir string) Result {
 	r := Result{Verdict: HarnessError, Findings: []Finding{}, Limitations: []string{
@@ -59,6 +60,9 @@ func LoadAndCheck(dir string) Result {
 	}
 	if err := json.Unmarshal(manifestRaw, &version); err != nil {
 		return fail("manifest_json", err.Error())
+	}
+	if version.SchemaVersion == M2SchemaVersion {
+		return loadM2(dir, manifestRaw)
 	}
 	if version.SchemaVersion != SchemaVersion {
 		r.Verdict = Unsupported
@@ -208,11 +212,11 @@ func strictJSON(raw []byte, target any) error {
 }
 
 // Required scalar evidence must not silently default to zero/false when a
-// field disappears. This walks only the fixed exported v1 structs; it is not
+// field disappears. This walks only the fixed exported schema structs; it is not
 // an extensible event or scenario system.
 func requiredFields(raw json.RawMessage, typ reflect.Type, depth int) error {
 	if depth > 64 {
-		return fmt.Errorf("JSON nesting exceeds v1 limit")
+		return fmt.Errorf("JSON nesting exceeds evidence limit")
 	}
 	nullable := typ.Kind() == reflect.Pointer
 	for typ.Kind() == reflect.Pointer {
@@ -222,13 +226,13 @@ func requiredFields(raw json.RawMessage, typ reflect.Type, depth int) error {
 		if nullable {
 			return nil
 		}
-		return fmt.Errorf("non-null v1 field is null")
+		return fmt.Errorf("non-null evidence field is null")
 	}
 	switch typ.Kind() {
 	case reflect.Struct:
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-			return fmt.Errorf("expected v1 JSON object")
+			return fmt.Errorf("expected evidence JSON object")
 		}
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
@@ -260,7 +264,7 @@ func requiredFields(raw json.RawMessage, typ reflect.Type, depth int) error {
 				if optional {
 					continue
 				}
-				return fmt.Errorf("required v1 JSON field %s is missing", name)
+				return fmt.Errorf("required evidence JSON field %s is missing", name)
 			}
 			if err := requiredFields(value, field.Type, depth+1); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
@@ -281,7 +285,7 @@ func requiredFields(raw json.RawMessage, typ reflect.Type, depth int) error {
 }
 
 // Reject duplicate and case-folded keys before Go's struct decoder can
-// resolve conflicts. All v1 schema keys are lowercase; v1 has no free-form maps.
+// resolve conflicts. Evidence field names are lowercase.
 func validateJSON(raw []byte) error {
 	if !utf8.Valid(raw) {
 		return fmt.Errorf("evidence JSON must be valid UTF-8; binary bytes belong in base64 fields")
@@ -298,7 +302,7 @@ func validateJSON(raw []byte) error {
 }
 func jsonValue(d *json.Decoder, depth int) error {
 	if depth > 64 {
-		return fmt.Errorf("JSON nesting exceeds v1 limit")
+		return fmt.Errorf("JSON nesting exceeds evidence limit")
 	}
 	t, err := d.Token()
 	if err != nil {

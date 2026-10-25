@@ -24,6 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache/unit
+          python3 scripts/install-wire-tools.test.py 2>&1 | tee .cache/unit/wire-trust.log
           ./scripts/check.sh 2>&1 | tee .cache/unit/check.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -193,6 +194,132 @@ jobs:
           path: |
             .cache/m0/
             .cache/m2/
+            .cache/fixtures/
+          retention-days: 14
+          if-no-files-found: error
+  m2-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - scenario: healthy
+            routing: PRESERVE
+          - scenario: healthy
+            routing: KEY
+          - scenario: source-startup
+            routing: PRESERVE
+    env:
+      LAB_RUN_ID: m2-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.scenario }}-${{ matrix.routing == 'KEY' && 'key' || 'preserve' }}
+      GOCOVERDIR: ${{ github.workspace }}/.cache/m2-release/coverage
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build the harness and create only this run's fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/bin .cache/m2-release/coverage
+          {
+            test "$(uname -sm)" = "Linux x86_64"
+            go version
+            go build -cover -coverpkg=./... -o .cache/bin/lab ./cmd/lab
+            go run ./cmd/fixture up "$LAB_RUN_ID"
+          } 2>&1 | tee .cache/m2-release/preparation.log
+      - name: Install pinned standard wire tools for the healthy measurement
+        if: matrix.scenario == 'healthy' && matrix.routing == 'PRESERVE'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/install-wire-tools.py .cache/wire-tools
+      - name: Run one bounded partial M2 release scenario
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCENARIO: ${{ matrix.scenario }}
+          ROUTING: ${{ matrix.routing }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          if [ "$SCENARIO" = healthy ] && [ "$ROUTING" = PRESERVE ]; then
+            export KAFERRY_LAB_WIRE_RECEIPT="$GITHUB_WORKSPACE/.cache/wire-tools/receipt.json"
+            # Initial root execution retains dumpcap as the harness's direct child.
+            # This is not a privilege retry after a denied capture.
+            sudo -n --preserve-env=GH_TOKEN,GOCOVERDIR,PATH,KAFERRY_LAB_WIRE_RECEIPT .cache/bin/lab scenario "$LAB_RUN_ID" "$SCENARIO" "$ROUTING" .cache/m2-release/attempt > .cache/m2-release/result.json 2> .cache/m2-release/scenario.stderr || status=$?
+            sudo -n chown -R "$(id -u):$(id -g)" .cache/m2-release
+          else
+            .cache/bin/lab scenario "$LAB_RUN_ID" "$SCENARIO" "$ROUTING" .cache/m2-release/attempt > .cache/m2-release/result.json 2> .cache/m2-release/scenario.stderr || status=$?
+          fi
+          printf '%s\n' "$status" > .cache/m2-release/scenario.exit
+          # A proved product violation is retained separately from harness failure.
+          test "$status" -eq 0 -o "$status" -eq 1
+          python3 - <<'PY'
+          import json
+          with open('.cache/m2-release/result.json') as stream:
+              result = json.load(stream)['result']
+          assert result['verdict'] in ('PASS', 'VIOLATION'), result
+          assert result['release_qualified'] is False, result
+          import os
+          if os.environ['SCENARIO'] == 'healthy' and os.environ['ROUTING'] == 'PRESERVE':
+              with open('.cache/m2-release/attempt/runtime/observations.jsonl') as stream:
+                  observations = [json.loads(line) for line in stream]
+              candidates = [o['WireCandidates'] for o in observations if o['Kind'] == 'experimental_wire_candidates']
+              assert len(candidates) == 1, candidates
+              wire = candidates[0]
+              assert wire['Supported'] is False and wire['CompletenessEstablished'] is False, wire
+              assert len(wire['KnownIDs']) == 91 and wire['DistinctIDs'] == wire['KnownIDs'], wire
+              assert wire['PDUs'] and all(p['APIVersion'] == 11 for p in wire['PDUs']), wire
+              # This measures known Produce11 submissions, not fault readiness.
+          PY
+      - name: Independently recheck without Kafka, network or executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat .cache/m2-release/scenario.exit)
+          sha256sum .cache/m2-release/attempt/release/kaferry > .cache/m2-release/executed-binary.sha256
+          rm .cache/m2-release/attempt/release/kaferry
+          test ! -e .cache/m2-release/attempt/release/kaferry
+          for attempt in 1 2; do
+            status=0
+            sudo unshare --net -- env GOCOVERDIR="$GOCOVERDIR" .cache/bin/lab check .cache/m2-release/attempt/bundle > ".cache/m2-release/recheck-$attempt.json" 2> ".cache/m2-release/recheck-$attempt.stderr" || status=$?
+            printf '%s\n' "$status" > ".cache/m2-release/recheck-$attempt.exit"
+            test "$status" -eq "$expected"
+          done
+          cmp .cache/m2-release/recheck-1.json .cache/m2-release/recheck-2.json
+          python3 - <<'PY'
+          import json
+          with open('.cache/m2-release/result.json') as stream:
+              runtime = json.load(stream)['result']
+          with open('.cache/m2-release/recheck-1.json') as stream:
+              offline = json.load(stream)
+          assert runtime == offline, (runtime, offline)
+          PY
+      - name: Retain final coverage and clean this run's resources
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .cache/m2-release
+          status=0
+          go run ./cmd/fixture down "$LAB_RUN_ID" > .cache/m2-release/cleanup.log 2>&1 || status=$?
+          printf '%s\n' "$status" > .cache/m2-release/cleanup.exit
+          coverage_status=0
+          go tool covdata textfmt -i="$GOCOVERDIR" -o=.cache/m2-release/coverage.out > .cache/m2-release/coverage.log 2>&1 || coverage_status=$?
+          test "$status" -eq 0
+          test "$coverage_status" -eq 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: m2-release-${{ matrix.scenario }}-${{ matrix.routing }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/m2-release/
+            .cache/wire-tools/
             .cache/fixtures/
           retention-days: 14
           if-no-files-found: error

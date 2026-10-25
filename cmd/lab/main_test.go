@@ -94,7 +94,7 @@ func TestCalibrationCLIAndOfflineRecheck(t *testing.T) {
 }
 
 func TestQualificationCLIRefusesPartialEvidence(t *testing.T) {
-	// Given no implemented release campaign, when qualification is requested,
+	// Given an incomplete required release campaign, when qualification is requested,
 	// then the command reports unsupported and cannot qualify the release.
 	var got struct {
 		Verdict          evidence.Verdict `json:"verdict"`

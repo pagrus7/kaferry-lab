@@ -44,7 +44,7 @@ type Result struct {
 	Namespace   string    `json:"namespace,omitempty"`
 	Findings    []Finding `json:"findings"`
 	Limitations []string  `json:"limitations"`
-	// This v1 checker checks one partial history, never an M0-M6 campaign.
+	// A single history cannot qualify the complete M0-M6 campaign.
 	ReleaseQualified bool `json:"release_qualified"`
 }
 
