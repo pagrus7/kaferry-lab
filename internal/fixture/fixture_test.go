@@ -88,6 +88,9 @@ func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
 		if args[0] == "info" {
 			return []byte("linux/amd64"), nil
 		}
+		if strings.Contains(strings.Join(args, " "), "WORKER") || strings.Contains(strings.Join(args, " "), ProxyImage) {
+			t.Fatal("legacy Up added proxy behavior", args)
+		}
 		if args[0] == "run" {
 			for _, arg := range args {
 				if strings.HasPrefix(arg, "CLUSTER_ID=") {
@@ -100,6 +103,9 @@ func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
 	state, err := Up(context.Background(), "test", run)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if state.Proxy != nil || state.WorkerSource != "" || state.WorkerDestination != "" {
+		t.Fatal("legacy Up returned proxy endpoints")
 	}
 	if len(ids) != 2 || ids[0] == "" || ids[0] == ids[1] || len(state.ClusterIDs) != 2 || ids[0] != state.ClusterIDs[0] || ids[1] != state.ClusterIDs[1] {
 		t.Fatalf("cluster identity ambiguity: actual=%v state=%v", ids, state.ClusterIDs)

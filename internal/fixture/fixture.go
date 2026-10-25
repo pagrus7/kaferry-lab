@@ -23,20 +23,26 @@ const ownerLabel = "io.kaferry-lab.run"
 var validID = regexp.MustCompile(`^[a-z][a-z0-9-]{3,48}$`)
 
 type State struct {
-	ClusterIDs     []string `json:"cluster_ids"`
-	RunID          string   `json:"run_id"`
-	Image          string   `json:"image"`
-	Network        string   `json:"network"`
-	Containers     []string `json:"containers"`
-	Source         string   `json:"source"`
-	Destination    string   `json:"destination"`
-	DockerPlatform string   `json:"docker_platform"`
-	Created        string   `json:"created"`
+	ClusterIDs        []string    `json:"cluster_ids"`
+	RunID             string      `json:"run_id"`
+	Image             string      `json:"image"`
+	Network           string      `json:"network"`
+	Containers        []string    `json:"containers"`
+	Source            string      `json:"source"`
+	Destination       string      `json:"destination"`
+	DockerPlatform    string      `json:"docker_platform"`
+	Created           string      `json:"created"`
+	WorkerSource      string      `json:"worker_source,omitempty"`
+	WorkerDestination string      `json:"worker_destination,omitempty"`
+	Proxy             *ProxyState `json:"proxy,omitempty"`
 }
 
 type Executor func(context.Context, ...string) ([]byte, error)
 
 func Docker(ctx context.Context, args ...string) ([]byte, error) {
+	if linked, _ := ctx.Value(linkCaptureKey{}).(bool); linked {
+		return boundedLinkDocker(ctx, args...)
+	}
 	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, out)
@@ -83,9 +89,43 @@ func save(s State) error {
 }
 
 // Up records intended resources before creating any, so interrupted setup can be reaped.
-func Up(ctx context.Context, id string, run Executor) (s State, err error) {
+func Up(ctx context.Context, id string, run Executor) (State, error) {
+	return up(ctx, id, run, false, nil, nil)
+}
+
+// UpLinks adds only the owned worker proxy path. Independent clients continue
+// using the direct Source and Destination endpoints returned by Up.
+func UpLinks(ctx context.Context, id string, run Executor) (State, error) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	return up(ctx, id, run, true, linkHTTP, kafkaLinkBrokerProbe)
+}
+
+func up(ctx context.Context, id string, run Executor, links bool, request linkRequest, probe linkBrokerProbe) (s State, err error) {
+	if links && (run == nil || request == nil || probe == nil) {
+		return s, errors.New("linked fixture requires Docker and fixed API executors")
+	}
 	if _, err = StatePath(id); err != nil {
 		return s, err
+	}
+	if links {
+		if err = reserveLinkEvidence(id); err != nil {
+			return s, err
+		}
+		if err = os.MkdirAll(filepath.Dir(linkDirectory(id)), 0700); err != nil {
+			return s, errors.New("public link evidence parent unavailable")
+		}
+		if err = os.Mkdir(linkDirectory(id), 0700); err != nil {
+			return s, errors.New("public link evidence reservation failed")
+		}
+		if run, err = linkExecutor(id, run); err != nil {
+			return s, err
+		}
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, stopLinkOperation(id, "linked startup incomplete"))
+			}
+		}()
 	}
 	p, err := unusedPort()
 	if err != nil {
@@ -114,19 +154,41 @@ func Up(ctx context.Context, id string, run Executor) (s State, err error) {
 		return s, errors.New("random cluster identity collision")
 	}
 	s = State{ClusterIDs: ids, RunID: id, Image: Image, Network: "kaferry-lab-" + id, Containers: []string{"kaferry-lab-" + id + "-source", "kaferry-lab-" + id + "-dest"}, Source: fmt.Sprintf("127.0.0.1:%d", p), Destination: fmt.Sprintf("127.0.0.1:%d", q), DockerPlatform: strings.TrimSpace(string(platform)), Created: time.Now().UTC().Format(time.RFC3339Nano)}
+	if links {
+		if s.DockerPlatform != "linux/amd64" && s.DockerPlatform != "linux/x86_64" {
+			return s, errors.New("proxy fixture requires native Linux AMD64 Docker")
+		}
+		if err = planLinks(&s); err != nil {
+			return s, err
+		}
+	}
 	if err = save(s); err != nil {
 		return s, err
 	}
+	cleanupNeeded := !links
 	defer func() {
-		if err != nil {
+		if err != nil && cleanupNeeded {
 			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			err = errors.Join(err, Down(cleanup, s, run))
 		}
 	}()
-	if _, err = run(ctx, "pull", Image); err != nil {
+	if links {
+		if err = linkReceipt(s, "plan", s); err != nil {
+			return s, err
+		}
+		if _, err = run(ctx, "pull", "--quiet", "--platform", "linux/amd64", ProxyImage); err != nil {
+			return s, err
+		}
+	}
+	pullArgs := []string{"pull", Image}
+	if links {
+		pullArgs = []string{"pull", "--quiet", Image}
+	}
+	if _, err = run(ctx, pullArgs...); err != nil {
 		return s, err
 	}
+	cleanupNeeded = !links // linked failures retain unresolved resources; no automatic Docker retry
 	if _, err = run(ctx, "network", "create", "--label", ownerLabel+"="+id, s.Network); err != nil {
 		return s, err
 	}
@@ -137,6 +199,10 @@ func Up(ctx context.Context, id string, run Executor) (s State, err error) {
 		}
 		args := []string{"run", "-d", "--name", name, "--label", ownerLabel + "=" + id, "--network", s.Network, "--memory", "768m", "--cpus", "1.5", "-p", fmt.Sprintf("127.0.0.1:%d:19092", port)}
 		env := []string{"CLUSTER_ID=" + ids[i], "KAFKA_HEAP_OPTS=-Xms128m -Xmx256m", "KAFKA_NODE_ID=1", "KAFKA_PROCESS_ROLES=broker,controller", "KAFKA_CONTROLLER_QUORUM_VOTERS=1@" + name + ":9093", "KAFKA_LISTENERS=INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092", "KAFKA_ADVERTISED_LISTENERS=INTERNAL://" + name + ":9092,EXTERNAL://127.0.0.1:" + fmt.Sprint(port), "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT", "KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL", "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER", "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1", "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1", "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1", "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0", "KAFKA_AUTO_CREATE_TOPICS_ENABLE=false", "KAFKA_LOG_RETENTION_MS=-1", "KAFKA_LOG_RETENTION_BYTES=-1"}
+		if links {
+			args = append(args, "--label", linkRoleLabel+"="+[]string{"source", "destination"}[i], "--pids-limit", "256", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1")
+			env = linkBrokerEnvironment(env, s, i)
+		}
 		for _, v := range env {
 			args = append(args, "-e", v)
 		}
@@ -145,8 +211,19 @@ func Up(ctx context.Context, id string, run Executor) (s State, err error) {
 			return s, err
 		}
 	}
-	for _, name := range s.Containers {
-		if err = ready(ctx, name, run); err != nil {
+	if links {
+		if err = readyLinkedBrokers(ctx, s, run, probe); err != nil {
+			return s, err
+		}
+	} else {
+		for _, name := range s.Containers {
+			if err = ready(ctx, name, run); err != nil {
+				return s, err
+			}
+		}
+	}
+	if links {
+		if err = setupLinks(ctx, &s, run, request); err != nil {
 			return s, err
 		}
 	}
@@ -190,12 +267,25 @@ func Load(id string) (State, error) {
 	if s.RunID != id || s.Network != "kaferry-lab-"+id || len(s.Containers) != 2 || s.Containers[0] != "kaferry-lab-"+id+"-source" || s.Containers[1] != "kaferry-lab-"+id+"-dest" {
 		return s, errors.New("invalid fixture resource identity")
 	}
+	if s.Proxy != nil {
+		if err = validateLinkPlan(s); err != nil {
+			return s, err
+		}
+		if err = loadLinkIdentity(&s, b); err != nil {
+			return s, err
+		}
+	} else if s.WorkerSource != "" || s.WorkerDestination != "" {
+		return s, errors.New("worker endpoints require owned proxy state")
+	}
 	return s, nil
 }
 
 // Down refuses resources without the exact run label, even if their names match.
 // Evidence and state are retained; repeated cleanup tolerates absent resources.
 func Down(ctx context.Context, s State, run Executor) error {
+	if s.Proxy != nil {
+		return downLinks(ctx, s, run)
+	}
 	if _, err := StatePath(s.RunID); err != nil {
 		return err
 	}

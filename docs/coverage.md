@@ -66,6 +66,17 @@ controls test the harness and add no release fault coverage.
 | `M3.open-transaction-interruption` | `tests/compat/transactions_test.go`: `TestNoMatchLookupOpenTransactionAndTrailingMarker/{commit,abort}`, `TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion` | Independently observed open transaction at tail plus worker/source interruption; separate commit/abort, bounded tip-wait and recovered success. Record decisions/tail/interruption overlap; core uses internal tip logs without path interruption. | Eligible committed membership, no aborted output or premature completion losing subsequent eligible input. Apply tagged cutoff/resolved windows; offset spans are not counts. |
 | `M3.partition-discovery-churn` | `internal/app/partition_cli_test.go`: `TestPartitionCLISelectsWithoutFetchingOrCommittingExcludedPartitions`; `tests/compat/signal_test.go`: `TestCLIInterruptCommitsAndResumeDoesNotRecopy`; `internal/franz/source_test.go`: `TestAssignmentRejectsNewMissingPartitionBeforeInitialCommit` | Sparse IN/NOT IN plus real additions/reassignment, matching/missing destination cases. Record creation and eligible assignment, not guessed discovery timer. Core selection uses in-process Execute/kfake; signal test expands both topics. | IN additions excluded; NOT IN additions required after observed eligible assignment while active. PRESERVE retains original partition or explicitly fails, possibly after partial output. Output absence cannot prove excluded partitions never fetched. |
 
+The optional stock-link fixture source (`internal/fixture/links.go`) and
+`TestLiveOwnedWorkerLinkTopology` check planned worker Metadata/coordinator
+routes against independently healthy direct endpoints.
+`TestLiveOwnedLinkDirectionalLatency` supplies a separate exact-nonce
+calibration for upstream/downstream delay, persistent/new sockets, and
+quiescent removal. These controls have no accepted native proxy execution, are absent
+from the current CI runtime matrix, and establish no M3 release fault
+coverage. Raw private notice durability must be resolved before ephemeral
+proxy runtime. Short-delay source assertions do not establish long-delay or
+pending-response behavior.
+
 ## M4 — Archive storage and replay
 
 Small independent healthy controls cover topic→file, file→topic and file→file. Closest controls: `tests/compat/archive_test.go` `TestAvroCaptureAndReplayCLI`, `tests/compat/directions_test.go` `TestAllFileDirectionsAndResume`, and `tests/compat/archive_load_test.go` `TestLoadArchiveCopy`; they do not establish independent archive checking.
