@@ -2,7 +2,7 @@
 
 Independent adversarial evidence for **published Kaferry releases**, starting with v0.6.0. The roadmap requires running the real executable in disposable Kafka and filesystem setups, injecting faults, observing records and saved progress independently, and retaining evidence that can be checked offline.
 
-**Status: M0 accepted; M1 artifact verification, offline checking and calibration underway. M2–M6 scenarios and campaigns are not implemented. No Kaferry release is qualified.**
+**Status: M0 and M1 accepted. M2 runtime controls and independent observations are in development; required M2–M6 release fault scenarios and campaigns are not implemented. No Kaferry release is qualified.**
 
 The purpose is additional evidence beyond Kaferry's core suite: adverse timing, combined failures, independent observers, and integrated release behavior. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 

@@ -129,6 +129,7 @@ func openKafka(ctx context.Context, state fixture.State, plan kafkaPlan, run fix
 	c.Producer.Idempotent = true
 	c.Net.MaxOpenRequests = 1
 	k.producer, err = sarama.NewSyncProducer([]string{state.Source}, c)
+	err = errors.Join(err, ctx.Err())
 	return k, preparation, err
 }
 
@@ -261,7 +262,8 @@ func knownKafkaInputs(label string, count int) ([]kafkaInput, error) {
 
 // Publish sends either the three warmups or the remaining finite input. Each
 // input is attempted once by this controller. Retained errors need independent
-// readback; calling Publish again cannot retry ambiguous deliveries.
+// readback; calling Publish again cannot retry ambiguous deliveries. Cancellation
+// during a synchronous send is reported after retaining that send's outcome.
 func (k *kafkaRun) Publish(ctx context.Context, warmup bool) ([]kafkaProduceAttempt, error) {
 	if err := kafkaBounded(ctx); err != nil {
 		return nil, err
@@ -294,6 +296,9 @@ func (k *kafkaRun) Publish(ctx context.Context, warmup bool) ([]kafkaProduceAtte
 		}
 		k.Attempts = append(k.Attempts, a)
 		attempts = append(attempts, a)
+		if err := ctx.Err(); err != nil {
+			return attempts, errors.Join(append(errs, err)...)
+		}
 	}
 	return attempts, errors.Join(errs...)
 }

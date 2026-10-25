@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -433,5 +434,87 @@ func TestBrokerCalibrationInspectRetainsFactsWithoutContainerEnvironment(t *test
 	// Then raw inspect environment is not part of the retained receipt.
 	if strings.Contains(string(data), "SYNTHETIC_SECRET") || strings.Contains(string(data), "do-not-retain") {
 		t.Fatal("container environment leaked into broker receipt")
+	}
+}
+
+// This exposes the same numeric exit information as exec.ExitError without
+// starting a subprocess. Its outer wrapper includes full inspect stdout, just
+// as fixture.Docker does on command failure.
+type brokerCalibrationExitFailure struct{ code int }
+
+func (e brokerCalibrationExitFailure) Error() string { return "synthetic Docker exit failure" }
+func (e brokerCalibrationExitFailure) ExitCode() int { return e.code }
+
+func TestBrokerCalibrationFailedInspectNeverRetainsFullOutputOrWrappedError(t *testing.T) {
+	const secretName = "SYNTHETIC_INSPECT_SECRET"
+	const secretValue = "must-not-retain-inspect-value"
+	for _, tc := range []struct {
+		name  string
+		cause error
+		class string
+	}{
+		{"executor", errors.New("synthetic executor failure"), "executor failure"},
+		{"exit", brokerCalibrationExitFailure{code: 7}, "exit code 7"},
+		{"cancelled", context.Canceled, "context canceled"},
+		{"deadline", context.DeadlineExceeded, "context deadline exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given complete inspect stdout containing an environment secret and the
+			// exact output-embedding error shape returned by fixture.Docker.
+			f := newBrokerCalibration()
+			f.mutate = func(info map[string]any) {
+				info["Config"].(map[string]any)["Env"] = []string{secretName + "=" + secretValue}
+			}
+			failedInspect := func(ctx context.Context, args ...string) ([]byte, error) {
+				out, err := f.execute(ctx, args...)
+				if err != nil {
+					return out, err
+				}
+				return out, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), tc.cause, out)
+			}
+			assertSafe := func(diagnostic error, retained any, target string) {
+				t.Helper()
+				if diagnostic == nil {
+					t.Fatal("inspect failure was accepted")
+				}
+				data, err := json.Marshal(retained)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, text := range []string{diagnostic.Error(), string(data)} {
+					for _, forbidden := range []string{secretName, secretValue, `"Config"`, `"Env"`, "Config.Env"} {
+						if strings.Contains(text, forbidden) {
+							t.Fatal("full inspect environment leaked through failure diagnostic or retained receipt")
+						}
+					}
+				}
+				for _, text := range []string{diagnostic.Error(), string(data)} {
+					if !strings.Contains(text, "docker container inspect "+target) || !strings.Contains(text, tc.class) {
+						t.Fatal("safe operation/target/failure class missing from diagnostic or retained receipt")
+					}
+				}
+				if (tc.cause == context.Canceled || tc.cause == context.DeadlineExceeded) && !errors.Is(diagnostic, tc.cause) {
+					t.Fatalf("safe context cause lost: %v", diagnostic)
+				}
+			}
+			// When ownership admission fails, neither facts nor a handle may be admitted.
+			b, snapshot, err := openBrokerWithProbe(context.Background(), f.state, "destination", failedInspect, f.probe, true)
+			if b != nil || snapshot.Facts != nil {
+				t.Fatal("failed inspection admitted broker ownership")
+			}
+			assertSafe(err, snapshot, f.name)
+			if f.mutations() != 0 || f.probes != 0 {
+				t.Fatal("failed ownership inspection reached mutation/probe")
+			}
+			// Then an already owned handle also retains only the sanitized pre-mutation
+			// failure when its subsequent full inspect fails.
+			b = openCalibrationBroker(t, f)
+			b.run = failedInspect
+			observation, err := b.Pause(context.Background())
+			assertSafe(err, observation, f.id)
+			if observation.Reached || observation.Before.Facts != nil || observation.Request != nil || f.mutations() != 0 || f.probes != 0 {
+				t.Fatal("failed re-inspection reached mutation/probe")
+			}
+		})
 	}
 }

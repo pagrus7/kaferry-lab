@@ -295,14 +295,16 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 	commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := commandCtx.Err(); err != nil {
-		return snapshot, err
+		return snapshot, brokerInspectFailure(target, err)
 	}
 	out, err := b.run(commandCtx, "container", "inspect", target, "--format", "{{json .}}")
 	if commandCtx.Err() != nil {
 		err = errors.Join(err, commandCtx.Err())
 	}
 	if err != nil {
-		return snapshot, fmt.Errorf("owned broker inspect failed: %w", err)
+		// fixture.Docker includes CombinedOutput in its error. A full inspect can
+		// contain Config.Env, so retain only safe command/context/exit information.
+		return snapshot, brokerInspectFailure(target, err)
 	}
 	if len(out) > 1<<20 {
 		return snapshot, errors.New("owned broker inspect exceeds evidence limit")
@@ -354,6 +356,23 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 		}
 	}
 	return snapshot, nil
+}
+
+// Inspect failure diagnostics must never wrap the executor error or its output.
+// target comes only from the validated fixture name or retained container ID.
+func brokerInspectFailure(target string, cause error) error {
+	operation := "owned broker docker container inspect " + target + " failed"
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		return fmt.Errorf("%s: %w", operation, context.DeadlineExceeded)
+	case errors.Is(cause, context.Canceled):
+		return fmt.Errorf("%s: %w", operation, context.Canceled)
+	}
+	var exit interface{ ExitCode() int }
+	if errors.As(cause, &exit) {
+		return fmt.Errorf("%s: exit code %d", operation, exit.ExitCode())
+	}
+	return errors.New(operation + ": executor failure")
 }
 
 type brokerPortBinding struct{ HostIP, HostPort string }

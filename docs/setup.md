@@ -1,6 +1,6 @@
 # Lab setup and implemented checks
 
-M0 is accepted. M1 verification, offline checking and calibration are underway; M2–M6 release fault scenarios and campaigns are not implemented. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
+M0 and M1 are accepted. M2 helper implementation is underway; M2–M6 release fault scenarios and campaigns are not implemented. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
 
 ## Prepare and check the harness
 
@@ -73,6 +73,6 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 
 ## CI and retained evidence
 
-Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness, golden offline histories, actual stand-in calibration, the full published-artifact verification/version path, and live observer capabilities. Offline CLI checks run in a network namespace with no network interfaces available beyond loopback. CI retains logs, verification output, calibration bundles and fixture evidence with `always()`, including failed attempts, for 14 days under unique run/attempt names.
+Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness, golden offline histories, actual stand-in calibration, the full published-artifact verification/version path, and live observer capabilities. A four-minute M2 controller calibration uses the same owned fixtures to check actual pause/recovery/restart and known input readback; it does not execute Kaferry or establish M2 scenario coverage. The combined observer job has a 16-minute budget to include this calibration and cleanup. Offline CLI checks run in a network namespace with no network interfaces available beyond loopback. CI retains logs, verification output, calibration bundles and fixture evidence with `always()`, including failed attempts, for 14 days under unique run/attempt names.
 
 Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. Retained Go profiles cover the unit checks and actual M1 command executions for changed-line review. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.

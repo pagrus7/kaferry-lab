@@ -2,11 +2,14 @@ package campaign
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/pagrus7/kaferry-lab/internal/identity"
@@ -329,5 +332,58 @@ func TestKafkaWarmupVerificationKeepsBulkObligationsPending(t *testing.T) {
 	// Then that observation cannot verify the finite bulk input before publication.
 	if _, err = kafkaSourceLedger(source, dest, "PRESERVE", inputs, attempts, scans); err == nil {
 		t.Fatal("warmup observation verified unpublished bulk")
+	}
+}
+
+// Only SendMessage participates in this control. The embedded interface avoids
+// introducing fake behavior for the producer's unrelated methods.
+type kafkaSendCallback struct {
+	sarama.SyncProducer
+	send func(*sarama.ProducerMessage) (int32, int64, error)
+}
+
+func (p kafkaSendCallback) SendMessage(message *sarama.ProducerMessage) (int32, int64, error) {
+	return p.send(message)
+}
+
+func TestKafkaPublishRetainsFinalAcknowledgmentAfterCancellation(t *testing.T) {
+	// Given a single remaining input and a caller with a bounded context.
+	inputs, err := knownKafkaInputs("synthetic-cancel", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sends := 0
+	producer := kafkaSendCallback{send: func(message *sarama.ProducerMessage) (int32, int64, error) {
+		sends++
+		cancel()
+		return message.Partition, 42, nil
+	}}
+	run := &kafkaRun{
+		Inputs:      inputs[:1],
+		Preparation: kafkaPreparation{Source: kafkaTopic{Topic: "synthetic-source"}},
+		producer:    producer,
+	}
+	// When cancellation happens inside the final synchronous send, its valid
+	// acknowledgment remains evidence and the operation reports cancellation.
+	attempts, err := run.Publish(ctx, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled final send returned %v", err)
+	}
+	if sends != 1 || len(attempts) != 1 || len(run.Attempts) != 1 {
+		t.Fatalf("send/receipt counts %d/%d/%d", sends, len(attempts), len(run.Attempts))
+	}
+	for _, attempt := range []kafkaProduceAttempt{attempts[0], run.Attempts[0]} {
+		if attempt.InputID != inputs[0].ID || attempt.Offset == nil || *attempt.Offset != 42 || attempt.Error != "" {
+			t.Fatalf("acknowledged outcome changed: %+v", attempt)
+		}
+	}
+	// Then a later call with a fresh budget cannot retry that attempted record.
+	fresh, finish := context.WithTimeout(context.Background(), time.Second)
+	defer finish()
+	attempts, err = run.Publish(fresh, true)
+	if err != nil || len(attempts) != 0 || sends != 1 || len(run.Attempts) != 1 {
+		t.Fatalf("acknowledged input retried: attempts=%+v sends=%d retained=%d err=%v", attempts, sends, len(run.Attempts), err)
 	}
 }

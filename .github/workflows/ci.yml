@@ -148,7 +148,7 @@ jobs:
           if-no-files-found: error
   observer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 16
     env:
       LAB_RUN_ID: m0-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -170,6 +170,13 @@ jobs:
           set -euo pipefail
           eval "$(go run ./cmd/fixture env "$LAB_RUN_ID")"
           go test -v -count=1 -timeout=4m ./internal/observer -run Live 2>&1 | tee .cache/m0/capabilities.log
+      - name: Calibrate owned M2 broker controls and Kafka observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/m2
+          eval "$(go run ./cmd/fixture env "$LAB_RUN_ID")"
+          go test -v -covermode=atomic -coverpkg=./... -coverprofile=.cache/m2/live-coverage.out -count=1 -timeout=4m ./internal/campaign -run '^TestLiveM2ControllerCalibration$' 2>&1 | tee .cache/m2/controllers.log
       - name: Retain broker logs and clean owned resources
         if: always()
         shell: bash
@@ -185,6 +192,7 @@ jobs:
           name: m0-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/m0/
+            .cache/m2/
             .cache/fixtures/
           retention-days: 14
           if-no-files-found: error
