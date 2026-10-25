@@ -82,3 +82,7 @@ source integrations awaiting accepted native proxy execution. They are not
 part of the current CI runtime matrix. See [the current observation and
 private-retention limits](m2.md) before enabling any proxy run; no proxy
 qualification or durable private-notice route is currently established.
+
+Private notice sealing, authenticated retrieval and offline recovery are
+described in [private-notices](private-notices.md). They do not enable an
+unreviewed upload or a linked-runtime campaign.

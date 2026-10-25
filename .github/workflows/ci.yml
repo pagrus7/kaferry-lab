@@ -19,6 +19,12 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+      - name: Synthetic private-notice sealing and recovery controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/unit
+          python3 scripts/test-link-notice-sealing.py 2>&1 | tee .cache/unit/notice-controls.log
       - name: Format, vet, and unit controls
         shell: bash
         run: |

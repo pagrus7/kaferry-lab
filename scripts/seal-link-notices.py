@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""Private linked-fixture receipt sealing. No upload or publication authorization.
+
+CMS AES256-CBC is NOT AEAD. Offline recovery requires a separately trusted
+GitHub API digest of the complete artifact ZIP before parsing or decryption.
+"""
+import argparse
+import base64
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import selectors
+import stat
+import subprocess
+import sys
+import tarfile
+import time
+
+MAX_FILES = 1024
+MAX_FILE = 256 << 10
+MAX_PAYLOAD = 8 << 20
+MAX_TAR = 10 << 20
+MAX_CMS = 12 << 20
+MAX_ZIP = 16 << 20
+MAX_MANIFEST = 256 << 10
+RUN = re.compile(r"[a-z][a-z0-9-]{3,48}\Z")
+HEAD = re.compile(r"[0-9a-f]{40}\Z")
+SHA = re.compile(r"[0-9a-f]{64}\Z")
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}(?:\.json)?\Z")
+JOB = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+CERT_PIN = "ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57"
+DENIAL = (b"permission denied", b"operation not permitted", b"access denied", b"denied by policy", b"sandbox_extension_issue_file")
+
+
+class Rejected(Exception):
+    """Only fixed diagnostic text may cross the private evidence boundary."""
+
+
+class EvidenceIncomplete(Rejected):
+    pass
+
+
+class PlatformDenied(EvidenceIncomplete):
+    pass
+
+
+def digest(body):
+    return hashlib.sha256(body).hexdigest()
+
+
+def encode(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def parse_json(body):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise Rejected("duplicate JSON key")
+            result[key] = value
+        return result
+    try:
+        return json.loads(body, object_pairs_hook=pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(Rejected("nonfinite JSON")))
+    except (ValueError, UnicodeError, RecursionError):
+        raise Rejected("invalid receipt JSON") from None
+
+
+def signature(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_uid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def check_private(info, directory=False):
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    if (not expected(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != (0o700 if directory else 0o600)
+            or (not directory and info.st_nlink != 1)):
+        raise Rejected("private input type, ownership or mode rejected")
+
+
+def check_chain(path):
+    # Reject symlinks in every existing path component, including fixed roots.
+    path = Path(os.path.abspath(path))
+    for part in [*reversed(path.parents), path]:
+        info = part.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise Rejected("directory path component rejected")
+
+
+def private_root(path):
+    path = Path(path)
+    check_chain(path.parent)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    check_private(path.lstat(), True)
+    return path
+
+
+def reserve(root, run):
+    private_root(root)
+    target = root / run
+    try:
+        target.mkdir(mode=0o700)  # incomplete attempts cannot be reused
+    except FileExistsError:
+        raise Rejected("exclusive run reservation already exists") from None
+    return target
+
+
+def write_private(path, body):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def reserve_receipt(directory, name):
+    fd = os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        persist_receipt(fd, encode({"status": "reserved; no failure recorded yet", "complete": False}))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def persist_receipt(fd, body):
+    # Already-open private descriptor: never open a new path after a denial.
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    if os.write(fd, body) != len(body):
+        raise OSError(5, "private receipt short write")
+    os.fsync(fd)
+
+
+def reserve_operation(root, run):
+    try:
+        directory = reserve(root, run)
+        fd = reserve_receipt(directory, "OS-ERROR.json")
+    except (OSError, Rejected):
+        # The first required sink is unavailable. Do not try another sink.
+        raise EvidenceIncomplete("private operation reservation failed; exact evidence incomplete; stopped") from None
+    return directory, fd
+
+
+def retain_os_error(fd, action, error):
+    # Bounded original cause/context graph, private only. No raw exception reaches
+    # the public exception. Overflow is explicitly incomplete, never exact.
+    nodes, pending, seen = [], [("original", error)], set()
+    while pending and len(nodes) < 8:
+        relation, current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        nodes.append({"relation": relation, "type": type(current).__name__,
+                      "errno": getattr(current, "errno", None), "exact_text": str(current),
+                      "filename": getattr(current, "filename", None),
+                      "filename2": getattr(current, "filename2", None)})
+        for relation, following in [("cause", current.__cause__), ("context", current.__context__)]:
+            if following is not None and id(following) not in seen:
+                pending.append((relation, following))
+    body = encode({"action": action, "complete": not pending, "exceptions": nodes})
+    complete = not pending and len(body) <= 65536
+    if len(body) > 65536:
+        body = encode({"action": action, "complete": False, "reported_bytes": len(body),
+                       "sha256": digest(body), "captured_prefix_base64": base64.b64encode(body[:32768]).decode()})
+    try:
+        persist_receipt(fd, body)
+    except OSError:
+        raise EvidenceIncomplete("private OS-error receipt persistence failed; exact evidence incomplete; stopped") from None
+    if not complete:
+        raise EvidenceIncomplete("filesystem action failed; private notice bound exceeded; evidence incomplete; stopped") from None
+    kind = PlatformDenied if error.errno in (1, 13) else EvidenceIncomplete
+    raise kind("filesystem action failed; private OS-ERROR.json retained; stopped") from None
+
+
+def write_complete(directory, body):
+    # All fallible byte writes/fsync precede the final atomic completion marker.
+    pending = directory / "COMPLETE.pending.json"
+    write_private(pending, body)
+    os.rename(pending, directory / "COMPLETE.json")
+
+
+def read_regular(path, maximum, private=False):
+    check_chain(Path(path).parent)
+    before = Path(path).lstat()
+    if private:
+        check_private(before)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > maximum:
+        raise Rejected("bounded regular file required")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        body = stream.read(maximum + 1)
+        after = os.fstat(stream.fileno())
+    if len(body) > maximum or signature(before) != signature(opened) or signature(before) != signature(after) or signature(before) != signature(Path(path).lstat()):
+        raise Rejected("file changed during bounded read")
+    return body
+
+
+def identities(run, head, pin, job, attempt):
+    if (not RUN.fullmatch(run) or not HEAD.fullmatch(head) or not SHA.fullmatch(pin)
+            or not JOB.fullmatch(job) or not re.fullmatch(r"[1-9][0-9]{0,8}", str(attempt))):
+        raise Rejected("mandatory reviewed identity rejected")
+    return {"run_id": run, "source_head": head, "recipient_sha256": pin,
+            "job": job, "attempt": str(attempt)}
+
+
+def safe_relative(name):
+    parts = name.split("/")
+    return (name != "MANIFEST.json" and 1 <= len(parts) <= 4 and all(NAME.fullmatch(p) for p in parts)
+            and len(name) <= 120 and parts[-1].endswith(".json")
+            and all(not p.endswith(".json") for p in parts[:-1]))
+
+
+def snapshot(root, run):
+    """Read through held directory FDs; compare a second complete inventory."""
+    check_chain(root)
+    check_private(root.lstat(), True)
+    root_signature = signature(root.lstat())
+    payloads, inventory = {}, {}
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        def walk(directory, prefix="", reread=False):
+            check_private(os.fstat(directory), True)
+            names = []
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if len(names) >= MAX_FILES:
+                        raise Rejected("directory entry bound exceeded")
+                    names.append(entry.name)
+            names.sort()
+            for name in names:
+                relative = prefix + name
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    if not NAME.fullmatch(name) or name.endswith(".json") or len(relative.split("/")) >= 4:
+                        raise Rejected("input directory name or depth rejected")
+                    check_private(info, True)
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                    try:
+                        if signature(info) != signature(os.fstat(child)):
+                            raise Rejected("input directory changed")
+                        record(relative + "/", info, reread)
+                        walk(child, relative + "/", reread)
+                    finally:
+                        os.close(child)
+                else:
+                    if not safe_relative(relative):
+                        raise Rejected("unexpected input filename")
+                    check_private(info)
+                    if info.st_size > MAX_FILE:
+                        raise Rejected("receipt byte bound exceeded")
+                    record(relative, info, reread)
+                    if reread:
+                        continue
+                    if len(payloads) >= MAX_FILES:
+                        raise Rejected("receipt count bound exceeded")
+                    source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+                    with os.fdopen(source, "rb") as stream:
+                        if signature(info) != signature(os.fstat(stream.fileno())):
+                            raise Rejected("receipt changed before read")
+                        body = stream.read(MAX_FILE + 1)
+                        if signature(info) != signature(os.fstat(stream.fileno())):
+                            raise Rejected("receipt changed during read")
+                    if len(body) != info.st_size or sum(map(len, payloads.values())) + len(body) > MAX_PAYLOAD:
+                        raise Rejected("receipt payload bound exceeded")
+                    value = parse_json(body)
+                    if not isinstance(value, dict) or ("RunID" in value and value["RunID"] != run):
+                        raise Rejected("receipt run or object rejected")
+                    payloads[relative] = body
+
+        seen = set()
+        def record(name, info, reread):
+            if not reread:
+                if len(inventory) >= 2 * MAX_FILES:
+                    raise Rejected("input inventory bound exceeded")
+                inventory[name] = signature(info)
+            elif inventory.get(name) != signature(info):
+                raise Rejected("input changed between inventories")
+            else:
+                seen.add(name)
+        walk(fd)
+        marker = parse_json(payloads.get("PRIVATE.json", b"null"))
+        if marker != {"RunID": run, "Classification": "PRIVATE RAW EVIDENCE", "Publication": "withhold pending explicit redaction review"}:
+            raise Rejected("private marker rejected")
+        walk(fd, reread=True)
+        if seen != set(inventory) or signature(os.fstat(fd)) != root_signature or signature(root.lstat()) != root_signature:
+            raise Rejected("input inventory changed")
+    finally:
+        os.close(fd)
+    return payloads
+
+
+def pack(payloads, identity):
+    manifest = dict(identity, version=1, files=[{"path": name, "bytes": len(body), "sha256": digest(body)}
+                    for name, body in sorted(payloads.items())], count=len(payloads),
+                    total_bytes=sum(map(len, payloads.values())))
+    manifest_body = encode(manifest)
+    if len(manifest_body) > MAX_MANIFEST:
+        raise Rejected("manifest bound exceeded")
+    buffer = io.BytesIO()
+    prefix = "link-notices/" + identity["run_id"] + "/"
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, body in [("MANIFEST.json", manifest_body), *sorted(payloads.items())]:
+            entry = tarfile.TarInfo(prefix + name)
+            entry.size, entry.mode, entry.mtime = len(body), 0o600, 0
+            archive.addfile(entry, io.BytesIO(body))
+    body = buffer.getvalue()
+    if len(body) > MAX_TAR:
+        raise Rejected("tar bound exceeded")
+    return body, manifest
+
+
+def openssl(args, body, directory, label, maximum):
+    """One stock command, bounded pipes/time, exact PRIVATE stderr on failure."""
+    command = ["/usr/bin/openssl", *args]
+    output, stderr = bytearray(), bytearray()
+    started = time.monotonic()
+    status, reason, child, original_error = None, None, None, None
+    receipt = reserve_receipt(directory, label + "-command.json")
+    try:
+        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with selectors.DefaultSelector() as selector:
+            for stream, event, kind in [(child.stdin, selectors.EVENT_WRITE, "in"), (child.stdout, selectors.EVENT_READ, "out"), (child.stderr, selectors.EVENT_READ, "err")]:
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, event, kind)
+            offset = 0
+            while selector.get_map():
+                if time.monotonic() - started > 30:
+                    raise Rejected("stock command timeout")
+                for key, _ in selector.select(0.1):
+                    if key.data == "in":
+                        if offset == len(body):
+                            selector.unregister(key.fileobj)
+                            key.fileobj.close()
+                        else:
+                            try:
+                                offset += os.write(key.fd, body[offset:offset + 65536])
+                            except BrokenPipeError:
+                                selector.unregister(key.fileobj)
+                                key.fileobj.close()
+                    else:
+                        chunk = os.read(key.fd, 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            key.fileobj.close()
+                            continue
+                        target, limit = (output, maximum) if key.data == "out" else (stderr, 65536)
+                        available = limit - len(target)
+                        target.extend(chunk[:available])
+                        if len(chunk) > available:
+                            raise Rejected("stock command output bound exceeded")
+        status = child.wait(timeout=max(0.001, 30 - (time.monotonic() - started)))
+    except (OSError, subprocess.TimeoutExpired, Rejected) as error:
+        original_error = error
+        reason = {"type": type(error).__name__, "errno": getattr(error, "errno", None), "exact_text": str(error)}
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=2)
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if not stream.closed:
+                    stream.close()
+        try:
+            persist_receipt(receipt, encode({"argv": command, "returncode": status,
+                "failure": reason, "stderr_base64": base64.b64encode(stderr).decode(),
+                "stderr_bytes": len(stderr), "streams_complete": reason is None,
+                "stdout_bytes": len(output), "stdout_sha256": digest(output)}))
+        except OSError as receipt_error:
+            if isinstance(original_error, OSError):
+                raise receipt_error from original_error
+            raise
+        finally:
+            os.close(receipt)
+    if isinstance(original_error, OSError):
+        raise original_error  # operation boundary retains exact cause/context
+    denied = any(term in bytes(stderr).lower() for term in DENIAL)
+    if reason and reason.get("errno") in (1, 13):
+        denied = True
+    if denied:
+        raise PlatformDenied("stock command platform denial; stopped, private receipt retained")
+    if reason is not None or status != 0:
+        raise Rejected("stock command failed; stopped, private receipt retained")
+    return bytes(output)
+
+
+def certificate(path, expected):
+    body = read_regular(path, 16384)
+    if not SHA.fullmatch(expected) or digest(body) != expected or b"PRIVATE KEY" in body or body.count(b"-----BEGIN CERTIFICATE-----") != 1:
+        raise Rejected("recipient certificate pin rejected")
+    return body
+
+
+def seal(base, identity, cert):
+    identity = identities(identity["run_id"], identity["source_head"], identity["recipient_sha256"], identity["job"], identity["attempt"])
+    base = Path(base)
+    diagnostics, error_fd = reserve_operation(base / ".cache/link-sealing-private", identity["run_id"])
+    action = "read pinned recipient certificate"
+    try:
+        cert_body = certificate(cert, identity["recipient_sha256"])
+        action = "snapshot fixed private receipt tree"
+        payloads = snapshot(base / ".cache/fixtures-private" / (identity["run_id"] + "-links"), identity["run_id"])
+        clear, manifest = pack(payloads, identity)
+        action = "reserve ciphertext quarantine"
+        destination = reserve(base / ".cache/link-quarantine", identity["run_id"])
+        action = "write private recipient snapshot"
+        write_private(diagnostics / "recipient.pem", cert_body)
+        action = "encrypt and retain stock command receipt"
+        encrypted = openssl(["cms", "-encrypt", "-binary", "-aes256", "-outform", "DER", "-recip", str(diagnostics / "recipient.pem"),
+                             "-keyopt", "rsa_padding_mode:oaep", "-keyopt", "rsa_oaep_md:sha256",
+                             "-keyopt", "rsa_mgf1_md:sha256"], clear, diagnostics, "seal", MAX_CMS)
+        action = "write bounded ciphertext"
+        write_private(destination / "notice.cms", encrypted)
+        complete = dict(identity, complete=True, cms_bytes=len(encrypted), cms_sha256=digest(encrypted),
+                        files=manifest["count"], total_bytes=manifest["total_bytes"],
+                        publication="DISABLED; explicit encrypted-public-quarantine exception required",
+                        cipher="AES-256-CBC; RSA-OAEP-SHA256; MGF1-SHA256; NOT AEAD")
+        action = "persist complete metadata"
+        write_complete(destination, encode(complete))
+        return complete
+    except OSError as error:
+        retain_os_error(error_fd, action, error)
+    finally:
+        os.close(error_fd)
+
+
+def arguments(description):
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--source-head", required=True)
+    parser.add_argument("--recipient-sha256", required=True)
+    parser.add_argument("--job", required=True)
+    parser.add_argument("--attempt", required=True)
+    return parser
+
+
+def main():
+    args = arguments(__doc__).parse_args()
+    identity = identities(args.run_id, args.source_head, args.recipient_sha256, args.job, args.attempt)
+    if args.recipient_sha256 != CERT_PIN:
+        raise Rejected("reviewed recipient pin required")
+    seal(Path.cwd(), identity, Path(__file__).with_name("link-notices-recipient.pem"))
+    print("sealed: complete metadata retained privately; publication disabled")
+
+
+def cli():
+    try:
+        main()
+        return 0
+    except EvidenceIncomplete:
+        print("sealing rejected; private evidence incomplete; stopped", file=sys.stderr)
+        return 1
+    except (Rejected, OSError, tarfile.TarError):
+        print("sealing rejected; no complete output accepted; stopped", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
