@@ -69,11 +69,17 @@ func calibrationProcess(t *testing.T, mode string, limit int64) (*ownedProcess, 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	runDirectory := t.TempDir()
+	coverageDirectory := filepath.Join(runDirectory, "coverage")
+	if err := os.Mkdir(coverageDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Instrumented helpers write counters to their owned directory instead of
+	// adding coverage-runtime diagnostics to the calibrated stdout/stderr.
 	plan := processPlan{
 		RunID: "synthetic-calibration-" + rand.Text(), WorkerID: mode,
 		Directory: filepath.Join(runDirectory, "worker"), Executable: executable,
 		Args:           []string{"-test.run=^TestProcessCalibrationHelper$"},
-		Env:            []string{"KAFERRY_LAB_PROCESS_CALIBRATION=1", "KAFERRY_LAB_PROCESS_MODE=" + mode},
+		Env:            []string{"KAFERRY_LAB_PROCESS_CALIBRATION=1", "KAFERRY_LAB_PROCESS_MODE=" + mode, "GOCOVERDIR=" + coverageDirectory},
 		CleanupTimeout: 2 * time.Second, TermGrace: 50 * time.Millisecond, LogLimit: limit,
 	}
 	p, err := startOwnedProcess(ctx, plan, processDigest(data), true)
@@ -189,7 +195,9 @@ func TestProcessCalibrationLogOverflowIsEvidenceFailure(t *testing.T) {
 	result, err := p.Wait(ctx)
 	// Then a clean helper exit cannot hide truncated evidence or block reaping.
 	if err == nil || !result.LogsTruncated || !result.Reaped || result.StdoutBytes != 8192 || result.StderrBytes != 8192 {
-		t.Fatalf("overflow not detected: %+v %v", result, err)
+		stdout, stdoutErr := os.ReadFile(filepath.Join(p.plan.Directory, "stdout.log"))
+		stderr, stderrErr := os.ReadFile(filepath.Join(p.plan.Directory, "stderr.log"))
+		t.Fatalf("overflow control mismatch: %+v %v; retained stdout=%q (%v), stderr=%q (%v)", result, err, stdout, stdoutErr, stderr, stderrErr)
 	}
 	for _, name := range []string{"stdout.log", "stderr.log"} {
 		info, err := os.Stat(filepath.Join(p.plan.Directory, name))
