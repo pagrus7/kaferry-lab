@@ -39,13 +39,12 @@ observations to version2 bundles checked by `internal/evidence/m2_*.go`.
 | `M2.delivery-outage-stop` | `delivery-stop` retains destination pause past the configured timeout, TERM and recovery; actual submission/timeout-path proof remains incomplete. `delivery-threshold` remains unsupported pending independent threshold observation. |
 | `M2.source-startup-save-outage` | `source-startup` observes source impairment before launch, bounded failed startup/exit, restoration and same-group copying. `source-save` retains an attempted outage/recovery but cannot establish the precise periodic commit and remains incomplete. |
 
-The native CI development matrix initially includes the two healthy controls and
-source-startup. These new paths have not yet run. Experimental standard dumpcap/
-TShark observation on the healthy PRESERVE link retains raw capture and PDML;
-candidates do not satisfy a fault trigger until supported native capture and
-sensitivity measurements are accepted. Derived timeout overshoot, amplification
-and process resource summaries remain unfinished. All required M2 variants still
-need native evidence, offline rechecks and independent acceptance reviews.
+The native CI development matrix includes the two healthy controls and
+source-startup. Packet capture is unavailable and disabled in CI; its retained
+`UNSUPPORTED` status is separate from the data verdict. Experimental packet
+candidates cannot satisfy a fault trigger. Derived timeout overshoot,
+amplification and process resource summaries remain unfinished. All required M2
+variants need native evidence, offline rechecks and independent acceptance reviews.
 
 ## M3 — Ownership, links, transactions and discovery
 
