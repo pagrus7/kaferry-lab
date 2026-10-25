@@ -116,6 +116,10 @@ func (c *phaseControl) broker(role, action string) {
 	if action != "inspect" {
 		b.Request = M2Interval{StartNS: i.StartNS, EndNS: i.StartNS}
 	}
+	if action == "pause" {
+		b.State.Paused = true
+		b.Probe.Available, b.Probe.Unavailable, b.Probe.APIKeys, b.Probe.Failure = false, true, 0, "timeout"
+	}
 	c.add(PhaseEvent{Kind: "broker", Broker: b})
 }
 func (c *phaseControl) worker(id, profile, action, signal string) {
@@ -163,16 +167,21 @@ func (c *phaseControl) audit(id, phase string, records, saved int, settled, fina
 		position.Offset = identity.Int64(saved)
 		a.Saved = append(a.Saved, M2SavedPosition{Source: position, Present: true, Group: c.m.Group})
 	}
-	c.add(PhaseEvent{Kind: "audit", Audit: &PhaseAudit{PhaseID: phase, Observation: a}})
+	worker := ""
+	if phase == "warmup" {
+		worker = "primary"
+	}
+	c.add(PhaseEvent{Kind: "audit", Audit: &PhaseAudit{PhaseID: phase, WorkerID: worker, Observation: a}})
 }
-func completePhaseControl() *phaseControl {
+func preparedPhaseControl() *phaseControl {
 	c := newPhaseControl()
 	c.publish("warmup", "")
 	c.verify("warmup")
 	c.broker("source", "inspect")
 	c.broker("destination", "inspect")
-	c.worker("primary", "primary-threshold4", "start", "")
-	c.audit("warmup-progress", "warmup", 1, 1, false, false)
+	return c
+}
+func phasePrimarySafetyControl(c *phaseControl) {
 	c.worker("primary", "primary-threshold4", "signal", "SIGSTOP")
 	c.publish("full", "primary")
 	c.verify("full")
@@ -182,6 +191,8 @@ func completePhaseControl() *phaseControl {
 	c.broker("destination", "restart")
 	c.verify("full")
 	c.audit("stopped-safety", "full", 1, 1, true, false)
+}
+func phaseRecoveryControl(c *phaseControl) {
 	c.worker("recovery", "recovery-unlimited", "start", "")
 	c.worker("recovery", "recovery-unlimited", "exit", "")
 	c.worker("recovery", "recovery-unlimited", "cleanup", "")
@@ -190,6 +201,13 @@ func completePhaseControl() *phaseControl {
 	c.audit("final", "full", 32, 32, true, true)
 	c.n += 1_000_000
 	c.add(PhaseEvent{Kind: "run_finished", Finished: &RunFinished{CleanupComplete: true, Proof: "literal synthetic restoration/wait/cleanup observations complete"}})
+}
+func completePhaseControl() *phaseControl {
+	c := preparedPhaseControl()
+	c.worker("primary", "primary-threshold4", "start", "")
+	c.audit("warmup-progress", "warmup", 1, 1, false, false)
+	phasePrimarySafetyControl(c)
+	phaseRecoveryControl(c)
 	return c
 }
 func phaseFinding(r Result, code string) bool {
@@ -216,6 +234,9 @@ func TestVersion3PhaseAdmissionDoesNotClaimMechanism(t *testing.T) {
 	for _, scenario := range []string{"delivery-stop", "delivery-threshold"} {
 		c := completePhaseControl()
 		c.m.ScenarioID = scenario
+		if c.m.Profiles[0].Settings.Args[2] == c.m.Profiles[1].Settings.Args[2] || c.m.Profiles[0].Settings.Args[4] != c.m.Profiles[1].Settings.Args[4] {
+			t.Fatal("literal profiles lost their sole permitted SQL path difference")
+		}
 		r := CheckPhaseHistory(c.m, c.a, c.e)
 		if r.Verdict != Unsupported || !phaseFinding(r, "phase_admission_complete") || !phaseFinding(r, "mechanism_unobserved") || r.ReleaseQualified || len(r.Findings) != 2 {
 			t.Fatalf("valid two-phase data admission changed: %+v", r)
@@ -303,6 +324,17 @@ func TestVersion3PhaseAdmissionRejectsIndependentMutations(t *testing.T) {
 			s.SQLSHA256 = phaseTestHash([]byte(s.SQL))
 		}},
 		{"changed-recovery-routing", "phase_profiles", func(c *phaseControl) { c.m.Profiles[1].Settings.Routing = "KEY" }},
+		{"changed-config-path-with-rebound-worker-hashes", "phase_profiles", func(c *phaseControl) {
+			s := &c.m.Profiles[1].Settings
+			s.Args = append([]string(nil), s.Args...)
+			s.Args[4] = "/synthetic/other-worker.toml"
+			args, _ := json.Marshal(s.Args)
+			for _, e := range c.e {
+				if e.Worker != nil && e.Worker.SettingsID == "recovery-unlimited" {
+					e.Worker.Observation.Identity.ArgsSHA256 = phaseTestHash(args)
+				}
+			}
+		}},
 		{"unknown-settings-ID", "phase_worker", func(c *phaseControl) { c.e[5].Worker.SettingsID = "arbitrary-profile" }},
 		{"warmup-only-final-completion", "phase_final", func(c *phaseControl) {
 			for _, e := range c.e {
@@ -389,5 +421,115 @@ func TestVersion3FixedBundleDispatchPreservesVersion2(t *testing.T) {
 	v2 := healthyM2Control()
 	if r := CheckM2(v2.m, v2.a, v2.e); r.Verdict != Pass {
 		t.Fatalf("version2 meaning changed: %+v", r)
+	}
+}
+
+func TestVersion3WarmupProgressRequiresThisLaunchedLivePrimary(t *testing.T) {
+	for _, name := range []string{"prelaunch-progress", "backdated-progress-scan", "wrong-primary-witness", "post-exit-progress"} {
+		t.Run(name, func(t *testing.T) {
+			// Given the same literal warmup data and group, when its progress
+			// belongs before launch, spans launch, names another invocation or
+			// follows the owned wait, then it cannot authorize this primary's STOP.
+			var c *phaseControl
+			if name == "prelaunch-progress" {
+				c = preparedPhaseControl()
+				c.audit("warmup-progress", "warmup", 1, 1, false, false)
+				c.worker("primary", "primary-threshold4", "start", "")
+				phasePrimarySafetyControl(c)
+				phaseRecoveryControl(c)
+			} else if name == "post-exit-progress" {
+				c = preparedPhaseControl()
+				c.worker("primary", "primary-threshold4", "start", "")
+				c.worker("primary", "primary-threshold4", "exit", "")
+				c.worker("primary", "primary-threshold4", "cleanup", "")
+				c.audit("warmup-progress", "warmup", 1, 1, false, false)
+			} else {
+				c = completePhaseControl()
+				for _, e := range c.e {
+					if e.Audit != nil && e.Audit.Observation.ID == "warmup-progress" {
+						if name == "wrong-primary-witness" {
+							e.Audit.WorkerID = "foreign-primary"
+						} else {
+							// Outputs and all sequence/completion times remain valid;
+							// only the scan request straddles completed launch.
+							e.Audit.Observation.ScanInterval.StartNS = c.e[5].Worker.Observation.Interval.StartNS
+						}
+					}
+				}
+			}
+			r := CheckPhaseHistory(c.m, c.a, c.e)
+			if r.Verdict != HarnessError || !phaseFinding(r, "phase_warmup_progress") || phaseFinding(r, "phase_admission_complete") {
+				t.Fatalf("foreign/stale warmup authorized the primary transition: %+v", r)
+			}
+		})
+	}
+}
+
+func TestVersion3RecoveryNeedsCompletedRestorationAndFreshSettledSafety(t *testing.T) {
+	for _, name := range []string{"restore-overlaps-launch", "restoration-after-old-settled-audit", "settled-scan-overlaps-restore", "restored-then-fresh-safety"} {
+		t.Run(name, func(t *testing.T) {
+			// Given a valid primary safety audit, when another owned pause and
+			// restore occur, then a future healthy completion cannot backdate
+			// availability and the old audit cannot stand in for post-restore safety.
+			c := preparedPhaseControl()
+			c.worker("primary", "primary-threshold4", "start", "")
+			c.audit("warmup-progress", "warmup", 1, 1, false, false)
+			phasePrimarySafetyControl(c)
+			c.broker("destination", "pause")
+			c.broker("destination", "restore")
+			restore := c.e[len(c.e)-1].Broker.Interval
+			if name == "restored-then-fresh-safety" || name == "settled-scan-overlaps-restore" {
+				c.verify("full")
+				c.audit("restored-safety", "full", 1, 1, true, false)
+				if name == "settled-scan-overlaps-restore" {
+					// Backdate source verification and the scan start together;
+					// output/saved/group completions and identities remain valid.
+					for _, e := range c.e {
+						if e.Verified != nil && e.Verified.PhaseID == "full" && e.Verified.Interval.StartNS > restore.EndNS {
+							e.Verified.Interval.StartNS = restore.StartNS
+							e.Verified.Interval.EndNS = restore.StartNS
+						}
+						if e.Audit != nil && e.Audit.Observation.ID == "restored-safety" {
+							e.Audit.Observation.ScanInterval.StartNS = restore.StartNS
+						}
+					}
+				}
+			}
+			phaseRecoveryControl(c)
+			if name == "restore-overlaps-launch" {
+				for _, e := range c.e {
+					if e.Worker != nil && e.Worker.SettingsID == "recovery-unlimited" && e.Worker.Observation.Action == "start" {
+						e.Worker.Observation.Interval.StartNS = restore.StartNS
+					}
+				}
+			}
+			for _, e := range c.e {
+				if e.Worker != nil && e.Worker.SettingsID == "recovery-unlimited" && e.Worker.Observation.Action == "start" {
+					launch := e.Worker.Observation.Interval
+					if name == "restore-overlaps-launch" && !(restore.StartNS <= launch.StartNS && launch.StartNS < restore.EndNS && launch.EndNS > restore.EndNS && e.ElapsedNS >= restore.EndNS) {
+						t.Fatal("literal overlap no longer isolates a launch beginning before completed restoration")
+					}
+					if name != "restore-overlaps-launch" && launch.StartNS < restore.EndNS {
+						t.Fatal("literal nonoverlap control lost completed restoration before launch")
+					}
+				}
+			}
+			r := CheckPhaseHistory(c.m, c.a, c.e)
+			if name == "restored-then-fresh-safety" {
+				if r.Verdict != Unsupported || !phaseFinding(r, "phase_admission_complete") || !phaseFinding(r, "mechanism_unobserved") || len(r.Findings) != 2 {
+					t.Fatalf("fresh post-restoration safety was not admitted: %+v", r)
+				}
+				return
+			}
+			code := "phase_recovery"
+			if name == "restore-overlaps-launch" {
+				code = "phase_worker_order"
+			} else if name == "settled-scan-overlaps-restore" {
+				code = "phase_audit"
+			}
+			if r.Verdict != HarnessError || !phaseFinding(r, code) || phaseFinding(r, "phase_admission_complete") {
+				t.Fatalf("late health/stale settlement authorized recovery: %+v", r)
+			}
+		})
 	}
 }

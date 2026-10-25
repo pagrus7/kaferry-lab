@@ -79,6 +79,7 @@ type PhaseOutput struct {
 
 type PhaseAudit struct {
 	PhaseID     string  `json:"phase_id"`
+	WorkerID    string  `json:"worker_id"` // warmup witness names the owned primary; empty for settled full audits
 	Observation M2Audit `json:"observation"`
 }
 

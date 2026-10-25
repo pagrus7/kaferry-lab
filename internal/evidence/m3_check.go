@@ -100,8 +100,8 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 	positions := map[identity.SourcePosition]string{}
 	auditIDs := map[string]bool{}
 	current := ""
-	verifiedAt, lastSettled, warmupProgress := identity.Int64(-1), identity.Int64(-1), identity.Int64(-1)
-	var primary string
+	verifiedAt, lastSettled, lastSettledStart, warmupProgress := identity.Int64(-1), identity.Int64(-1), identity.Int64(-1), identity.Int64(-1)
+	var primary, warmupWorker string
 	stopped := false
 	fullVerified, resumed, finished, final := false, false, false, false
 	var elapsed identity.Int64
@@ -138,7 +138,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				}
 			} else {
 				w := workers[primary]
-				if current != "warmup" || w == nil || w.exit != nil || p.WorkerID != primary || !stopped || warmupProgress < 0 || len(w.signals) == 0 || w.signals[len(w.signals)-1].Interval.EndNS > p.Interval.StartNS {
+				if current != "warmup" || w == nil || w.exit != nil || p.WorkerID != primary || !stopped || warmupProgress < 0 || warmupWorker != primary || len(w.signals) == 0 || w.signals[len(w.signals)-1].Interval.EndNS > p.Interval.StartNS {
 					return bad("phase_stop", "full publication requires the same live primary actually STOPPED after warmup progress")
 				}
 			}
@@ -178,7 +178,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 			}
 			h := workers[id.WorkerID]
 			if w.Action == "start" {
-				if h != nil || len(workers) >= 2 || verifiedAt < 0 || w.Interval.StartNS < verifiedAt || !phaseBrokersAvailable(brokers) {
+				if h != nil || len(workers) >= 2 || verifiedAt < 0 || w.Interval.StartNS < verifiedAt || !phaseBrokersAvailable(brokers, w.Interval.StartNS) {
 					return bad("phase_worker_order", "start needs current verified input, restored brokers and a fresh bounded invocation")
 				}
 				for _, prior := range workers {
@@ -191,8 +191,17 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 						return bad("phase_profile_order", "primary starts only on warmup with threshold4")
 					}
 					primary = id.WorkerID
-				} else if !fullVerified || !resumed || pw.SettingsID != "recovery-unlimited" || lastSettled < workers[primary].exit.Interval.EndNS || lastSettled > w.Interval.StartNS {
-					return bad("phase_recovery", "unlimited recovery follows full verification, restoration and settled primary safety")
+				} else {
+					if !fullVerified || !resumed || pw.SettingsID != "recovery-unlimited" || lastSettled < workers[primary].exit.Interval.EndNS || lastSettled > w.Interval.StartNS {
+						return bad("phase_recovery", "unlimited recovery follows full verification, restoration and settled primary safety")
+					}
+					for _, history := range brokers {
+						for _, b := range history {
+							if b.Action != "inspect" && b.Interval.EndNS > lastSettledStart {
+								return bad("phase_recovery", "settled primary safety must follow the latest relevant broker impairment/restoration")
+							}
+						}
+					}
 				}
 				h = &m2WorkerHistory{identity: id, start: w}
 				workers[id.WorkerID], settingsIDs[id.WorkerID] = h, pw.SettingsID
@@ -210,7 +219,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				}
 				switch w.Signal {
 				case "SIGSTOP":
-					if id.WorkerID != primary || stopped || current != "warmup" || warmupProgress < 0 || w.Interval.StartNS < warmupProgress || (w.ObservedState != "T" && w.ObservedState != "t") {
+					if id.WorkerID != primary || stopped || current != "warmup" || warmupProgress < 0 || warmupWorker != id.WorkerID || w.Interval.StartNS < warmupProgress || (w.ObservedState != "T" && w.ObservedState != "t") {
 						return bad("phase_stop", "STOP needs observed stopped ownership after independently copied/saved warmup3")
 					}
 					stopped = true
@@ -289,7 +298,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 		case "audit":
 			pa := event.Audit
 			a := pa.Observation
-			if current == "" || pa.PhaseID != current || a.ScanInterval.StartNS < verifiedAt || auditIDs[a.ID] || len(auditIDs) >= 96 {
+			if current == "" || pa.PhaseID != current || (current == "full" && pa.WorkerID != "") || a.ScanInterval.StartNS < verifiedAt || auditIDs[a.ID] || len(auditIDs) >= 96 {
 				return bad("phase_audit", "audit must bind the currently verified phase after its completed readback")
 			}
 			if !m2Interval(a.ScanInterval, elapsed) || !m2Interval(a.SavedInterval, elapsed) || !m2Interval(a.GroupInterval, elapsed) {
@@ -310,10 +319,14 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				return bad("phase_audit", err.Error())
 			}
 			if current == "warmup" && progress {
-				warmupProgress = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS)
+				w := workers[primary]
+				if w == nil || w.exit != nil || pa.WorkerID != primary || a.ScanInterval.StartNS < w.start.Interval.EndNS || a.SavedInterval.StartNS < w.start.Interval.EndNS || a.GroupInterval.StartNS < w.start.Interval.EndNS {
+					return bad("phase_warmup_progress", "warmup progress must name this live primary and scan output/saved/group only after its completed launch")
+				}
+				warmupProgress, warmupWorker = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS), pa.WorkerID
 			}
 			if settled {
-				lastSettled = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS)
+				lastSettled, lastSettledStart = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS), a.ScanInterval.StartNS
 			}
 			if a.Final {
 				if final || current != "full" || !fullVerified || !settled || !progress || a.ID != m.FinalAuditID || len(workers) != 2 {
@@ -378,7 +391,9 @@ func phaseProfiles(m PhaseManifest, l Ledger) (map[string]M2Settings, error) {
 		}
 	}
 	comparison := p
-	comparison.Args, comparison.SQL, comparison.SQLSHA256, comparison.RecordThreshold = recovery.Args, recovery.SQL, recovery.SQLSHA256, 0
+	comparison.Args = append([]string(nil), p.Args...)
+	comparison.Args[2] = recovery.Args[2]
+	comparison.SQL, comparison.SQLSHA256, comparison.RecordThreshold = recovery.SQL, recovery.SQLSHA256, 0
 	if !reflect.DeepEqual(comparison, recovery) || p.Args[2] == recovery.Args[2] {
 		return nil, fmt.Errorf("profiles may change only the retained SQL option and its separate SQL invocation path")
 	}
@@ -418,10 +433,10 @@ func phaseSourceScan(v PhaseVerification) error {
 	return nil
 }
 
-func phaseBrokersAvailable(brokers map[string][]M2Broker) bool {
+func phaseBrokersAvailable(brokers map[string][]M2Broker, before identity.Int64) bool {
 	for _, role := range []string{"source", "destination"} {
 		h := brokers[role]
-		if len(h) == 0 || h[len(h)-1].State.Paused || !m2ProbeAvailable(h[len(h)-1].Probe) {
+		if len(h) == 0 || h[len(h)-1].Interval.EndNS > before || h[len(h)-1].State.Paused || !m2ProbeAvailable(h[len(h)-1].Probe) {
 			return false
 		}
 	}
@@ -496,12 +511,12 @@ func phaseAuditData(m PhaseManifest, l Ledger, a M2Audit, outputs []Output, work
 			}
 			lastExit = max(lastExit, w.exit.Interval.EndNS)
 		}
-		if len(workers) == 0 || !tail || !phaseBrokersAvailable(brokers) || !m2RestartAfter(brokers["destination"], lastExit, a.ScanInterval.StartNS) {
+		if len(workers) == 0 || !tail || !phaseBrokersAvailable(brokers, a.ScanInterval.StartNS) || !m2RestartAfter(brokers["destination"], lastExit, a.ScanInterval.StartNS) {
 			return false, false, fmt.Errorf("settlement needs restored brokers and destination restart after actual waits")
 		}
 		for _, history := range brokers {
 			for _, b := range history {
-				if b.Action == "restart" && b.Interval.EndNS > verifiedAt {
+				if (b.Action == "restart" || b.Action == "restore") && b.Interval.EndNS > verifiedAt {
 					return false, false, fmt.Errorf("retained source must be reverified after broker stabilization")
 				}
 			}

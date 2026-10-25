@@ -41,9 +41,14 @@ in-process acceptance/flush failures or restart with a new cap. The added lab
 observation is an immutable final declaration followed by complete independent
 source scans of warmup and additive full input while the same primary is
 observed stopped, exact threshold4/unlimited profile binding, phase-bound audits,
-and settled full membership/saved-prefix checking. Literal negative histories
-challenge omitted scans, replaced prefixes/identities, publication/STOP/CONT
-ordering, profiles and warmup-only completion. Declared future input creates no
+and settled full membership/saved-prefix checking. Warmup progress names the
+same live primary, with output/saved/group scans after completed launch. Recovery
+requires completed broker health before launch and fresh settled safety after
+any later impairment/restoration; profiles differ only at SQL argument slot2.
+Literal negative histories challenge omitted scans, replaced prefixes/identities,
+prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
+publication/STOP/CONT ordering, rebound configuration-path changes, profiles and
+warmup-only completion. Declared future input creates no
 early delivery obligation; saving past the verified published end is still a
 violation. This is source-only, uncompiled checker preparation with synthetic
 controls authored but unexecuted. Valid data admission remains `UNSUPPORTED`
