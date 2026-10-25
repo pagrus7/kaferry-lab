@@ -34,7 +34,7 @@ type M2ShutdownTiming struct {
 
 type M2WorkerMeasurement struct {
 	ExitSignal    string           `json:"exit_signal"`
-	ExitCode      int              `json:"exit_code"`
+	ExitCode      *int             `json:"exit_code"`
 	WorkerID      string           `json:"worker_id"`
 	ResourceUsage *M2ResourceUsage `json:"resource_usage"`
 	Shutdown      M2ShutdownTiming `json:"shutdown"`
@@ -105,9 +105,10 @@ func m2Measurements(m M2Manifest, ledger Ledger, order []string, workers map[str
 	for _, id := range order {
 		h := workers[id]
 		worker := M2WorkerMeasurement{WorkerID: id, Shutdown: m2ShutdownTiming(h, m.Settings.ShutdownTimeoutNS)}
-		if h.exit != nil {
+		if h.exit != nil && h.exit.Reaped {
 			worker.ResourceUsage = h.exit.ResourceUsage
-			worker.ExitSignal, worker.ExitCode = h.exit.Signal, h.exit.ExitCode
+			code := h.exit.ExitCode
+			worker.ExitSignal, worker.ExitCode = h.exit.Signal, &code
 		}
 		out.Workers = append(out.Workers, worker)
 	}

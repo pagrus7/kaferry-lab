@@ -31,7 +31,7 @@ func TestM2MeasurementsDeriveLiteralTimingAndVolumeOffline(t *testing.T) {
 		t.Fatal(r)
 	}
 	w := r.Measurements.Workers[0]
-	if w.ResourceUsage.PeakRSSBytes != 1_263_616 || w.Shutdown.WaitLatencyLowerNS != 1_000_000 || w.Shutdown.WaitLatencyUpperNS != 3_000_000 || w.Shutdown.WaitOvershootUpperNS != 0 || !w.Shutdown.Available {
+	if w.ExitCode == nil || *w.ExitCode != 0 || w.ResourceUsage.PeakRSSBytes != 1_263_616 || w.Shutdown.WaitLatencyLowerNS != 1_000_000 || w.Shutdown.WaitLatencyUpperNS != 3_000_000 || w.Shutdown.WaitOvershootUpperNS != 0 || !w.Shutdown.Available {
 		t.Fatalf("incorrect literal timing/units: %+v", w)
 	}
 	v := r.Measurements.FinalOutput
@@ -166,5 +166,33 @@ func TestM2MeasurementBundleRoundTripNeedsOnlyRecordedFiles(t *testing.T) {
 		if got := LoadAndCheck(dir); !reflect.DeepEqual(got, want) {
 			t.Fatalf("bundle measurement mismatch: got %+v want %+v", got, want)
 		}
+	}
+}
+
+func TestM2MeasurementsDoNotInventAbsentOrUnreapedExit(t *testing.T) {
+	for _, unreaped := range []bool{false, true} {
+		// Given an owned invocation with either no wait or an unreaped placeholder.
+		h := &m2WorkerHistory{}
+		if unreaped {
+			h.exit = &M2Worker{ExitCode: 0, ResourceUsage: &M2ResourceUsage{Available: true}}
+		}
+		// When deriving an incomplete summary, Then zero never impersonates an
+		// actual successful exit and no available wait accounting is copied.
+		out := m2Measurements(M2Manifest{}, Ledger{}, []string{"w1"}, map[string]*m2WorkerHistory{"w1": h}, m2AuditHistory{})
+		w := out.Workers[0]
+		if w.ExitCode != nil || w.ExitSignal != "" || w.ResourceUsage != nil || w.Shutdown.Available {
+			t.Fatalf("invented actual outcome from incomplete evidence: %+v", w)
+		}
+	}
+	// A genuinely reaped failed outcome remains distinct from missing evidence.
+	c := measuredM2Control()
+	for _, event := range c.e {
+		if event.Worker != nil && event.Worker.Action == "exit" {
+			event.Worker.ExitCode = 1
+		}
+	}
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict == Pass || r.Measurements == nil || r.Measurements.Workers[0].ExitCode == nil || *r.Measurements.Workers[0].ExitCode != 1 {
+		t.Fatalf("actual failed exit was lost: %+v", r)
 	}
 }
