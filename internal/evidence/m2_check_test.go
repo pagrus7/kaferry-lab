@@ -979,3 +979,30 @@ func TestM2OutputAfterActualKillRequestDoesNotInvalidateEarlierTrigger(t *testin
 		t.Fatalf("post-request observations invalidated prior trigger: %+v", r)
 	}
 }
+
+func TestVisibleCrashTailCandidateCannotReplaceDecodedKnownOutput(t *testing.T) {
+	// Given a later destination tail but no decoded record in the claimed
+	// visible-unsaved audit; full known output appears only after the crash.
+	c := repeatedM2Control()
+	kept := c.e[:0]
+	for _, e := range c.e {
+		if e.Output != nil && e.Output.AuditID == "lag2" {
+			continue
+		}
+		if e.Audit != nil && e.Audit.ID == "lag2" {
+			scan := &e.Audit.Scans[0]
+			scan.End, scan.Reached, scan.StableEnd = 0, 0, 1
+		}
+		kept = append(kept, e)
+	}
+	c.e = kept
+	for i := range c.e {
+		c.e[i].Seq = identity.Int64(i + 1)
+	}
+	// When checking the history, Then a possible suspension candidate never
+	// satisfies the required known-visible/unsaved crash observation.
+	r := CheckM2(c.m, c.a, c.e)
+	if r.Verdict != Inconclusive || !m2HasCode(r, "visible_unsaved") {
+		t.Fatalf("unscanned tail became a visible known write: %+v", r)
+	}
+}

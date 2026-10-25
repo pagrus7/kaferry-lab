@@ -795,7 +795,10 @@ func (c *scenarioController) repeatedKill(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if scenarioVisibleUnsaved(c.ledger, m, audit.Group) {
+		// A separately observed new tail can precede this scan's decoded bytes.
+		// Stop promptly, then establish actual known output and unsaved offsets
+		// with the complete frozen audit below. Tail growth alone is no trigger.
+		if scenarioVisibleUnsaved(c.ledger, m, audit.Group) || scenarioObservedNewTail(audit.Output) {
 			visible = audit.ID
 			break
 		}
@@ -1026,6 +1029,19 @@ func scenarioVisibleUnsaved(ledger evidence.Ledger, m scenarioMembershipResult, 
 			if saved.ErrorCode == 0 && saved.Source.Cluster == entry.Source.Cluster && saved.Source.Topic == entry.Source.Topic && saved.Source.TopicID == entry.Source.TopicID && saved.Source.Partition == entry.Source.Partition && (!saved.Saved || saved.Source.Offset <= entry.Source.Offset) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// This is a reason to suspend and inspect, not proof of a known output record.
+func scenarioObservedNewTail(output kafkaScanSnapshot) bool {
+	if output.Error != "" || len(output.After) != len(output.Scans) {
+		return false
+	}
+	for p, scan := range output.Scans {
+		if output.After[p].HighWatermark > scan.End {
+			return true
 		}
 	}
 	return false

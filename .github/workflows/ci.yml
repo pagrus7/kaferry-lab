@@ -274,10 +274,18 @@ jobs:
           assert 'vcs.revision=' + os.environ['GITHUB_SHA'] in manifest['lab_source']['proof'], manifest['lab_source']
           PY
       - name: Independently recheck without Kafka, network or executable
+        if: always() && hashFiles('.cache/m2-release/attempt/bundle/complete.json') != ''
         shell: bash
         run: |
           set -euo pipefail
-          expected=$(cat .cache/m2-release/scenario.exit)
+          expected=$(python3 - <<'PY'
+          import json
+          with open('.cache/m2-release/result.json') as stream:
+              verdict = json.load(stream)['result']['verdict']
+          print({'PASS': 0, 'VIOLATION': 1, 'HARNESS_ERROR': 2, 'UNSUPPORTED': 3, 'INCONCLUSIVE': 4}[verdict])
+          PY
+          )
+          printf '%s\n' "$expected" > .cache/m2-release/recheck-expected.exit
           sha256sum .cache/m2-release/attempt/release/kaferry > .cache/m2-release/executed-binary.sha256
           rm .cache/m2-release/attempt/release/kaferry
           test ! -e .cache/m2-release/attempt/release/kaferry

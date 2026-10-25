@@ -649,3 +649,35 @@ func TestScenarioPreparationStopsAtAttemptAndContextBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestVisibleCrashCandidateNeedsKnownBytesAfterSuspension(t *testing.T) {
+	// Given full input but no decoded destination records, with one later tail.
+	ledger, output := scenarioSyntheticOutput(t)
+	for p := range output.Scans {
+		output.Scans[p].Records = nil
+	}
+	scenarioSyntheticBounds(&output)
+	if scenarioObservedNewTail(output) {
+		t.Fatal("unchanged empty output became a candidate")
+	}
+	output.After[0].HighWatermark = 1
+	output.After[0].LastStable = 1
+	// When the tail advances beyond the sampled scan, Then it can prompt STOP
+	// and a fresh full audit, but cannot satisfy visible-known-byte evidence.
+	if !scenarioObservedNewTail(output) {
+		t.Fatal("observed unscanned tail was ignored")
+	}
+	membership, err := scenarioMembership(ledger, output)
+	if err != nil || len(membership.Visible) != 0 || scenarioVisibleUnsaved(ledger, membership, kafkaGroupSnapshot{}) {
+		t.Fatal("tail alone was promoted to known visible output", membership, err)
+	}
+	output.Error = "incomplete transport observation"
+	if scenarioObservedNewTail(output) {
+		t.Fatal("failed observation prompted a candidate")
+	}
+	output.Error = ""
+	output.After = nil
+	if scenarioObservedNewTail(output) {
+		t.Fatal("missing boundary observation prompted a candidate")
+	}
+}
