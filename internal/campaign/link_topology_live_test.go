@@ -1,11 +1,13 @@
 package campaign
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -29,6 +31,7 @@ type linkTopologyProbe struct {
 	Metadata            *linkTopologyMetadata    `json:",omitempty"`
 	Coordinator         *linkTopologyCoordinator `json:",omitempty"`
 	Error               string                   `json:",omitempty"`
+	PrivateReference    string                   `json:",omitempty"`
 }
 
 func TestLiveOwnedWorkerLinkTopology(t *testing.T) {
@@ -84,7 +87,7 @@ func TestLiveOwnedWorkerLinkTopology(t *testing.T) {
 		{"source_direct", state.Source, state.ClusterIDs[0]},
 		{"destination_direct", state.Destination, state.ClusterIDs[1]},
 	} {
-		observed, err := readLiveLinkMetadata(ctx, target.endpoint, target.cluster)
+		observed, err := readLiveLinkMetadata(ctx, state, target.endpoint, target.cluster)
 		logLiveCampaign(t, "link_metadata_"+target.role, observed)
 		if err != nil {
 			t.Fatal(err)
@@ -96,7 +99,7 @@ func TestLiveOwnedWorkerLinkTopology(t *testing.T) {
 	defer done()
 	var coordinator *linkTopologyCoordinator
 	for attempt := 1; attempt <= 8; attempt++ {
-		observed, retry, err := readLiveLinkCoordinator(ready, state.WorkerSource, "lab-links-"+state.RunID)
+		observed, retry, err := readLiveLinkCoordinator(ready, state, state.WorkerSource, "lab-links-"+state.RunID)
 		logLiveCampaign(t, "link_coordinator_attempt", struct {
 			Attempt     int
 			Observation linkTopologyProbe
@@ -121,7 +124,7 @@ func TestLiveOwnedWorkerLinkTopology(t *testing.T) {
 	// Then the validated coordinator endpoint can be queried without discovery:
 	// it is exactly the source WORKER proxy, while the direct observer remains live.
 	for _, target := range []struct{ endpoint, cluster string }{{coordinator.Node.Address, state.ClusterIDs[0]}, {state.Source, state.ClusterIDs[0]}} {
-		observed, err := readLiveLinkMetadata(ctx, target.endpoint, target.cluster)
+		observed, err := readLiveLinkMetadata(ctx, state, target.endpoint, target.cluster)
 		logLiveCampaign(t, "link_after_coordinator", observed)
 		if err != nil {
 			t.Fatal(err)
@@ -137,13 +140,18 @@ func TestLiveOwnedWorkerLinkTopology(t *testing.T) {
 	// setup receipts/logs and performs its exact-resource cleanup after this test.
 }
 
-func readLiveLinkMetadata(ctx context.Context, endpoint, cluster string) (observed linkTopologyProbe, err error) {
+func readLiveLinkMetadata(ctx context.Context, state fixture.State, endpoint, cluster string) (observed linkTopologyProbe, err error) {
 	origin := time.Now()
 	observed = linkTopologyProbe{Endpoint: endpoint, Operation: "kafka-go Metadata-v8 allocated-empty-topic-array", StartedAt: origin.UTC()}
+	action := []string{"dial", "tcp4", endpoint, "Metadata-v8"}
+	var notice bytes.Buffer
 	defer func() {
+		err = errors.Join(err, ctx.Err())
 		observed.ElapsedNanoseconds = time.Since(origin).Nanoseconds()
 		if err != nil {
+			observed.Metadata = nil
 			observed.Error = "raw metadata request or topology validation failed"
+			observed.PrivateReference, err = retainLinkTopologyFailure(state, action, notice.Bytes(), err)
 		}
 	}()
 	if _, err = ownedBrokerPort(endpoint); err != nil {
@@ -157,11 +165,20 @@ func readLiveLinkMetadata(ctx context.Context, endpoint, cluster string) (observ
 		return observed, e
 	}
 	observed.Opened = true
-	defer func() { closeErr := conn.Close(); observed.Closed = closeErr == nil; err = errors.Join(err, closeErr) }()
+	local, remote := conn.LocalAddr().String(), conn.RemoteAddr().String()
+	defer func() {
+		closeErr := conn.Close()
+		observed.Closed = linkTopologyBenignClose(closeErr, net.ErrClosed)
+		if !observed.Closed {
+			_, safe := retainLinkTopologyFailure(state, []string{"close", "tcp4", endpoint, "local", local, "remote", remote, "Metadata-v8"}, nil, closeErr)
+			err = errors.Join(err, safe)
+		}
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	if outer, ok := ctx.Deadline(); ok && outer.Before(deadline) {
 		deadline = outer
 	}
+	action = []string{"set-deadline", "tcp4", endpoint, "local", local, "remote", remote, deadline.UTC().Format(time.RFC3339Nano), "Metadata-v8"}
 	if err = conn.SetDeadline(deadline); err != nil {
 		return observed, err
 	}
@@ -170,7 +187,8 @@ func readLiveLinkMetadata(ctx context.Context, endpoint, cluster string) (observ
 	rw := struct {
 		io.Reader
 		io.Writer
-	}{io.LimitReader(conn, 64<<10), conn}
+	}{io.TeeReader(io.LimitReader(conn, (64<<10)+1), &notice), conn}
+	action = []string{"round-trip", "tcp4", endpoint, "local", local, "remote", remote, "Metadata-v8", "allocated-empty-topics"}
 	message, e := protocol.RoundTrip(rw, 8, 1, "kaferry-lab-link-topology", &metadataAPI.Request{TopicNames: []string{}, AllowAutoTopicCreation: false})
 	if e != nil {
 		return observed, e
@@ -193,13 +211,21 @@ func readLiveLinkMetadata(ctx context.Context, endpoint, cluster string) (observ
 	return observed, errors.Join(validateLinkTopologyMetadata(*value, cluster, endpoint), ctx.Err())
 }
 
-func readLiveLinkCoordinator(ctx context.Context, endpoint, group string) (observed linkTopologyProbe, retry bool, err error) {
+func readLiveLinkCoordinator(ctx context.Context, state fixture.State, endpoint, group string) (observed linkTopologyProbe, retry bool, err error) {
 	origin := time.Now()
 	observed = linkTopologyProbe{Endpoint: endpoint, Operation: "Sarama raw FindCoordinator-v3", StartedAt: origin.UTC()}
+	action := []string{"open", "sarama", endpoint, "FindCoordinator-v3", group}
+	var notice []byte
 	defer func() {
+		err = errors.Join(err, ctx.Err())
 		observed.ElapsedNanoseconds = time.Since(origin).Nanoseconds()
 		if err != nil {
+			if observed.Coordinator != nil {
+				notice, _ = json.Marshal(observed.Coordinator)
+			}
+			observed.Coordinator = nil
 			observed.Error = "raw coordinator request or topology validation failed"
+			observed.PrivateReference, retry, err = retainLinkCoordinatorFailure(state, action, notice, err, retry && ctx.Err() == nil)
 		}
 	}()
 	if _, err = ownedBrokerPort(endpoint); err != nil {
@@ -211,9 +237,10 @@ func readLiveLinkCoordinator(ctx context.Context, endpoint, group string) (obser
 	broker := sarama.NewBroker(endpoint)
 	defer func() {
 		e := broker.Close()
-		observed.Closed = e == nil || errors.Is(e, sarama.ErrNotConnected)
-		if e != nil && !errors.Is(e, sarama.ErrNotConnected) {
-			err = errors.Join(err, errors.New("raw coordinator client close failed"))
+		observed.Closed = linkTopologyBenignClose(e, sarama.ErrNotConnected)
+		if !observed.Closed {
+			_, safe := retainLinkTopologyFailure(state, []string{"close", "sarama", endpoint, "FindCoordinator-v3", group}, nil, e)
+			err = errors.Join(err, safe)
 			retry = false
 		}
 	}()
@@ -231,6 +258,7 @@ func readLiveLinkCoordinator(ctx context.Context, endpoint, group string) (obser
 	if err = broker.Open(config); err != nil {
 		return observed, false, err
 	}
+	action = []string{"connected", "sarama", endpoint, "FindCoordinator-v3", group}
 	connected, e := broker.Connected()
 	if e != nil || !connected {
 		if e == nil {
@@ -239,6 +267,7 @@ func readLiveLinkCoordinator(ctx context.Context, endpoint, group string) (obser
 		return observed, linkTopologyTransportRetryable(e), e
 	}
 	observed.Opened = true
+	action = []string{"request", "sarama", endpoint, "FindCoordinator-v3", group}
 	response, e := broker.FindCoordinator(&sarama.FindCoordinatorRequest{Version: 3, CoordinatorKey: group, CoordinatorType: sarama.CoordinatorGroup})
 	if e != nil {
 		return observed, linkTopologyTransportRetryable(e), e
@@ -250,16 +279,35 @@ func readLiveLinkCoordinator(ctx context.Context, endpoint, group string) (obser
 	observed.Coordinator = value
 	if response.Coordinator != nil {
 		address := response.Coordinator.Addr()
+		value.Node = &linkTopologyNode{ID: response.Coordinator.ID(), Address: address}
 		if len(address) > 256 {
 			return observed, false, errors.New("coordinator endpoint exceeds fixture bound")
 		}
-		value.Node = &linkTopologyNode{ID: response.Coordinator.ID(), Address: address}
 	}
 	retry, err = validateLinkTopologyCoordinator(*value, endpoint)
 	if ctx.Err() != nil {
 		return observed, false, errors.Join(err, ctx.Err())
 	}
 	return observed, retry, err
+}
+
+// Only the exact expected closed handle (or its direct socket wrapper) is
+// benign. A joined permission/unknown branch must never disappear.
+func linkTopologyBenignClose(err, expected error) bool {
+	if err == nil || err == expected {
+		return true
+	}
+	socket, ok := err.(*net.OpError)
+	return ok && socket.Err == expected
+}
+func retainLinkCoordinatorFailure(state fixture.State, action []string, notice []byte, cause error, retry bool) (string, bool, error) {
+	reference, retained := fixture.RetainLinkNetworkFailure(state, action, notice, cause)
+	return reference, retry && retained == nil, errors.Join(fmt.Errorf("raw coordinator operation failed; private receipt %s", reference), retained)
+}
+
+func retainLinkTopologyFailure(state fixture.State, action []string, notice []byte, cause error) (string, error) {
+	reference, retained := fixture.RetainLinkNetworkFailure(state, action, notice, cause)
+	return reference, errors.Join(fmt.Errorf("linked topology operation failed; private receipt %s", reference), retained)
 }
 
 func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run fixture.Executor) error {

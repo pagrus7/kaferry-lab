@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -192,5 +197,106 @@ func TestLinkTopologyProxyInspectionPreservesSafeRetainedFailure(t *testing.T) {
 	})
 	if !errors.Is(err, retained) || calls != 1 {
 		t.Fatal("private receipt diagnostic discarded or action retried", calls, err)
+	}
+}
+
+func linkTopologyNoticeState(t *testing.T) fixture.State {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	s := fixture.State{RunID: "test", Image: fixture.Image, Network: "kaferry-lab-test", Containers: []string{"kaferry-lab-test-source", "kaferry-lab-test-dest"}, ClusterIDs: []string{"source-cluster", "dest-cluster"}, Source: "127.0.0.1:20101", Destination: "127.0.0.1:20102", WorkerSource: "127.0.0.1:20201", WorkerDestination: "127.0.0.1:20202", Proxy: &fixture.ProxyState{Image: fixture.ProxyImage, Container: "kaferry-lab-test-links", API: "127.0.0.1:20300", Source: fixture.ProxyMapping{Name: "kaferry-lab-test-source-worker", Listen: "0.0.0.0:8666", Upstream: "kaferry-lab-test-source:29092"}, Destination: fixture.ProxyMapping{Name: "kaferry-lab-test-dest-worker", Listen: "0.0.0.0:8667", Upstream: "kaferry-lab-test-dest:29092"}}}
+	public := filepath.Join(".cache", "fixtures", s.RunID+"-links")
+	private := filepath.Join(".cache", "fixtures-private", s.RunID+"-links")
+	for _, dir := range []string{public, private} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(private, "PRIVATE.json"), []byte(`{"RunID":"test"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func TestLinkTopologyProductionFailureBoundaryRetainsExactPrivateCause(t *testing.T) {
+	// Given original typed I/O notices from each topology boundary, when the
+	// actual terminal boundary runs, then public observations/errors get only a
+	// reference while the exact action/cause/response prefix survives privately.
+	for _, stage := range []string{"dial", "set-deadline", "round-trip", "close"} {
+		t.Run(stage, func(t *testing.T) {
+			state := linkTopologyNoticeState(t)
+			action := []string{stage, "tcp4", state.WorkerSource, "Metadata-v8"}
+			original := &net.OpError{Op: stage, Net: "tcp", Err: errors.Join(syscall.EPERM, errors.New("PRIVATE_TOPOLOGY=unknown notice"))}
+			notice := []byte("PRIVATE_RESPONSE=binary-prefix")
+			reference, err := retainLinkTopologyFailure(state, action, notice, original)
+			if err == nil || reference == "" || strings.Contains(err.Error(), "PRIVATE_") {
+				t.Fatal("topology raw failure leaked or lost")
+			}
+			body, e := os.ReadFile(reference)
+			var receipt struct {
+				Action                        []string
+				Notice, CauseText             []byte
+				NoticeComplete, CauseComplete bool
+			}
+			if e != nil || json.Unmarshal(body, &receipt) != nil || !reflect.DeepEqual(receipt.Action, action) || !bytes.Equal(receipt.Notice, notice) || string(receipt.CauseText) != original.Error() || !receipt.NoticeComplete || !receipt.CauseComplete {
+				t.Fatal("exact private topology notice/action lost")
+			}
+			files, e := filepath.Glob(filepath.Join(".cache", "fixtures", state.RunID+"-links", "*.json"))
+			if e != nil || len(files) != 1 {
+				t.Fatal("missing public selected summary", e)
+			}
+			for _, file := range files {
+				body, e := os.ReadFile(file)
+				if e != nil || bytes.Contains(body, []byte("PRIVATE_")) {
+					t.Fatal("unsafe public topology summary")
+				}
+			}
+		})
+	}
+}
+func TestLinkCoordinatorProductionRetentionGateRejectsFatalAndMissingEvidence(t *testing.T) {
+	// Given a clean request refusal or mixed fatal result, when the production
+	// coordinator retention gate runs, then retry keeps its original all-leaf
+	// classification only after complete mandatory private/public retention.
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	for _, kind := range []string{"refused", "mixed PRIVATE", "context", "close", "receipt failure"} {
+		t.Run(kind, func(t *testing.T) {
+			state := linkTopologyNoticeState(t)
+			cause := error(refused)
+			switch kind {
+			case "mixed PRIVATE":
+				cause = &net.OpError{Op: "dial", Net: "tcp", Err: errors.Join(syscall.ECONNREFUSED, errors.New("PRIVATE_TOPOLOGY=fatal"))}
+			case "context":
+				cause = errors.Join(refused, context.Canceled)
+			case "close":
+				cause = errors.Join(refused, errors.New("PRIVATE_TOPOLOGY=close failure"))
+			case "receipt failure":
+				dir := filepath.Join(".cache", "fixtures", state.RunID+"-links")
+				if e := os.Rename(dir, dir+".retained"); e != nil {
+					t.Fatal(e)
+				}
+				if e := os.WriteFile(dir, nil, 0600); e != nil {
+					t.Fatal(e)
+				}
+			}
+			_, retry, err := retainLinkCoordinatorFailure(state, []string{"request", "sarama", state.WorkerSource, "FindCoordinator-v3", "lab-links-test"}, nil, cause, linkTopologyTransportRetryable(cause))
+			if err == nil || strings.Contains(err.Error(), "PRIVATE_") || retry != (kind == "refused") {
+				t.Fatal("fatal/missing coordinator evidence allowed retry or leaked cause", kind, retry)
+			}
+		})
+	}
+}
+func TestLinkTopologyBenignCloseDoesNotSuppressJoinedFatal(t *testing.T) {
+	// Given an expected closed marker, when a close also contains permission or
+	// unknown failure, then only exact/direct expected handles remain benign.
+	for _, tc := range []struct {
+		err    error
+		benign bool
+	}{
+		{nil, true}, {net.ErrClosed, true}, {&net.OpError{Op: "close", Net: "tcp", Err: net.ErrClosed}, true},
+		{errors.Join(net.ErrClosed, syscall.EPERM), false},
+		{&net.OpError{Op: "close", Net: "tcp", Err: errors.Join(net.ErrClosed, errors.New("PRIVATE_CLOSE=unknown"))}, false},
+	} {
+		if got := linkTopologyBenignClose(tc.err, net.ErrClosed); got != tc.benign {
+			t.Fatal("joined close failure suppressed", got)
+		}
 	}
 }

@@ -79,10 +79,26 @@ type linkResources struct {
 type linkRequest func(context.Context, string, string, string, []byte) (int, []byte, error)
 
 // Only socket failures from the fixed loopback HTTP request carry this marker.
-// HTTP response and unknown error details are discarded before returning.
+// Origin is a retry property, never permission to publish the cause text.
 type linkSocketError struct{ cause error }
 
-func (e *linkSocketError) Error() string { return "proxy HTTP transport failed: " + e.cause.Error() }
+// Retained API failures preserve the original private classification tree while
+// Error stays safe for CLI/receipts, including joined fatal/private causes.
+type linkAPIFailure struct {
+	cause     error
+	reference string
+	retryable bool
+}
+
+func (e *linkAPIFailure) Error() string {
+	if e.reference == "" {
+		return "owned proxy API operation failed; private evidence incomplete"
+	}
+	return "owned proxy API operation failed; private receipt " + e.reference
+}
+func (e *linkAPIFailure) Unwrap() error { return e.cause }
+
+func (e *linkSocketError) Error() string { return "proxy HTTP request socket failed" }
 func (e *linkSocketError) Unwrap() error { return e.cause }
 
 type linkAPIReceipt struct {
@@ -95,6 +111,8 @@ type linkAPIReceipt struct {
 	Proxies                []ProxyMapping `json:",omitempty"`
 	Version                string         `json:",omitempty"`
 	Error                  string         `json:",omitempty"`
+	PrivateReference       string         `json:",omitempty"`
+	Cause                  linkDockerCause
 }
 
 func linkDirectory(id string) string { return filepath.Join(".cache", "fixtures", id+"-links") }
@@ -319,6 +337,9 @@ func setupLinks(ctx context.Context, s *State, run Executor, request linkRequest
 }
 
 func linkStartupRetryable(err error) bool {
+	if retained, ok := err.(*linkAPIFailure); ok {
+		return retained.retryable
+	}
 	// Every outcome must permit retry; a failed receipt beside a transient
 	// request cannot authorize another request.
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -360,21 +381,57 @@ func linkHTTP(ctx context.Context, endpoint, method, path string, body []byte) (
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: (&net.Dialer{Timeout: time.Second}).DialContext}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	response, e := client.Do(request)
+	return linkHTTPExchange(request, client.Do)
+}
+
+// The production HTTP exchange keeps original errors/response prefixes until
+// linkAPICall has retained them privately. This narrow Do seam also permits
+// literal failure controls without making sockets or constructing a transport.
+func linkHTTPExchange(request *http.Request, do func(*http.Request) (*http.Response, error)) (status int, data []byte, err error) {
+	response, e := do(request)
+	if response != nil {
+		status = response.StatusCode
+		if response.Body != nil {
+			defer func() { err = errors.Join(err, response.Body.Close()) }()
+		}
+	}
 	if e != nil {
 		var socket *net.OpError
 		if errors.As(e, &socket) {
-			return 0, nil, &linkSocketError{cause: e}
+			return status, nil, &linkSocketError{cause: e}
 		}
-		return 0, nil, errors.New("proxy HTTP transport failed; non-socket details discarded")
+		return status, nil, e
 	}
-	defer response.Body.Close()
-	data, e := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
-	if e != nil || len(data) > 64<<10 {
-		return response.StatusCode, nil, errors.New("proxy HTTP response incomplete or oversized")
+	if response == nil || response.Body == nil {
+		return status, nil, errors.New("proxy HTTP response/body missing")
 	}
-	return response.StatusCode, data, nil
+	data, err = io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+	if (status < 200 || status >= 300) && response.Status != "" {
+		err = errors.Join(err, fmt.Errorf("proxy HTTP reported status %s", response.Status))
+	}
+	if len(data) > 64<<10 {
+		err = errors.Join(err, errors.New("proxy HTTP response exceeds evidence bound"))
+	}
+	return status, data, err
 }
+
+// Only our origin marker is stripped for private serialization; arbitrary URL,
+// OS and codec error strings remain exact. Joined branches retain every cause.
+func linkOriginalHTTPFailure(err error) error {
+	if socket, ok := err.(*linkSocketError); ok {
+		return socket.cause
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		branches := joined.Unwrap()
+		original := make([]error, len(branches))
+		for i, branch := range branches {
+			original[i] = linkOriginalHTTPFailure(branch)
+		}
+		return errors.Join(original...)
+	}
+	return err
+}
+
 func linkAPICall(ctx context.Context, s State, run Executor, request linkRequest, method, path string, mapping *ProxyMapping, expectedCount int) (err error) {
 	if s.Proxy == nil || request == nil {
 		return errors.New("linked fixture API executor missing")
@@ -394,6 +451,9 @@ func linkAPICall(ctx context.Context, s State, run Executor, request linkRequest
 	default:
 		return errors.New("unsupported proxy setup operation")
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if _, err = inspectLinkResources(ctx, s, run); err != nil {
 		return err
 	}
@@ -402,48 +462,64 @@ func linkAPICall(ctx context.Context, s State, run Executor, request linkRequest
 	if err = linkReceipt(s, "api-request", receipt); err != nil {
 		return err
 	}
+	var response, body []byte
 	defer func() {
+		err = errors.Join(err, ctx.Err())
 		receipt.ElapsedNanoseconds = time.Since(origin).Nanoseconds()
+		var retainErr error
 		if err != nil {
-			receipt.Error = "owned proxy API/configuration operation failed"
-			if socket, ok := err.(*linkSocketError); ok {
-				receipt.Error = socket.Error()
+			original := err
+			retryable := linkStartupRetryable(original) && ctx.Err() == nil
+			rawCause := linkOriginalHTTPFailure(original)
+			action := []string{"HTTP", method, "http://" + s.Proxy.API + path}
+			if len(body) > 0 {
+				action = append(action, "request-body", string(body))
 			}
+			receipt.PrivateReference, retainErr = RetainLinkNetworkFailure(s, action, response, rawCause)
+			receipt.Error = "owned proxy API/configuration operation failed"
+			receipt.Cause = safeLinkDockerCause(ctx, rawCause)
+			err = &linkAPIFailure{cause: original, reference: receipt.PrivateReference, retryable: retryable && retainErr == nil}
 		}
-		err = errors.Join(err, linkReceipt(s, "api", receipt))
+		err = errors.Join(err, retainErr, linkReceipt(s, "api", receipt))
 	}()
-	var body []byte
 	if mapping != nil {
 		body, _ = json.Marshal(struct {
 			ProxyMapping
 			Enabled bool `json:"enabled"`
 		}{*mapping, true})
 	}
-	status, response, e := request(ctx, s.Proxy.API, method, path, body)
+	status, returned, e := request(ctx, s.Proxy.API, method, path, body)
+	response = returned
 	receipt.Status = status
-	if socket, ok := e.(*linkSocketError); ok {
-		return socket
+	if e != nil {
+		return e
 	}
-	if e != nil || status < 200 || status >= 300 {
-		return errors.New("proxy HTTP operation failed; response body discarded")
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("proxy HTTP operation returned status %d", status)
 	}
 	switch {
 	case path == "/version":
 		var version struct{ Version string }
-		if json.Unmarshal(response, &version) != nil || version.Version != "2.12.0" {
+		if e := json.Unmarshal(response, &version); e != nil {
+			return e
+		}
+		if version.Version != "2.12.0" {
 			return errors.New("proxy version mismatch")
 		}
 		receipt.Version = version.Version
 	case method == "POST":
 		var proxy linkAPIProxy
-		if json.Unmarshal(response, &proxy) != nil || mapping == nil || !proxy.matches(*mapping) {
+		if e := json.Unmarshal(response, &proxy); e != nil {
+			return e
+		}
+		if mapping == nil || !proxy.matches(*mapping) {
 			return errors.New("proxy creation response does not match owned mapping")
 		}
 		receipt.Proxies = []ProxyMapping{*mapping}
 	default:
 		var proxies map[string]linkAPIProxy
-		if json.Unmarshal(response, &proxies) != nil {
-			return errors.New("proxy configuration response malformed")
+		if e := json.Unmarshal(response, &proxies); e != nil {
+			return e
 		}
 		if len(proxies) != expectedCount {
 			return errors.New("unexpected proxy configuration membership")

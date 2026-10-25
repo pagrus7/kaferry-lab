@@ -92,7 +92,7 @@ func writeLinkPrivate(dir, name string, value any) (string, error) {
 	if err != nil {
 		return "", errors.New("private link receipt encoding failed")
 	}
-	if len(body) > 256<<10 {
+	if len(body)+1 > 256<<10 {
 		return "", errors.New("private link receipt exceeds evidence bound")
 	}
 	var f *os.File

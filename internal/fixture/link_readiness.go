@@ -61,7 +61,7 @@ func kafkaLinkBrokerProbe(ctx context.Context, endpoint string) (observed linkBr
 	broker := sarama.NewBroker(endpoint)
 	defer func() {
 		closeErr := broker.Close()
-		observed.Closed = closeErr == nil || errors.Is(closeErr, sarama.ErrNotConnected)
+		observed.Closed = closeErr == nil || closeErr == sarama.ErrNotConnected
 		if !observed.Closed {
 			err = errors.Join(err, fmt.Errorf("linked broker close failed: %w", closeErr))
 		}

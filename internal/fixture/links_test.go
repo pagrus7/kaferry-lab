@@ -88,6 +88,11 @@ func linkTestDirectory(t *testing.T, s State) {
 	if e := os.MkdirAll(linkDirectory(s.RunID), 0700); e != nil {
 		t.Fatal(e)
 	}
+	if _, e := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "PRIVATE.json")); errors.Is(e, os.ErrNotExist) {
+		if e = reserveLinkEvidence(s.RunID); e != nil {
+			t.Fatal(e)
+		}
+	}
 }
 func linkTestProxy(m ProxyMapping) map[string]any {
 	return map[string]any{"name": m.Name, "listen": m.Listen, "upstream": m.Upstream, "enabled": true, "toxics": []any{}}
@@ -166,9 +171,10 @@ func TestLinkedSetupRejectsForeignMappingAndGlobalReset(t *testing.T) {
 		t.Fatal("global reset accepted")
 	}
 }
-func TestLinkedAPIErrorsDiscardBodiesAndInspectEnvironment(t *testing.T) {
+func TestLinkedAPIFailuresKeepBodiesPrivateAndOmitInspectEnvironment(t *testing.T) {
 	// Given an owned endpoint that returns an unsafe error body, when setup fails,
-	// then receipts retain operation/status without the body or inspect Env.
+	// then public receipts retain operation/status without body or inspect Env,
+	// while the original failed body/cause remain private.
 	t.Chdir(t.TempDir())
 	s := linkTestState(true)
 	linkTestDirectory(t, s)
@@ -180,7 +186,7 @@ func TestLinkedAPIErrorsDiscardBodiesAndInspectEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, e := filepath.Glob(filepath.Join(linkDirectory(s.RunID), "*.json"))
-	if e != nil || len(files) != 2 {
+	if e != nil || len(files) != 3 {
 		t.Fatalf("missing intent/outcome receipts: %v %v", files, e)
 	}
 	for _, file := range files {
@@ -225,45 +231,39 @@ func TestLinkedStartupRetriesOnlyRequestSocketAvailability(t *testing.T) {
 	}
 }
 
-func TestLinkedSocketDenialRetainsExactSafeNoticeAndCause(t *testing.T) {
-	// Given a constructed socket error without a socket call, when the API
-	// records it, then its safe notice/cause survive without response bytes.
+func TestLinkedSocketDenialRetainsExactPrivateNoticeAndCause(t *testing.T) {
+	// Given a literal marked denial, when the production API path records it,
+	// then typed classification remains but raw notice/body never become public.
 	t.Chdir(t.TempDir())
 	s := linkTestState(true)
 	linkTestDirectory(t, s)
 	denial := &linkSocketError{cause: &url.Error{Op: "Get", URL: "http://127.0.0.1:20300/version", Err: &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 20300}, Err: &os.SyscallError{Syscall: "connect", Err: syscall.EACCES}}}}
-	request := func(context.Context, string, string, string, []byte) (int, []byte, error) {
-		return 0, []byte("HTTP_SECRET=discard"), denial
-	}
+	notice := []byte("HTTP_SECRET=private-body")
+	request := func(context.Context, string, string, string, []byte) (int, []byte, error) { return 0, notice, denial }
 	err := linkAPICall(context.Background(), s, linkTestDocker(t, s, nil), request, "GET", "/version", nil, 0)
-	if !errors.Is(err, syscall.EACCES) || !strings.Contains(err.Error(), denial.Error()) || linkStartupRetryable(err) {
-		t.Fatalf("denial changed or permitted retry: %v", err)
+	if !errors.Is(err, syscall.EACCES) || strings.Contains(err.Error(), denial.cause.Error()) || linkStartupRetryable(err) {
+		t.Fatal("denial leaked or allowed retry")
 	}
-	files, e := filepath.Glob(filepath.Join(linkDirectory(s.RunID), "api-*.json"))
-	if e != nil || len(files) != 2 {
-		t.Fatalf("missing intent/outcome: %v %v", files, e)
+	assertLinkPublicWithholds(t, s, notice, []byte(denial.cause.Error()))
+	files, e := filepath.Glob(filepath.Join(linkPrivateDirectory(s.RunID), "docker-*.json"))
+	if e != nil || len(files) != 1 {
+		t.Fatal("private failure missing", e)
 	}
-	found := false
-	for _, file := range files {
-		body, e := os.ReadFile(file)
-		if e != nil || strings.Contains(string(body), "SECRET") {
-			t.Fatalf("unsafe/missing receipt: %v", e)
-		}
-		var receipt linkAPIReceipt
-		if e = json.Unmarshal(body, &receipt); e != nil {
-			t.Fatal(e)
-		}
-		found = found || receipt.Error == denial.Error()
+	body, e := os.ReadFile(files[0])
+	var receipt struct {
+		Action                        []string
+		Notice, CauseText             []byte
+		NoticeComplete, CauseComplete bool
 	}
-	if !found {
-		t.Fatal("exact safe socket notice missing from outcome")
+	if e != nil || json.Unmarshal(body, &receipt) != nil || string(receipt.CauseText) != denial.cause.Error() || string(receipt.Notice) != string(notice) || !receipt.NoticeComplete || !receipt.CauseComplete || len(receipt.Action) != 3 {
+		t.Fatal("exact private action/notice/cause lost")
 	}
 }
 
 func TestLinkedStartupStopsBeforeAnotherRequestAfterFatalOutcome(t *testing.T) {
 	// Given startup's receipt/ownership path and a fake HTTP executor, when a
 	// response or receipt fails, then no second request or POST can be sent.
-	for _, kind := range []string{"version", "malformed", "authorization", "unknown", "permission", "receipt beside refused", "ownership"} {
+	for _, kind := range []string{"version", "malformed", "authorization", "unknown", "permission", "marked PRIVATE", "marked joined fatal", "receipt beside refused", "ownership"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			s := linkTestState(false)
@@ -301,6 +301,10 @@ func TestLinkedStartupStopsBeforeAnotherRequestAfterFatalOutcome(t *testing.T) {
 					return 403, []byte("SECRET"), nil
 				case "unknown":
 					return 0, nil, errors.New("unknown failure")
+				case "marked PRIVATE":
+					return 0, []byte("PRIVATE_BODY"), &linkSocketError{cause: &net.OpError{Op: "read", Net: "tcp", Err: errors.New("PRIVATE_CAUSE=unknown")}}
+				case "marked joined fatal":
+					return 0, nil, &linkSocketError{cause: &net.OpError{Op: "dial", Net: "tcp", Err: errors.Join(syscall.ECONNREFUSED, errors.New("PRIVATE_CAUSE=joined fatal"))}}
 				case "permission":
 					return 0, nil, &linkSocketError{cause: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.EPERM}}
 				case "receipt beside refused":
@@ -326,6 +330,12 @@ func TestLinkedStartupStopsBeforeAnotherRequestAfterFatalOutcome(t *testing.T) {
 			}
 			if err == nil || calls != wantCalls || linkStartupRetryable(err) {
 				t.Fatalf("fatal startup retried: calls=%d want=%d err=%v", calls, wantCalls, err)
+			}
+			if strings.Contains(err.Error(), "PRIVATE") {
+				t.Fatal("private marked cause leaked through startup")
+			}
+			if kind == "marked PRIVATE" || kind == "marked joined fatal" {
+				assertLinkPublicWithholds(t, s, []byte("PRIVATE_CAUSE"), []byte("PRIVATE_BODY"))
 			}
 			if kind == "receipt beside refused" && (!errors.Is(err, syscall.ECONNREFUSED) || !errors.Is(err, syscall.ENOTDIR)) {
 				t.Fatalf("joined causes lost: %v", err)
@@ -404,9 +414,6 @@ func TestLinkedCleanupTargetsIDsAfterEvidenceAndKeepsForeignResources(t *testing
 	t.Chdir(t.TempDir())
 	s := linkTestState(true)
 	linkTestDirectory(t, s)
-	if err := reserveLinkEvidence(s.RunID); err != nil {
-		t.Fatal(err)
-	}
 	var removed []string
 	inspect := linkTestDocker(t, s, nil)
 	run := func(ctx context.Context, args ...string) ([]byte, error) {

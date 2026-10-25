@@ -19,9 +19,6 @@ func linkRetentionState(t *testing.T) State {
 	t.Chdir(t.TempDir())
 	s := linkTestState(true)
 	linkTestDirectory(t, s)
-	if err := reserveLinkEvidence(s.RunID); err != nil {
-		t.Fatal(err)
-	}
 	return s
 }
 func readLinkPrivateFailure(t *testing.T, err error) (string, []byte) {
@@ -453,5 +450,41 @@ func TestLinkedCleanupPublicReceiptFailurePreventsRemoval(t *testing.T) {
 	body, err := os.ReadFile(files[0])
 	if err != nil || json.Unmarshal(body, &log) != nil || string(log.Bytes) != "private successful log body" {
 		t.Fatal("private successful log bytes lost", err)
+	}
+}
+
+func TestPrivateLinkReceiptCapIncludesFinalNewline(t *testing.T) {
+	// Given independently sized JSON string specimens at the complete-file bound,
+	// when the production writer appends its newline, then exactly256KiB is
+	// admitted and the adjacent256KiB+1 specimen is rejected before reservation.
+	for _, tc := range []struct {
+		name       string
+		characters int
+		accepted   bool
+	}{
+		{"exact file limit", 262141, true},
+		{"one byte beyond complete file limit", 262142, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			directory := t.TempDir()
+			reference, err := writeLinkPrivate(directory, "", strings.Repeat("x", tc.characters))
+			if tc.accepted {
+				if err != nil || reference == "" {
+					t.Fatal("exact private file bound rejected", err)
+				}
+				info, e := os.Stat(reference)
+				if e != nil || info.Size() != 262144 {
+					t.Fatal("actual private receipt size differs from bound", e)
+				}
+			} else {
+				if err == nil || reference != "" {
+					t.Fatal("private receipt exceeding complete-file cap admitted")
+				}
+				files, e := os.ReadDir(directory)
+				if e != nil || len(files) != 0 {
+					t.Fatal("over-bound receipt reserved/written bytes", e)
+				}
+			}
+		})
 	}
 }

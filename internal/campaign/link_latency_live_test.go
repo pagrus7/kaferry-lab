@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -37,7 +38,7 @@ type linkLatencyExchange struct {
 	Error                                                       string `json:",omitempty"`
 }
 type linkLatencyServerReceipt struct {
-	Nonce, Peer, Error                               string
+	Nonce, Peer                                      string
 	Connection                                       int
 	FirstByteNS, ReceiveNS, WriteStartNS, WriteEndNS int64
 }
@@ -85,20 +86,20 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	defer cancel()
 	var salt [8]byte
 	if _, err = rand.Read(salt[:]); err != nil {
-		t.Fatal("calibration identity unavailable")
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_identity", "rand.Read"}, nil, err, false))
 	}
 	name := state.Proxy.Container + "-latency-" + hex.EncodeToString(salt[:])
 	directory := filepath.Join(".cache", "fixtures", state.RunID+"-links", name)
 	if err = os.Mkdir(directory, 0700); err != nil {
-		t.Fatal("exclusive calibration evidence reservation failed")
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_journal", "Mkdir", directory}, nil, err, false))
 	}
 	journal, err := os.OpenFile(filepath.Join(directory, "observations.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		t.Fatal("calibration journal reservation failed")
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_journal", "OpenFile", filepath.Join(directory, "observations.jsonl")}, nil, err, false))
 	}
 	t.Cleanup(func() {
 		if err := journal.Close(); err != nil {
-			t.Error("calibration journal close failed")
+			t.Error(linkLatencyRetainFailure(state, []string{"latency_journal", "Close", journal.Name()}, nil, err, false))
 		}
 	})
 	written, records := 0, 0
@@ -109,7 +110,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			Facts     any
 		}{kind, time.Since(origin).Nanoseconds(), value})
 		if err != nil || len(body) > 16<<10 || written+len(body)+1 > 128<<10 || records >= 128 {
-			return errors.New("calibration selected-fact evidence bound exceeded")
+			return errors.Join(err, errors.New("calibration selected-fact evidence bound exceeded"))
 		}
 		n, err := journal.Write(append(body, '\n'))
 		written += n
@@ -119,7 +120,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	mustRetain := func(kind string, value any) {
 		t.Helper()
 		if err := retain(kind, value); err != nil {
-			t.Fatal("calibration evidence incomplete")
+			t.Fatal(linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", kind, journal.Name()}, nil, err, false))
 		}
 	}
 	// Keep the two chosen ports reserved until the exact container is created.
@@ -130,19 +131,40 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		Listeners int
 	}{"127.0.0.1:0", 3})
 	listeners := make([]net.Listener, 0, 3)
+	listenerCloseResults := map[string]error{}
+	echoOwnsListener := false
+	closeListener := func(listener net.Listener) error {
+		address := listener.Addr().String()
+		if previous, attempted := listenerCloseResults[address]; attempted {
+			return previous
+		}
+		var result error
+		if cause := listener.Close(); cause != nil && !linkLatencyClosed(cause) {
+			result = linkLatencyRetainFailure(state, []string{"latency_listener", "Close", address}, nil, cause, false)
+		}
+		listenerCloseResults[address] = result
+		return result
+	}
 	for i := 0; i < 3; i++ {
-		listener, e := net.Listen("tcp4", "127.0.0.1:0")
+		listener, e := listenLinkLatency(state, net.Listen)
 		if e != nil {
 			for _, opened := range listeners {
-				_ = opened.Close()
+				if closeErr := closeListener(opened); closeErr != nil {
+					t.Error(closeErr)
+				}
 			}
-			t.Fatal("calibration loopback reservation failed")
+			t.Fatal(e)
 		}
 		listeners = append(listeners, listener)
 	}
 	t.Cleanup(func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
+		for index, listener := range listeners {
+			if index == 2 && echoOwnsListener {
+				continue
+			}
+			if closeErr := closeListener(listener); closeErr != nil {
+				t.Error(closeErr)
+			}
 		}
 	})
 	api, endpoint, upstream := listeners[0].Addr().String(), listeners[1].Addr().String(), listeners[2].Addr().String()
@@ -151,10 +173,10 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	config, _ := json.Marshal([]linkLatencyProxy{mapping})
 	configPath, err := filepath.Abs(filepath.Join(directory, "startup.json"))
 	if err != nil {
-		t.Fatal("calibration startup path unavailable")
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "Abs"}, nil, err, false))
 	}
 	if err = os.WriteFile(configPath, config, 0600); err != nil {
-		t.Fatal("calibration startup configuration persistence failed")
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "WriteFile", configPath}, nil, err, false))
 	}
 	command := []string{"-host=127.0.0.1", "-port=" + apiPort, "-config=/calibration.json"}
 	mustRetain("resource_plan", struct {
@@ -166,7 +188,12 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	t.Log("STOCK PROXY ECHO CALIBRATION ONLY; selected synthetic facts: " + filepath.Join(directory, "observations.jsonl"))
 
 	serverEvents := make(chan linkLatencyServerReceipt, 16)
-	stopEcho := startLinkLatencyEcho(ctx, origin, listeners[2], serverEvents)
+	serverFailures := make(chan linkLatencyNetworkFailure, 32)
+	stopEcho := startLinkLatencyEcho(ctx, origin, listeners[2], serverEvents, serverFailures)
+	echoOwnsListener = true
+	drainServerFailures := func() error {
+		return retainLinkLatencyServerFailures(state, serverFailures)
+	}
 	var persistent net.Conn
 	var containerID string
 	created, dockerStopped := false, false
@@ -233,10 +260,13 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			return errors.New("calibration exact read-only startup configuration mismatch")
 		}
 		containerID = facts.ID
-		return retain("container_ownership", struct {
+		if cause := retain("container_ownership", struct {
 			ID, Name, ImageID string
 			Running           bool
-		}{facts.ID, name, facts.Image, *facts.State.Running})
+		}{facts.ID, name, facts.Image, *facts.State.Running}); cause != nil {
+			return linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", "container_ownership", journal.Name()}, nil, cause, false)
+		}
+		return nil
 	}
 	// Restoration/removal is registered before the first Docker mutation. A
 	// latched facility failure forbids even alternate cleanup commands or HTTP;
@@ -244,17 +274,24 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	t.Cleanup(func() {
 		clientClosed := true
 		if persistent != nil {
-			clientClosed = persistent.Close() == nil
-			if !clientClosed {
-				t.Error("calibration persistent socket close failed")
+			closeErr := closeLinkLatencyClient(state, persistent)
+			clientClosed = closeErr == nil
+			if closeErr != nil {
+				t.Error(closeErr)
 			}
 		}
 		for _, listener := range listeners[:2] {
-			_ = listener.Close()
+			if closeErr := closeListener(listener); closeErr != nil {
+				t.Error(closeErr)
+			}
 		}
-		echoReaped := stopEcho() == nil
-		if !echoReaped {
-			t.Error("echo connections or goroutines not reaped")
+		echoErr := stopEcho()
+		echoReaped := echoErr == nil
+		if echoErr != nil {
+			t.Error(linkLatencyRetainFailure(state, []string{"latency_echo", "Wait"}, nil, echoErr, false))
+		}
+		if err := drainServerFailures(); err != nil {
+			t.Error(err)
 		}
 		cleanup, done := context.WithDeadline(context.Background(), origin.Add(90*time.Second))
 		defer done()
@@ -277,7 +314,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			Name, ID, Status                        string
 			DockerStopped, ClientClosed, EchoReaped bool
 		}{name, containerID, status, dockerStopped, clientClosed, echoReaped}); err != nil {
-			t.Error("calibration cleanup evidence incomplete")
+			t.Error(linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", "cleanup", journal.Name()}, nil, err, false))
 		}
 	})
 	mustRetain("create_intent", struct{ Name string }{name})
@@ -294,8 +331,8 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	if err = inspect(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = errors.Join(listeners[0].Close(), listeners[1].Close()); err != nil {
-		t.Fatal("calibration reserved-port release failed")
+	if err = errors.Join(closeListener(listeners[0]), closeListener(listeners[1])); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = docker(ctx, "container", "start", containerID); err != nil {
 		t.Fatal(err)
@@ -309,42 +346,36 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			return errors.New("Docker facility stopped; calibration API action prohibited")
 		}
 		start := time.Now()
-		status, data, err := linkLatencyHTTP(ctx, api, method, path, body)
+		if err := drainServerFailures(); err != nil {
+			return err
+		}
+		status, data, err := linkLatencyHTTP(ctx, state, api, method, path, body)
 		if e := retain("api", struct {
 			Method, Path   string
 			Status         int
 			StartNS, EndNS int64
 			Successful     bool
 		}{method, path, status, start.Sub(origin).Nanoseconds(), time.Since(origin).Nanoseconds(), err == nil}); e != nil {
-			return e
+			return linkLatencyRetainFailure(state, []string{"latency_http", "PublicReceipt", method, api, path}, nil, e, false)
 		}
 		if err != nil {
 			return err
 		}
-		if out != nil && json.Unmarshal(data, out) != nil {
-			return errors.New("calibration API response malformed")
+		if out != nil {
+			if cause := json.Unmarshal(data, out); cause != nil {
+				return linkLatencyRetainFailure(state, []string{"latency_http", "Decode", method, api, path}, data, cause, false)
+			}
 		}
 		return nil
 	}
 	// Only exact refusal at the just-started API socket may retry. HTTP status,
 	// malformed/version/configuration and unknown failures cannot retry.
-	for attempt := 1; ; attempt++ {
+	if err = readyLinkLatencyAPI(ctx, func() (string, error) {
 		var version struct{ Version string }
-		err = apiCall("GET", "/version", nil, &version)
-		if err == nil {
-			if version.Version != "2.12.0" {
-				t.Fatal("calibration stock proxy version mismatch")
-			}
-			break
-		}
-		if !errors.Is(err, syscall.ECONNREFUSED) || attempt >= 20 || ctx.Err() != nil {
-			t.Fatal("calibration stock proxy API not independently ready")
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("calibration API readiness budget expired")
-		case <-time.After(100 * time.Millisecond):
-		}
+		err := apiCall("GET", "/version", nil, &version)
+		return version.Version, err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	checkMapping := func(want []linkLatencyToxic) error {
 		if err := inspect(ctx, true); err != nil {
@@ -358,14 +389,17 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if len(proxies) != 1 || !ok || got.Name != mapping.Name || got.Listen != mapping.Listen || got.Upstream != mapping.Upstream || !got.Enabled || !reflect.DeepEqual(got.Toxics, want) {
 			return errors.New("calibration unique mapping/toxic readback mismatch")
 		}
-		return retain("mapping", got)
+		if cause := retain("mapping", got); cause != nil {
+			return linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", "mapping", journal.Name()}, nil, cause, false)
+		}
+		return nil
 	}
 	if err = checkMapping([]linkLatencyToxic{}); err != nil {
 		t.Fatal(err)
 	}
-	persistent, err = (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp4", endpoint)
+	persistent, err = dialLinkLatency(ctx, state, endpoint, (&net.Dialer{Timeout: time.Second}).DialContext)
 	if err != nil {
-		t.Fatal("calibration persistent socket unavailable")
+		t.Fatal(err)
 	}
 	local, remote := persistent.LocalAddr().String(), persistent.RemoteAddr().String()
 	persistentID, persistentPeer := 0, ""
@@ -374,26 +408,33 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	probeBoth := func(phase, delayedDirection string) {
 		t.Helper()
 		for _, socket := range []string{"existing", "new"} {
+			if err := drainServerFailures(); err != nil {
+				t.Fatal(err)
+			}
 			one, done := context.WithTimeout(ctx, 4*time.Second)
 			conn := persistent
 			if socket == "new" {
 				var e error
-				conn, e = (&net.Dialer{Timeout: time.Second}).DialContext(one, "tcp4", endpoint)
+				conn, e = dialLinkLatency(one, state, endpoint, (&net.Dialer{Timeout: time.Second}).DialContext)
 				if e != nil {
 					done()
-					t.Fatal("calibration fresh socket unavailable")
+					t.Fatal(e)
 				}
 			}
-			observed, e := exchangeLinkLatency(one, origin, conn, serverEvents)
+			observed, e := exchangeLinkLatency(one, state, origin, conn, serverEvents)
 			done()
 			observed.Phase, observed.Socket = phase, socket
 			if socket == "new" {
-				closeErr := conn.Close()
+				closeErr := closeLinkLatencyClient(state, conn)
 				observed.Closed = closeErr == nil
 				e = errors.Join(e, closeErr)
 			}
+			e = errors.Join(e, drainServerFailures())
 			mustRetain("exchange", observed)
-			if e != nil || !observed.ExactBytes || seenNonces[observed.Nonce] {
+			if e != nil {
+				t.Fatal(e)
+			}
+			if !observed.ExactBytes || seenNonces[observed.Nonce] {
 				t.Fatal("calibration unique exact-nonce exchange failed")
 			}
 			seenNonces[observed.Nonce] = true
@@ -430,7 +471,10 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			t.Fatal(err)
 		}
 		var added linkLatencyToxic
-		if err = apiCall("POST", "/proxies/"+mapping.Name+"/toxics", toxic, &added); err != nil || !reflect.DeepEqual(added, toxic) {
+		if err = apiCall("POST", "/proxies/"+mapping.Name+"/toxics", toxic, &added); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(added, toxic) {
 			t.Fatal("calibration latency activation response mismatch")
 		}
 		if err = checkMapping([]linkLatencyToxic{toxic}); err != nil {
@@ -470,87 +514,235 @@ func linkLatencyContainerID(id string) bool {
 	return true
 }
 
-func linkLatencyHTTP(ctx context.Context, endpoint, method, path string, value any) (int, []byte, error) {
-	var body []byte
-	if value != nil {
-		body, _ = json.Marshal(value)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, method, "http://"+endpoint+path, bytes.NewReader(body))
-	if err != nil {
-		return 0, nil, errors.New("calibration HTTP request unavailable")
-	}
-	request.Header.Set("Content-Type", "application/json")
+func linkLatencyHTTP(ctx context.Context, state fixture.State, endpoint, method, path string, value any) (int, []byte, error) {
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: (&net.Dialer{Timeout: time.Second}).DialContext}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	response, err := client.Do(request)
-	if err != nil {
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			return 0, nil, syscall.ECONNREFUSED
-		}
-		return 0, nil, errors.New("calibration HTTP transport failed; nonpublic details withheld")
-	}
-	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, (8<<10)+1))
-	if err != nil || len(data) > 8<<10 || response.StatusCode < 200 || response.StatusCode >= 300 {
-		return response.StatusCode, nil, errors.New("calibration HTTP response failed or exceeded bound; body withheld")
-	}
-	return response.StatusCode, data, nil
+	return requestLinkLatencyHTTP(ctx, state, endpoint, method, path, value, client.Do)
 }
 
-func exchangeLinkLatency(ctx context.Context, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (result linkLatencyExchange, err error) {
+// This callback is only the actual HTTP request boundary. It permits literal
+// response/transport controls without a network server or transport framework.
+func requestLinkLatencyHTTP(ctx context.Context, state fixture.State, endpoint, method, path string, value any, do func(*http.Request) (*http.Response, error)) (int, []byte, error) {
+	action := []string{"latency_http", method, endpoint, path}
+	var body []byte
+	if value != nil {
+		var err error
+		body, err = json.Marshal(value)
+		if err != nil {
+			return 0, nil, linkLatencyRetainFailure(state, action, nil, err, false)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	request, cause := http.NewRequestWithContext(ctx, method, "http://"+endpoint+path, bytes.NewReader(body))
+	if cause != nil {
+		return 0, nil, linkLatencyRetainFailure(state, action, nil, cause, false)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, cause := do(request)
+	// A bare errno or non-request failure cannot acquire this origin marker.
+	requestOrigin := false
+	var socket *net.OpError
+	if response == nil && cause != nil && errors.As(cause, &socket) {
+		requestOrigin = true
+	}
+	status := 0
+	var data []byte
+	if response != nil {
+		status = response.StatusCode
+		if response.Body == nil {
+			cause = errors.Join(cause, errors.New("HTTP response body missing"))
+		} else {
+			var readErr error
+			data, readErr = io.ReadAll(io.LimitReader(response.Body, (8<<10)+1))
+			cause = errors.Join(cause, readErr)
+			if readErr != nil || len(data) > 8<<10 {
+				action = append(action, "response_prefix_incomplete", "capture_limit_bytes=8192", fmt.Sprintf("observed_prefix_bytes=%d", len(data)))
+			}
+			if len(data) > 8<<10 {
+				cause = errors.Join(cause, errors.New("HTTP response prefix incomplete: exceeded 8KiB capture bound"))
+			}
+			// This raw close outcome is mandatory and participates in the same
+			// whole error tree before retry classification and private retention.
+			closeErr := response.Body.Close()
+			if closeErr != nil {
+				requestOrigin = false
+			}
+			cause = errors.Join(cause, closeErr)
+		}
+		if status < 200 || status >= 300 {
+			cause = errors.Join(cause, errors.New("HTTP non-success status"))
+		}
+	} else if cause == nil {
+		cause = errors.New("HTTP response missing")
+	}
+	cause = errors.Join(cause, ctx.Err())
+	if cause != nil {
+		retry := requestOrigin && linkLatencyRefusalOnly(cause)
+		return status, nil, linkLatencyRetainFailure(state, action, data, cause, retry)
+	}
+	return status, data, nil
+}
+
+type linkLatencyRetainedFailure struct {
+	Reference string
+	Retryable bool
+}
+
+func (e *linkLatencyRetainedFailure) Error() string {
+	return "calibration network action failed; private receipt " + e.Reference
+}
+
+func linkLatencyRetainFailure(state fixture.State, action []string, notice []byte, cause error, retry bool) error {
+	reference, err := fixture.RetainLinkNetworkFailure(state, action, notice, cause)
+	if err != nil {
+		return err // shared helper returns only safe fatal persistence/bound errors
+	}
+	return &linkLatencyRetainedFailure{Reference: reference, Retryable: retry}
+}
+
+// Only the already-proved actual request scope may use this all-leaf rule.
+// Wrappers preserve the original error; any other leaf rejects the whole tree.
+func linkLatencyRefusalOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		if len(joined.Unwrap()) == 0 {
+			return false
+		}
+		for _, leaf := range joined.Unwrap() {
+			if !linkLatencyRefusalOnly(leaf) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return linkLatencyRefusalOnly(wrapped.Unwrap())
+	}
+	return err == syscall.ECONNREFUSED
+}
+
+func readyLinkLatencyAPI(ctx context.Context, read func() (string, error)) error {
+	for attempt := 1; attempt <= 20; attempt++ {
+		version, err := read()
+		if err == nil {
+			if version != "2.12.0" {
+				return errors.New("calibration stock proxy version mismatch")
+			}
+			return nil
+		}
+		// Exact type avoids promoting a joined receipt/close/other fatal error
+		// merely because one nested retained error permits a retry.
+		failure, ok := err.(*linkLatencyRetainedFailure)
+		if !ok || !failure.Retryable || attempt == 20 || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return errors.New("calibration API sample bound exhausted")
+}
+
+func exchangeLinkLatency(ctx context.Context, state fixture.State, origin time.Time, conn net.Conn, events <-chan linkLatencyServerReceipt) (result linkLatencyExchange, err error) {
 	result.RequestStartNS = time.Since(origin).Nanoseconds()
 	result.ClientLocal, result.ClientRemote = conn.LocalAddr().String(), conn.RemoteAddr().String()
+	operation := "rand.Read"
 	defer func() {
 		if err != nil {
-			result.Error = "bounded exact-nonce exchange failed"
+			err = linkLatencyRetainFailure(state, []string{"latency_exchange", operation, result.ClientLocal, result.ClientRemote, result.Nonce}, nil, err, false)
+			result.Error = err.Error()
 		}
 	}()
 	var nonce [32]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
-		return result, errors.New("calibration nonce unavailable")
+		return result, err
 	}
 	result.Nonce = hex.EncodeToString(nonce[:])
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
+	operation = "SetDeadline"
 	if err = conn.SetDeadline(deadline); err != nil {
 		return result, err
 	}
+	operation = "Write"
 	result.ClientWriteStartNS = time.Since(origin).Nanoseconds()
 	n, err := conn.Write(nonce[:])
 	result.ClientWriteEndNS = time.Since(origin).Nanoseconds()
-	if err != nil || n != len(nonce) {
-		return result, errors.New("calibration nonce write incomplete")
+	if err != nil {
+		return result, err
+	}
+	if n != len(nonce) {
+		return result, io.ErrShortWrite
 	}
 	var reply [32]byte
+	operation = "ReadFirstByte"
 	_, err = io.ReadFull(conn, reply[:1])
 	result.ClientFirstByteNS = time.Since(origin).Nanoseconds()
 	if err == nil {
+		operation = "ReadRemainingBytes"
 		_, err = io.ReadFull(conn, reply[1:])
 	}
 	result.ClientReadEndNS = time.Since(origin).Nanoseconds()
+	if err != nil {
+		return result, err
+	}
+	operation = "server_receipt"
 	select {
 	case received := <-events:
 		result.ServerConnection, result.ServerPeer = received.Connection, received.Peer
 		result.ServerFirstByteNS, result.ServerReceiveNS = received.FirstByteNS, received.ReceiveNS
 		result.ServerWriteStartNS, result.ServerWriteEndNS = received.WriteStartNS, received.WriteEndNS
-		if received.Nonce != result.Nonce || received.Error != "" {
+		if received.Nonce != result.Nonce {
 			err = errors.Join(err, errors.New("calibration independent server receipt mismatch"))
 		}
 	case <-ctx.Done():
-		err = errors.Join(err, errors.New("calibration independent server receipt missing"))
+		err = errors.Join(err, ctx.Err())
 	}
 	result.ExactBytes = bytes.Equal(reply[:], nonce[:]) && err == nil
 	return result, err
 }
 
-func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Listener, events chan<- linkLatencyServerReceipt) func() error {
+type linkLatencyNetworkFailure struct {
+	Action []string
+	Cause  error
+}
+
+func linkLatencyClosed(err error) bool {
+	if err == net.ErrClosed {
+		return true
+	}
+	socket, ok := err.(*net.OpError)
+	return ok && socket.Err == net.ErrClosed
+}
+
+func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Listener, events chan<- linkLatencyServerReceipt, failures chan<- linkLatencyNetworkFailure) func() error {
 	var mu sync.Mutex
 	connections := make([]net.Conn, 0, 8)
 	stopping := false
+	failed := func(operation, endpoint string, cause error) {
+		// At most 19 terminal/close failures: eight worker failures,
+		// eight single-attempt connection closes, listener/accept and one race.
+		// The fixed 32-entry owner handoff never drops or redacts a cause.
+		failures <- linkLatencyNetworkFailure{[]string{"latency_echo", operation, endpoint}, cause}
+	}
+	var closeMu sync.Mutex
+	closeAttempted := map[net.Conn]bool{} // at most eight owned TCP connections
+	closeConn := func(conn net.Conn) {
+		closeMu.Lock()
+		if closeAttempted[conn] {
+			closeMu.Unlock()
+			return
+		}
+		closeAttempted[conn] = true
+		closeMu.Unlock()
+		if err := conn.Close(); err != nil && !linkLatencyClosed(err) {
+			failed("Close", conn.RemoteAddr().String(), err)
+		}
+	}
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() {
@@ -558,12 +750,18 @@ func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Li
 		for id := 1; id <= 8; id++ {
 			conn, err := listener.Accept()
 			if err != nil {
-				return // cleanup closes the listener and every accepted connection
+				mu.Lock()
+				expected := stopping && linkLatencyClosed(err)
+				mu.Unlock()
+				if !expected {
+					failed("Accept", listener.Addr().String(), err)
+				}
+				return
 			}
 			mu.Lock()
 			if stopping {
 				mu.Unlock()
-				_ = conn.Close()
+				closeConn(conn)
 				return
 			}
 			connections = append(connections, conn)
@@ -571,30 +769,45 @@ func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Li
 			workers.Add(1)
 			go func(id int, conn net.Conn) {
 				defer workers.Done()
-				defer conn.Close()
+				defer closeConn(conn)
+				endpoint := conn.RemoteAddr().String()
 				deadline, _ := ctx.Deadline()
-				if conn.SetDeadline(deadline) != nil {
+				if err := conn.SetDeadline(deadline); err != nil {
+					failed("SetDeadline", endpoint, err)
 					return
 				}
 				for request := 0; request < 14; request++ {
 					var nonce [32]byte
-					if _, err := io.ReadFull(conn, nonce[:1]); err != nil {
+					n, err := io.ReadFull(conn, nonce[:1])
+					if err != nil {
+						mu.Lock()
+						expected := stopping && linkLatencyClosed(err)
+						mu.Unlock()
+						if !expected && !(request > 0 && n == 0 && err == io.EOF) {
+							failed("ReadFirstByte", endpoint, err)
+						}
 						return
 					}
-					r := linkLatencyServerReceipt{Connection: id, Peer: conn.RemoteAddr().String(), FirstByteNS: time.Since(origin).Nanoseconds()}
+					r := linkLatencyServerReceipt{Connection: id, Peer: endpoint, FirstByteNS: time.Since(origin).Nanoseconds()}
 					if _, err := io.ReadFull(conn, nonce[1:]); err != nil {
+						failed("ReadRemainingBytes", endpoint, err)
 						return
 					}
 					r.ReceiveNS, r.Nonce = time.Since(origin).Nanoseconds(), hex.EncodeToString(nonce[:])
 					r.WriteStartNS = time.Since(origin).Nanoseconds()
-					n, err := conn.Write(nonce[:])
+					n, err = conn.Write(nonce[:])
 					r.WriteEndNS = time.Since(origin).Nanoseconds()
 					if err != nil || n != len(nonce) {
-						r.Error = "server exact-nonce write incomplete"
+						if err == nil {
+							err = io.ErrShortWrite
+						}
+						failed("Write", endpoint, err)
+						return
 					}
 					select {
 					case events <- r:
 					case <-ctx.Done():
+						failed("ReceiptHandoff", endpoint, ctx.Err())
 						return
 					}
 				}
@@ -604,9 +817,11 @@ func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Li
 	return func() error {
 		mu.Lock()
 		stopping = true
-		_ = listener.Close()
+		if err := listener.Close(); err != nil && !linkLatencyClosed(err) {
+			failed("ListenerClose", listener.Addr().String(), err)
+		}
 		for _, conn := range connections {
-			_ = conn.Close()
+			closeConn(conn)
 		}
 		mu.Unlock()
 		done := make(chan struct{})
@@ -616,6 +831,44 @@ func startLinkLatencyEcho(ctx context.Context, origin time.Time, listener net.Li
 			return nil
 		case <-time.After(time.Second):
 			return errors.New("bounded echo cleanup did not reap goroutines")
+		}
+	}
+}
+
+// Fixed opening/closing boundaries keep literal failure controls on the same
+// path as the real socket calls; no alternate network route is introduced.
+func listenLinkLatency(state fixture.State, listen func(string, string) (net.Listener, error)) (net.Listener, error) {
+	listener, cause := listen("tcp4", "127.0.0.1:0")
+	if cause != nil {
+		return nil, linkLatencyRetainFailure(state, []string{"latency_listener", "Listen", "tcp4", "127.0.0.1:0"}, nil, cause, false)
+	}
+	return listener, nil
+}
+
+func dialLinkLatency(ctx context.Context, state fixture.State, endpoint string, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	conn, cause := dial(ctx, "tcp4", endpoint)
+	if cause != nil {
+		return nil, linkLatencyRetainFailure(state, []string{"latency_client", "Dial", "tcp4", endpoint}, nil, cause, false)
+	}
+	return conn, nil
+}
+
+func closeLinkLatencyClient(state fixture.State, conn net.Conn) error {
+	cause := conn.Close()
+	if cause == nil || linkLatencyClosed(cause) {
+		return nil
+	}
+	return linkLatencyRetainFailure(state, []string{"latency_client", "Close", conn.LocalAddr().String(), conn.RemoteAddr().String()}, nil, cause, false)
+}
+
+func retainLinkLatencyServerFailures(state fixture.State, failures <-chan linkLatencyNetworkFailure) error {
+	var result error
+	for {
+		select {
+		case failure := <-failures:
+			result = errors.Join(result, linkLatencyRetainFailure(state, failure.Action, nil, failure.Cause, false))
+		default:
+			return result
 		}
 	}
 }
