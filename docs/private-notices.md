@@ -80,6 +80,14 @@ timeout: setup failure/interruption while stdin stays open must return with
 truthful unavailable reap, closed streams and joined writer. These two cleanup
 controls passed locally; they do not represent actual process waits. The CI unit job runs those controls without real HTTPS, Docker or
 released Kaferry. Test keys/private bytes stay outside its public artifact tree.
+The first native attempt at source `971183b7` failed when final report copying
+found the expected `.cache/m2` parent absent. Its full control report was not
+retained, and unit Go checks/sample creation did not run. This does not accept
+the native pipe control. CI now creates that parent explicitly and projects
+six fixed reviewed control rows containing only numeric/boolean observations,
+plus checked source hashes and fixed Linux/Python environment fields, into its
+public unit artifact. Unknown fields, notices, keys and command diagnostics are
+not copied. Source review and a new native run are required for that change.
 
 A trusted feature-branch push also creates one transport calibration using
 `scripts/create-notice-transport-sample.py --reviewed-synthetic-transport-only`.
