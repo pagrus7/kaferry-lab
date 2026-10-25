@@ -572,7 +572,11 @@ func requestLinkLatencyHTTP(ctx context.Context, state fixture.State, endpoint, 
 			cause = errors.Join(cause, closeErr)
 		}
 		if status < 200 || status >= 300 {
-			cause = errors.Join(cause, errors.New("HTTP non-success status"))
+			reportedStatus := response.Status
+			if reportedStatus == "" {
+				reportedStatus = "HTTP non-success status"
+			}
+			cause = errors.Join(cause, errors.New(reportedStatus))
 		}
 	} else if cause == nil {
 		cause = errors.New("HTTP response missing")

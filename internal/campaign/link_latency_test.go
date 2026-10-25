@@ -506,3 +506,45 @@ func TestLatencyActualAsyncListenerCloseRetainsMixedFatalCause(t *testing.T) {
 		checkLatencyPrivate(t, state, joined.Unwrap()[0], []string{"latency_echo", "ListenerClose", "127.0.0.1:20003"}, nil, cause.Error())
 	})
 }
+
+func TestLatencyActualHTTPStatusReasonIsPrivateWithEmptyBody(t *testing.T) {
+	// Given an independently supplied status reason and an empty response body,
+	// distinct from the body marker used by the neighboring body controls.
+	state := latencyNoticeState(t)
+	const reportedStatus = "403 PRIVATE_STATUS_REASON=exact independent denial"
+	const absentBodyMarker = "PRIVATE_HTTP_BODY=not present in this response"
+	body := &latencyControlBody{Reader: bytes.NewReader(nil)}
+	reads, requests := 0, 0
+	var first error
+	// When the actual request/retention/readiness path receives that response,
+	err := readyLinkLatencyAPI(context.Background(), func() (string, error) {
+		reads++
+		status, _, requestErr := requestLinkLatencyHTTP(context.Background(), state, "127.0.0.1:18474", "GET", "/version", nil, func(*http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{StatusCode: 403, Status: reportedStatus, Body: body}, nil
+		})
+		if status != 403 {
+			t.Fatal("status integer changed")
+		}
+		first = requestErr
+		return "", requestErr
+	})
+	// Then the original reason is exact in private evidence independently of
+	// body capture; it closes once, never retries and remains absent publicly.
+	if err == nil || reads != 1 || requests != 1 || body.closed != 1 || strings.Contains(err.Error(), "PRIVATE_") {
+		t.Fatalf("reads=%d requests=%d close=%d error=%v", reads, requests, body.closed, err)
+	}
+	retained, ok := first.(*linkLatencyRetainedFailure)
+	if !ok || retained.Retryable {
+		t.Fatal("status reason was not a retained fatal failure")
+	}
+	data, readErr := os.ReadFile(retained.Reference)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var raw struct{ Notice, CauseText []byte }
+	if json.Unmarshal(data, &raw) != nil || len(raw.Notice) != 0 || string(raw.CauseText) != reportedStatus || bytes.Contains(raw.CauseText, []byte(absentBodyMarker)) {
+		t.Fatal("status reason lost, changed, or confused with body capture")
+	}
+	checkLatencyPrivate(t, state, first, []string{"latency_http", "GET", "127.0.0.1:18474", "/version"}, nil, reportedStatus)
+}
