@@ -98,8 +98,10 @@ measurement beyond the tagged reply gate: generic TCP timing cannot identify
 Kafka response types or worker ACK receipt. The dedicated driver adds bounded
 subreaper/anchor wait controls and run-journal-based cleanup of the extra nonce
 container; these calibrate evidence ownership, not a Kaferry scenario.
-These controls have no accepted native proxy execution. The CI `links` job
-builds specimens with runtime disabled; it establishes no M3 release coverage.
+These controls have no accepted native proxy execution. Accepted b61/run
+40236814641 built specimens with runtime disabled. The local enabled candidate
+requests guarded runtime and ciphertext production; it stays unpushed until
+the explicit publication decision. Neither establishes M3 release coverage.
 Raw private notice durability and publication authorization must be resolved
 before ephemeral proxy runtime. Source assertions establish no measured delay,
 pending-response behavior, timeout, drain or save path.
