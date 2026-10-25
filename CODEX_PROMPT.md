@@ -1,4 +1,8 @@
-Resume the Kaferry application-resilience and data-integrity test project in `/Users/pg/Documents/Codex/kaferry-lab`.
+Resume the Kaferry tool resilience and data integrity project in `/Users/pg/Documents/Codex/kaferry-lab`.
+
+Purpose
+
+Kaferry is the tool under test. Exercise its published data-copy executable under bounded process, Kafka, network and storage failures. Check record membership, byte fidelity, routing and saved progress independently, then observe recovery after faults are removed. The objective is evidence of tool resilience and data integrity. Harness calibration validates the observations and checker; it does not qualify Kaferry.
 
 Authorization and execution boundary
 
@@ -10,7 +14,7 @@ Do not target production, unrelated containers/services, third-party systems or 
 
 Resume from actual state
 
-Read AGENTS.md and PROGRESS.md, inspect the branch/worktree and live resources, then read the relevant ROADMAP.md, contract and evidence sections. Preserve existing uncommitted work. The working branch is `codex/adversarial-release-lab`; M0 was accepted at `9d3231a7a314a29c7b91d58bee8c186befb98df1` with native AMD64 CI. M1 has unfinished local changes. PROGRESS.md, actual files and retained evidence determine the current step; do not repeat completed research or infer completion from this prompt.
+Read AGENTS.md and PROGRESS.md, inspect the branch/worktree and live resources, then read the relevant ROADMAP.md, contract and evidence sections. Preserve existing uncommitted work. Continue on `codex/resilience-release-lab`, tracking `origin/codex/resilience-release-lab`. M0 is accepted at `9d3231a7a314a29c7b91d58bee8c186befb98df1` and M1 at `c1eb315ef80186d74576d5710cb6005580e0cb44`; M2 is the first unfinished milestone. Preserve existing work, including any uncommitted edits and the isolated implementation proposals. PROGRESS.md, actual files and retained evidence determine the current step; do not repeat completed research or infer completion from this prompt.
 
 Required work
 

@@ -1,8 +1,8 @@
-# Required implementation roadmap
+# Required tool resilience roadmap
 
 ## Objective and boundaries
 
-Produce independent, replayable evidence of how the **published v0.6.0 executable** behaves under faults that cross process, broker, ownership, network, and storage boundaries. Cover useful interactions beyond the core tests; do not enumerate every configuration. The required scope is M0–M6 below. A milestone is done only when its implementation, runs, evidence, reviews, and final-commit CI meet its exit criteria.
+Test Kaferry tool resilience and data integrity. Produce independent, replayable evidence of how the **published v0.6.0 executable** behaves and recovers under faults that cross process, broker, ownership, network, and storage boundaries. Cover useful interactions beyond the core tests; do not enumerate every configuration. The required scope is M0–M6 below. A milestone is done only when its implementation, runs, evidence, reviews, and final-commit CI meet its exit criteria.
 
 No old-syntax rejection, parser testing, broad version migration, CLI option matrix, or wholesale copy of the core suite. Minimal healthy controls establish that each scenario and observer work. No changes to Kaferry itself. The optional research at the end is not required for completion.
 

@@ -2,7 +2,7 @@
 
 ## Scope and independence
 
-- Complete the required milestones in ROADMAP.md. The objective is adversarial correctness evidence for released Kaferry, initially v0.6.0. Do not add old-syntax rejection, parser coverage, broad upgrade testing, or basic regression matrices.
+- Complete the required milestones in ROADMAP.md. The objective is tool resilience and data integrity: test how the released Kaferry data-copy executable, initially v0.6.0, handles failures and recovers while preserving records and saved progress. Do not add old-syntax rejection, parser coverage, broad upgrade testing, or basic regression matrices.
 - Read PROGRESS.md at entry and after compaction. Read only the relevant roadmap, contract, and evidence sections next; do not reload transcripts or whole logs.
 - Before adding a scenario, inspect the tagged core tests and record the additional failure mechanism or observation in docs/coverage.md. Independent execution of the release and independent checking can add value even when a basic fault already exists. Merely duplicating a core test cannot.
 - Qualification runs immutable published artifacts only. No Kaferry imports, internal codecs, source build fallback, local replace directives, or in-process application calls. Read tagged source as evidence, never use its implementation as the oracle. Calibration specimens are visibly separate.

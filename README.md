@@ -1,10 +1,10 @@
 # Kaferry Lab
 
-Independent adversarial evidence for **published Kaferry releases**, starting with v0.6.0. The roadmap requires running the real executable in disposable Kafka and filesystem setups, injecting faults, observing records and saved progress independently, and retaining evidence that can be checked offline.
+Tool resilience and data integrity testing for **published Kaferry releases**, starting with v0.6.0. Kaferry is the tool under test. The roadmap requires running the real executable in disposable Kafka and filesystem setups, injecting faults, observing records and saved progress independently, and retaining evidence that can be checked offline.
 
 **Status: M0 and M1 accepted. M2 targeted release scenarios and independent observations are in development; required M2–M6 fault evidence and campaigns are incomplete. No Kaferry release is qualified.**
 
-The purpose is additional evidence beyond Kaferry's core suite: adverse timing, combined failures, independent observers, and integrated release behavior. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
+The purpose is to test how Kaferry handles failures during data copies, preserves records and saved progress, and recovers after faults are removed. Independent observers and combined failure scenarios provide evidence beyond its core suite. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 
 Build the implemented CLI, then check an authored synthetic history. Checking needs no Docker, Kafka, network access or Kaferry executable:
 
