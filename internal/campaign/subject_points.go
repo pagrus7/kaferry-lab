@@ -83,7 +83,7 @@ func ReadSubjectPointMap(path string) (report SubjectPointMap, err error) {
 		return report, ErrSubjectPointIdentity
 	}
 	// No parsing occurs on any path before the exact identity gate above.
-	metadata, e := readPublicPointMetadata(image, reviewedSubjectPointSpecs(), false)
+	metadata, e := readPublicPointMetadata(image, reviewedSubjectPointSpecs())
 	report.ELFEntryPC, report.RuntimeTextBase, report.BaseAnchor = metadata.entry, metadata.base, metadata.anchor
 	report.Text, report.GoPCMetadata, report.Points = metadata.text, metadata.pcln, metadata.points
 	report.Status = "UNSUPPORTED"
@@ -125,10 +125,10 @@ type publicPointMetadata struct {
 	points      []SubjectFunctionPoint
 }
 
-// calibration selects only the separately labelled owned-Go-test-binary base
-// anchor. The exported release reader always passes false; there is no release
-// symbol/DWARF/source-build fallback and gosym always receives a nil symtab.
-func readPublicPointMetadata(image []byte, specs []subjectPointSpec, calibration bool) (out publicPointMetadata, err error) {
+// Both release and visibly separate owned calibration images use the same
+// public Go entry-to-ELF entry proof. No ELF symbols, DWARF or alternative base
+// source is consulted; gosym always receives a nil symtab.
+func readPublicPointMetadata(image []byte, specs []subjectPointSpec) (out publicPointMetadata, err error) {
 	defer func() {
 		if recover() != nil {
 			err = fmt.Errorf("%w: public metadata decoder rejected the image", ErrSubjectPointUnsupported)
@@ -170,38 +170,19 @@ func readPublicPointMetadata(image []byte, specs []subjectPointSpec, calibration
 	out.entry, out.base = file.Entry, text.Addr
 	out.text = SubjectPointSection{text.Addr, text.Offset, text.Size, pointDigest(textBytes)}
 	out.pcln = SubjectPointSection{pcln.Addr, pcln.Offset, pcln.Size, pointDigest(pclnBytes)}
-	if calibration {
-		// This symbol is used only on an owned unstripped lab calibration binary.
-		// Independent reflect function-PC comparison must still pass in its test.
-		symbols, e := file.Symbols()
-		if e != nil {
-			return out, fmt.Errorf("%w: calibration runtime.text anchor unavailable", ErrSubjectPointUnsupported)
-		}
-		count := 0
-		for _, symbol := range symbols {
-			if symbol.Name == "runtime.text" {
-				out.base = symbol.Value
-				count++
-			}
-		}
-		if count != 1 || out.base < text.Addr || out.base-text.Addr >= text.Size {
-			return out, fmt.Errorf("%w: calibration runtime.text anchor missing/ambiguous", ErrSubjectPointUnsupported)
-		}
-		out.anchor = "CALIBRATION ONLY: unique ELF runtime.text symbol"
-	}
+
 	table, e := gosym.NewTable(nil, gosym.NewLineTable(pclnBytes, out.base))
 	if e != nil || table == nil || len(table.Funcs) == 0 {
 		return out, fmt.Errorf("%w: public Go function table unavailable", ErrSubjectPointUnsupported)
 	}
-	if !calibration {
-		// .text.Addr is not assumed to equal runtime.text. Prove the proposed base
-		// by matching the exact public Go runtime entry to independent ELF e_entry.
-		anchor, count := uniquePointFunction(table, "_rt0_amd64_linux")
-		if count != 1 || anchor.Entry != file.Entry {
-			return out, fmt.Errorf("%w: ELF entry cannot anchor runtime.text", ErrSubjectPointUnsupported)
-		}
-		out.anchor = "unique public _rt0_amd64_linux entry equals ELF e_entry"
+	// .text.Addr is a proposed runtime.text base, never an assumption. Require
+	// one exact public runtime entry at the independent ELF e_entry before any
+	// requested function can be admitted, including the owned test specimen.
+	anchor, count := uniquePointFunction(table, "_rt0_amd64_linux")
+	if count != 1 || anchor.Entry != file.Entry {
+		return out, fmt.Errorf("%w: ELF entry cannot anchor runtime.text", ErrSubjectPointUnsupported)
 	}
+	out.anchor = "unique public _rt0_amd64_linux entry equals ELF e_entry"
 	failed := false
 	for _, spec := range specs {
 		point := readExactSubjectPoint(table, spec, text, textBytes)
