@@ -42,8 +42,11 @@ HTTPS API metadata. Tokens arrive only through bounded stdin, never arguments
 or credential-store fallback. Download redirects never receive cross-origin
 Authorization. The API digest authenticates the complete ZIP, not a nested CMS
 file directly. No malformed tuple, missing digest or extra encrypted artifact
-can authorize decryption. This acquisition path has synthetic transport tests;
-real API recovery of an encrypted artifact has not been exercised.
+can authorize decryption. Native [run 40227817066](https://github.com/pagrus7/kaferry-lab/actions/runs/40227817066)
+at source `525bb5ea` produced the
+fixed reviewed sample. Actual seven-request authenticated recovery, private
+stock-CMS decryption and exact two-file literal checking completed and passed
+independent review. This proves only that known synthetic transport path.
 
 Completion metadata is staged, synced and closed while the private error sink
 is live. The sink is detached and closed exactly once before a final rename
@@ -66,28 +69,25 @@ release or prove a source-save/threshold/worker-ACK mechanism.
 
 ## Current validation and remaining gate
 
-Local synthetic controls cover real stock-CMS roundtrip and algorithm IDs,
-wrong keys, ZIP-digest admission, unsafe input/archive paths, bounds, injected
-OS failures, original private notices/public suppression and authenticated API
-tuple rejection using fake HTTPS. The isolated repaired source passed 114 local controls, including terminal-close,
-interruption/cleanup, late sample-mutation and early-stdin-closure failures. Native checks are required
-for the final source. A test-only nonblocking stdout writer removes an
-unbounded preload of the valid 10 KiB recovery tar. Local writer delivery and
-checked joins passed; the mandatory Linux pipe-capacity control (at most 8 KiB,
-with readback) is unexercised on macOS and must run natively, with no fallback
-after a denied operation. The fake child’s stdin read also honors its wait
-timeout: setup failure/interruption while stdin stays open must return with
-truthful unavailable reap, closed streams and joined writer. These two cleanup
-controls passed locally; they do not represent actual process waits. The CI unit job runs those controls without real HTTPS, Docker or
-released Kaferry. Test keys/private bytes stay outside its public artifact tree.
-The first native attempt at source `971183b7` failed when final report copying
-found the expected `.cache/m2` parent absent. Its full control report was not
-retained, and unit Go checks/sample creation did not run. This does not accept
-the native pipe control. CI now creates that parent explicitly and projects
-six fixed reviewed control rows containing only numeric/boolean observations,
-plus checked source hashes and fixed Linux/Python environment fields, into its
-public unit artifact. Unknown fields, notices, keys and command diagnostics are
-not copied. Source review and a new native run are required for that change.
+Local synthetic controls cover stock-CMS roundtrip and algorithm IDs,
+wrong keys, ZIP-digest admission, unsafe paths/bounds, injected OS failures,
+private original notices/public suppression and API tuple rejection with fake
+HTTPS. The repaired source passed 114 local controls. Native run 40227817066
+passed 115, including actual pipe-capacity readback 8192 with exact 10240-byte
+stdout drain and joined writer. Interrupted/open-stdin controls returned with
+truthful unavailable fake-child reap and closed/joined fixture resources;
+these are synthetic control measurements, not Kaferry or actual target waits.
+
+The earlier `971183b7` native attempt failed report copying because `.cache/m2`
+was absent; `dfcbbdb2` then passed notice controls but failed a separate Go
+metadata calibration. Both failed runs remain retained failures. The `525bb5ea`
+run passed all seven jobs, including repaired metadata/unit/race controls. CI
+creates the expected report parent explicitly and publishes six fixed reviewed
+numeric/boolean control rows, checked source hashes and fixed Linux/Python
+fields. Unknown fields, notices, keys and command diagnostics are excluded.
+The unit controls use no real HTTPS, Docker or released Kaferry; the separate
+fixed-sample recovery exercised actual authenticated HTTPS. Test keys and full
+private reports remain outside the public unit artifact tree.
 
 A trusted feature-branch push also creates one transport calibration using
 `scripts/create-notice-transport-sample.py --reviewed-synthetic-transport-only`.
@@ -100,8 +100,9 @@ and `release_qualified:false`. Existing, extra or changed inputs are refused
 before encryption. CI uploads only this sample ciphertext under the canonical
 unit artifact name, using the pinned public certificate; it never reads the
 recipient private key. This reviewed synthetic sample fits the existing
-publication rule. It grants no exception for unknown notices. Actual native
-creation and authenticated API recovery remain pending.
+publication rule. It grants no exception for unknown notices. Native creation
+and actual authenticated recovery of the two exact reviewed JSON files passed
+at `525bb5ea`; no other raw input was authorized by that operation.
 
 The task-generated recipient certificate is public and pinned in source; its
 private key remains only in ignored owner-only coordinator storage. Local

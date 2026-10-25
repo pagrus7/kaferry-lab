@@ -129,6 +129,41 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 	if point.Status != "STATIC_FUNCTION_RANGE" || point.EntryPC != uint64(pointer) || point.EndPC <= uint64(pointer) || point.SourceFile != file || point.SourceLine != line || point.EntryPrefixHex == "" || point.RangeSHA256 == "" {
 		t.Fatal("public metadata differs from independent native marker PC/source")
 	}
+	t.Run("unsupported-ELF-type", func(t *testing.T) {
+		// Given this healthy owned ELF64 image, when only its fixed e_type
+		// field changes to ET_DYN in memory, then the actual reader rejects
+		// that unsupported format before admitting a base or function point.
+		mutated := append([]byte(nil), image...)
+		binary.LittleEndian.PutUint16(mutated[16:18], uint16(elf.ET_DYN))
+		bad, err := readPublicPointMetadata(mutated, specs)
+		if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != "" || bad.base != 0 || len(bad.points) != 0 {
+			t.Fatal("unsupported ELF type admitted a base or function range")
+		}
+	})
+	for _, control := range []struct {
+		name  string
+		specs []subjectPointSpec
+	}{
+		{"wrong-reviewed-source", []subjectPointSpec{{"CALIBRATION wrong source", actual.Name(), "/internal/campaign/calibration_wrong_source.go"}}},
+		{"valid-and-missing", []subjectPointSpec{specs[0], {"CALIBRATION missing", "CALIBRATION ONLY: deliberately absent public function", ""}}},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			// Given the independently checked healthy marker image, when a
+			// reviewed source suffix is wrong or a valid spec is followed by
+			// a missing function, then partial metadata cannot become success.
+			bad, err := readPublicPointMetadata(image, control.specs)
+			if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != metadata.anchor || bad.base != metadata.base || len(bad.points) != len(control.specs) {
+				t.Fatal("failed requested point did not propagate aggregate Unsupported")
+			}
+			failed := bad.points[len(bad.points)-1]
+			if failed.ID != control.specs[len(control.specs)-1].id || failed.Function != control.specs[len(control.specs)-1].name || failed.Status != "UNSUPPORTED" || failed.Reason == "" || failed.EntryPC != 0 || failed.EndPC != 0 || failed.EntryFileOffset != 0 || failed.SourceFile != "" || failed.SourceLine != 0 || failed.RangeSHA256 != "" || failed.EntryPrefixHex != "" {
+				t.Fatal("unsupported source/missing identity admitted a PC or byte range")
+			}
+			if len(bad.points) == 2 && bad.points[0] != point {
+				t.Fatal("mixed request lost the independently checked healthy point")
+			}
+		})
+	}
 	// Given the same actual healthy owned image, corrupt only the independent
 	// ELF entry or exact public runtime entry name in memory. Both must fail
 	// before a requested marker PC is admitted; no symbols/base fallback or
@@ -180,5 +215,20 @@ func TestCalibrationSubjectIdentityNeedsStandaloneUniquePublicFunction(t *testin
 	ambiguous := readExactSubjectPoint(duplicate, subjectPointSpec{"CALIBRATION duplicate", name, ""}, nil, nil)
 	if ambiguous.Status != "UNSUPPORTED" || ambiguous.EntryPC != 0 || ambiguous.Reason == "" {
 		t.Fatal("ambiguous exact public identity admitted")
+	}
+}
+
+func TestCalibrationSubjectPointRejectsRangeBeyondSuppliedText(t *testing.T) {
+	// Given one uniquely named calibration function whose exclusive end is
+	// one byte beyond this literal 16-byte text, when the actual point reader
+	// sees it, then it returns Unsupported before any source lookup or slice.
+	// This public gosym specimen is not an application function or oracle.
+	name := "CALIBRATION ONLY: out-of-text function"
+	table := &gosym.Table{Funcs: []gosym.Func{{Entry: 0x401008, End: 0x401011, Sym: &gosym.Sym{Name: name}}}}
+	text := &elf.Section{SectionHeader: elf.SectionHeader{Addr: 0x401000, Offset: 0x1000, Size: 16}}
+	textBytes := []byte{0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xa9, 0xba, 0xcb, 0xdc, 0xed, 0xfe, 0x0f}
+	point := readExactSubjectPoint(table, subjectPointSpec{"CALIBRATION out of text", name, ""}, text, textBytes)
+	if point.Status != "UNSUPPORTED" || point.Reason == "" || point.EntryPC != 0 || point.EndPC != 0 || point.EntryFileOffset != 0 || point.SourceFile != "" || point.SourceLine != 0 || point.RangeSHA256 != "" || point.EntryPrefixHex != "" {
+		t.Fatal("out-of-text function admitted a PC or byte range")
 	}
 }
