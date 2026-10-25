@@ -40,10 +40,11 @@ observations to version2 bundles checked by `internal/evidence/m2_*.go`.
 | `M2.source-startup-save-outage` | `source-startup` observes source impairment before launch, bounded failed startup/exit, restoration and same-group copying. `source-save` retains an attempted outage/recovery but cannot establish the precise periodic commit and remains incomplete. |
 
 The native CI development matrix includes the two healthy controls and
-source-startup. Packet capture is unavailable and disabled in CI; its retained
+source-startup and repeated-kill. Packet capture is unavailable and disabled in CI; its retained
 `UNSUPPORTED` status is separate from the data verdict. Experimental packet
-candidates cannot satisfy a fault trigger. Derived timeout overshoot,
-amplification and process resource summaries remain unfinished. All required M2
+candidates cannot satisfy a fault trigger. Compiled runs retain Linux owned-child wait RSS/CPU; the checker derives
+SIGTERM-to-wait ranges/overshoot and final observed output/input volume. Native
+measurement and repeated-crash evidence remain pending. All required M2
 variants need native evidence, offline rechecks and independent acceptance reviews.
 
 ## M3 — Ownership, links, transactions and discovery

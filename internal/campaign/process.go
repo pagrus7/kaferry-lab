@@ -55,6 +55,7 @@ type processExit struct {
 	StdoutBytes, StderrBytes int64
 	LogsTruncated            bool
 	WaitError, EvidenceError string
+	ResourceUsage            processResourceUsage
 }
 
 type processAction struct {
@@ -395,11 +396,13 @@ func (p *ownedProcess) reap() {
 	if state := p.cmd.ProcessState; state != nil {
 		r.Reaped = true
 		r.ExitCode = state.ExitCode()
+		r.ResourceUsage = processUsageFromState(state)
 		if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 			r.Signal = processSignalName(status.Signal())
 			r.SignalNumber = int(status.Signal())
 		}
 	} else {
+		r.ResourceUsage = processUsageFromState(nil)
 		waitEvidenceErr = errors.Join(waitEvidenceErr, errors.New("worker was not reaped"))
 	}
 	r.StdoutBytes, r.StderrBytes = p.stdout.total, p.stderr.total

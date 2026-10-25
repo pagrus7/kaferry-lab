@@ -211,6 +211,8 @@ jobs:
             routing: KEY
           - scenario: source-startup
             routing: PRESERVE
+          - scenario: repeated-kill
+            routing: PRESERVE
     env:
       LAB_RUN_ID: m2-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.scenario }}-${{ matrix.routing == 'KEY' && 'key' || 'preserve' }}
       GOCOVERDIR: ${{ github.workspace }}/.cache/m2-release/coverage

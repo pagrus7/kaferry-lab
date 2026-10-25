@@ -84,6 +84,9 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 	if m.ScenarioID == "delivery-threshold" {
 		return unsupported("threshold_observer", "independent accepted-work/threshold observation has not been calibrated for the negotiated Kafka Produce protocol")
 	}
+	if m.Settings.MeasurementsVersion != 0 && m.Settings.MeasurementsVersion != 1 {
+		return unsupported("measurements_version", "unsupported M2 measurement contract")
+	}
 	if m.Settings.Routing != "PRESERVE" && m.Settings.Routing != "KEY" {
 		return unsupported("routing", "M2 supports PRESERVE and KEY routing only")
 	}
@@ -168,6 +171,17 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 			w := event.Worker
 			if !m2Interval(w.Interval, elapsed) || w.LocalElapsedNS < 0 {
 				return bad("worker_interval", "invalid worker observation interval")
+			}
+			if w.ResourceUsage != nil {
+				if m.Settings.MeasurementsVersion != 1 || w.Action != "exit" {
+					return bad("resource_usage", "wait accounting belongs only to an exit under measurement contract 1")
+				}
+				if err := m2UsageValid(*w.ResourceUsage); err != nil {
+					return bad("resource_usage", err.Error())
+				}
+			}
+			if m.Settings.MeasurementsVersion == 1 && w.Action == "exit" {
+				need(w.ResourceUsage != nil && w.ResourceUsage.Available, "resource_usage_missing", "this history requires actual owned-child Linux wait resource accounting")
 			}
 			id := w.Identity
 			if id.WorkerID == "" || id.PID <= 0 || !m2Ticks(id.StartTicks) || id.ExecutableSHA256 != m.Subject.ExecutableSHA256 || id.ArgsSHA256 != digest(argsRaw) || id.EnvironmentSHA256 != digest(envRaw) {
@@ -598,6 +612,14 @@ func CheckM2(m M2Manifest, artifact ArtifactMetadata, events []M2Event) Result {
 				for _, id := range unmatchedRequired(ledger.Entries, a.outputs, nil) {
 					violation("required_record_missing", "required_membership", "final settled output scan lacks required input", a.audit.ID, id)
 				}
+			}
+		}
+	}
+	if m.Settings.MeasurementsVersion == 1 {
+		r.Measurements = m2Measurements(m, ledger, workerOrder, workers, audits[m.FinalAuditID])
+		for _, measured := range r.Measurements.Workers {
+			if m2Signal(workers[measured.WorkerID], "SIGTERM") != nil {
+				need(measured.Shutdown.Available, "shutdown_measurement_missing", "a SIGTERM invocation requires an unambiguous signal-to-wait timing range")
 			}
 		}
 	}

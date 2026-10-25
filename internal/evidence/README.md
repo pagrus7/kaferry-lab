@@ -158,3 +158,5 @@ remains `INCONCLUSIVE` without an independent commit observation. Missing
 mandatory facts, unsupported observations, timeout, cleanup or evidence-write
 failure cannot produce a passing run. Version2 synthetic controls remain
 calibration histories; they do not establish real released-binary fault coverage.
+
+M2 settings with `measurements_version:1` require Linux owned-child wait accounting on every exit. The exit observation binds availability, source/scope, peak RSS in KiB and bytes, and user/system CPU in nanoseconds. Missing/unavailable accounting is nonpassing; inconsistent units or overflow are harness errors. Histories without this setting check data properties without claiming measurements. The checker derives timing ranges from SIGTERM and wait intervals, and output/input volume from the complete settled final scan. These derived summaries are not trusted input. Wait includes controller/log-drain time, RSS is not a tracked-work cap, and aggregate replay volume cannot establish required membership.

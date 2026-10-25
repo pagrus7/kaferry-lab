@@ -45,7 +45,8 @@ type Result struct {
 	Findings    []Finding `json:"findings"`
 	Limitations []string  `json:"limitations"`
 	// A single history cannot qualify the complete M0-M6 campaign.
-	ReleaseQualified bool `json:"release_qualified"`
+	ReleaseQualified bool            `json:"release_qualified"`
+	Measurements     *M2Measurements `json:"measurements,omitempty"`
 }
 
 type FileHash struct {

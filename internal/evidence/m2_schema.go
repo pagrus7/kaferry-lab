@@ -13,18 +13,19 @@ type M2Interval struct {
 }
 
 type M2Settings struct {
-	Routing           string         `json:"routing"`
-	Args              []string       `json:"args"`
-	Environment       []string       `json:"environment"`
-	SQL               string         `json:"sql"`
-	ConfigTOML        string         `json:"config_toml"`
-	SQLSHA256         string         `json:"sql_sha256"`
-	ConfigSHA256      string         `json:"config_sha256"`
-	WorkBudgetNS      identity.Int64 `json:"work_budget_ns"`
-	CleanupBudgetNS   identity.Int64 `json:"cleanup_budget_ns"`
-	DeliveryTimeoutNS identity.Int64 `json:"delivery_timeout_ns"`
-	ShutdownTimeoutNS identity.Int64 `json:"shutdown_timeout_ns"`
-	RecordThreshold   identity.Int64 `json:"record_threshold"`
+	MeasurementsVersion int            `json:"measurements_version,omitempty"`
+	Routing             string         `json:"routing"`
+	Args                []string       `json:"args"`
+	Environment         []string       `json:"environment"`
+	SQL                 string         `json:"sql"`
+	ConfigTOML          string         `json:"config_toml"`
+	SQLSHA256           string         `json:"sql_sha256"`
+	ConfigSHA256        string         `json:"config_sha256"`
+	WorkBudgetNS        identity.Int64 `json:"work_budget_ns"`
+	CleanupBudgetNS     identity.Int64 `json:"cleanup_budget_ns"`
+	DeliveryTimeoutNS   identity.Int64 `json:"delivery_timeout_ns"`
+	ShutdownTimeoutNS   identity.Int64 `json:"shutdown_timeout_ns"`
+	RecordThreshold     identity.Int64 `json:"record_threshold"`
 }
 
 type M2Manifest struct {
@@ -71,6 +72,7 @@ type M2WorkerIdentity struct {
 // means Cmd.Wait returned, not merely that kill accepted a request.
 type M2Worker struct {
 	Identity       M2WorkerIdentity `json:"identity"`
+	ResourceUsage  *M2ResourceUsage `json:"resource_usage,omitempty"`
 	Action         string           `json:"action"`
 	Interval       M2Interval       `json:"interval"`
 	LocalElapsedNS identity.Int64   `json:"local_elapsed_ns"`
