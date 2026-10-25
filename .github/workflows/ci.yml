@@ -522,7 +522,7 @@ jobs:
         timeout-minutes: 1
         shell: bash
         env:
-          CALLER_CANCELLED: ${{ cancelled() }}
+          CALLER_CANCELLED: ${{ job.status == 'cancelled' }}
         run: |
           set -euo pipefail
           umask 077
@@ -663,7 +663,7 @@ jobs:
         env:
           PROOF_PASSED: ${{ steps.proof.outputs.calibration_passed }}
           SEALED: ${{ steps.seal.outputs.complete }}
-          CALLER_CANCELLED: ${{ cancelled() }}
+          CALLER_CANCELLED: ${{ job.status == 'cancelled' }}
         run: |
           set -euo pipefail
           test "$CALLER_CANCELLED" = false
