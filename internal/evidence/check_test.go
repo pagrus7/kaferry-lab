@@ -163,6 +163,57 @@ func TestMissingRequiredEventsCannotBeFinalizedAsPass(t *testing.T) {
 	}
 }
 
+func TestCompleteHistoryRequiresFinalSafetyEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, code string
+		mutate     func([]map[string]any)
+	}{
+		{"empty-final-saved", "saved_missing", func(events []map[string]any) {
+			events[9]["audit"].(map[string]any)["saved"] = []any{}
+		}},
+		{"unsupported-final-quiescence", "quiescence_method", func(events []map[string]any) {
+			events[9]["audit"].(map[string]any)["quiescence_method"] = "unchanged_end_samples"
+		}},
+		{"snapshot-final", "final_not_quiescent", func(events []map[string]any) {
+			events[9]["audit"].(map[string]any)["kind"] = "snapshot"
+		}},
+		{"timed-out", "run_timeout", func(events []map[string]any) {
+			events[10]["finished"].(map[string]any)["timed_out"] = true
+		}},
+		{"cleanup-incomplete", "cleanup_missing", func(events []map[string]any) {
+			events[10]["finished"].(map[string]any)["cleanup_complete"] = false
+		}},
+		{"event-beyond-budget", "run_budget", func(events []map[string]any) {
+			events[10]["elapsed_ms"] = "1001" // Literal fixture budget is 1000ms.
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given complete required output, when only the named final safety
+			// observation changes, then the missing evidence is inconclusive.
+			dir := copyFixture(t, "valid")
+			mutateBundle(t, dir, func(m, a map[string]any, events []map[string]any) { tc.mutate(events) })
+			got := evidence.LoadAndCheck(dir)
+			if got.Verdict != evidence.Inconclusive || !hasCode(got, tc.code) || len(got.Findings) != 1 {
+				t.Fatalf("complete output hid missing %s evidence: %+v", tc.name, got)
+			}
+		})
+	}
+}
+
+func TestAllowedAndForbiddenByteIdentityIsInconclusive(t *testing.T) {
+	// Given complete required output, when an aborted source record has the
+	// same observable bytes as required record a, then absence is undecidable.
+	dir := copyFixture(t, "valid")
+	mutateBundle(t, dir, func(m, a map[string]any, events []map[string]any) {
+		entries := events[0]["ledger"].(map[string]any)["entries"].([]any)
+		entries[2].(map[string]any)["record"] = entries[0].(map[string]any)["record"]
+	})
+	got := evidence.LoadAndCheck(dir)
+	if got.Verdict != evidence.Inconclusive || !hasCode(got, "ambiguous_forbidden_identity") || len(got.Findings) != 1 {
+		t.Fatalf("allowed/forbidden identity ambiguity was misclassified: %+v", got)
+	}
+}
+
 func TestBinaryAndHeaderFidelityControls(t *testing.T) {
 	for _, kind := range []string{"null-to-empty", "header-order", "binary-header-name", "timestamp-rounding"} {
 		t.Run(kind, func(t *testing.T) {
@@ -411,6 +462,14 @@ func TestAuditHistoryControls(t *testing.T) {
 			events[2].Audit.Scans[0].StableEnd = 2
 			return events
 		}},
+		{"current-complete-trigger", "valid", "trigger_unreached", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
+			// The cited audit is latest, complete and immediately precedes the
+			// trigger/request. Its full output proves no required work is absent.
+			snapshot := finalSnapshot(events, "caught-up")
+			events[3].Trigger.AuditID = "caught-up"
+			events[3].Trigger.Proof = "literal complete current scan contains every required output"
+			return insertEvents(events, 3, snapshot)
+		}},
 		{"stale-trigger", "valid", "trigger_audit_stale", evidence.Inconclusive, func(events []evidence.Event) []evidence.Event {
 			return insertEvents(events, 3, finalSnapshot(events, "caught-up"))
 		}},
@@ -507,6 +566,9 @@ func TestAuditHistoryControls(t *testing.T) {
 			got := evidence.LoadAndCheck(dir)
 			if got.Verdict != tc.verdict || (tc.code != "" && !hasCode(got, tc.code)) {
 				t.Fatalf("got %+v; want %s %s", got, tc.verdict, tc.code)
+			}
+			if tc.code == "trigger_unreached" && (hasCode(got, "trigger_changed") || hasCode(got, "trigger_audit_stale") || len(got.Findings) != 1) {
+				t.Fatalf("current complete trigger was rejected through another guard: %+v", got)
 			}
 			if got.ReleaseQualified || !reflect.DeepEqual(got, evidence.LoadAndCheck(dir)) {
 				t.Fatal("partial history qualified a release or changed on identical offline recheck")

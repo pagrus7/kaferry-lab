@@ -419,9 +419,6 @@ func validateArtifact(m Manifest, a ArtifactMetadata) (Verdict, string, error) {
 		if a.ArchiveName != ReleaseArchiveName || a.ArchiveSHA256 != ReleaseArchiveSHA256 {
 			return bad("archive_identity", "release evidence must identify the exact pinned Linux AMD64 published archive")
 		}
-		if !digestValid(a.ArchiveSHA256) || a.ArchiveName == "" || filepath.Base(a.ArchiveName) != a.ArchiveName || strings.ContainsAny(a.ArchiveName, "\\\r\n\t ") {
-			return bad("archive_identity", "invalid published archive identity")
-		}
 		if a.PublishedAssetURL != "https://github.com/pagrus7/kaferry/releases/download/"+ReleaseTag+"/"+a.ArchiveName {
 			return bad("artifact_url", "asset URL does not bind pinned release and archive name")
 		}

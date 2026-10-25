@@ -14,7 +14,7 @@ go build -o .cache/bin/lab ./cmd/lab
 .cache/bin/lab check internal/evidence/testdata/valid
 ```
 
-`lab verify NEW_OUT_DIR` verifies the pinned published v0.6.0 Linux AMD64 artifact and observes its version. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
+`lab verify NEW_OUT_DIR` verifies the pinned published v0.6.0 Linux AMD64 artifact and observes its version on native Linux AMD64. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
 
 ## Implement with Codex
 

@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/pagrus7/kaferry-lab/internal/artifact"
 )
 
 func TestVerificationRejectsUnavailableTrustBeforeFetching(t *testing.T) {
@@ -67,5 +71,27 @@ func TestVersionOutputBudgetRejectsOverflow(t *testing.T) {
 	}
 	if out.buffer.Len() != 64<<10 {
 		t.Fatalf("version output grew beyond budget: %d", out.buffer.Len())
+	}
+}
+
+func TestVersionObservationRefusesMissingRuntimeEvidence(t *testing.T) {
+	// Given a missing target, a version result must never be fabricated.
+	path := filepath.Join(t.TempDir(), "missing-kaferry")
+	out, _, err := observeVersion(context.Background(), path)
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		if !errors.Is(err, artifact.ErrUnsupported) || len(out) != 0 {
+			t.Fatalf("unsupported host accepted: %q / %v", out, err)
+		}
+		return
+	}
+	// When the native target cannot start, then observation fails without output.
+	if err == nil || len(out) != 0 {
+		t.Fatalf("missing target produced a version: %q / %v", out, err)
+	}
+	// A canceled observation must also fail before any target can be launched.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if out, _, err := observeVersion(ctx, path); !errors.Is(err, context.Canceled) || len(out) != 0 {
+		t.Fatalf("canceled observation accepted: %q / %v", out, err)
 	}
 }

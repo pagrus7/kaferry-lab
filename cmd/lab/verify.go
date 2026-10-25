@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,8 +21,6 @@ import (
 
 	"github.com/pagrus7/kaferry-lab/internal/artifact"
 )
-
-const runtimeImage = "apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02"
 
 type verifiedMetadata struct {
 	Tag                       string              `json:"tag"`
@@ -156,7 +153,7 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 		}
 	}
 	path := filepath.Join(directory, "kaferry")
-	out, runtimeBoundary, e := observeVersion(ctx, path, directory)
+	out, runtimeBoundary, e := observeVersion(ctx, path)
 	if e != nil {
 		return result, e
 	}
@@ -179,8 +176,7 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 	return result, err
 }
 
-// Version output is bounded and container identity is recorded before start.
-// --rm is supplemented by exact-label cleanup even when the Docker CLI times out.
+// Version output and runtime are bounded on the supported native platform.
 type boundedOutput struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer
@@ -196,45 +192,20 @@ func (b *boundedOutput) Write(raw []byte) (int, error) {
 	}
 	return b.buffer.Write(raw)
 }
-func observeVersion(ctx context.Context, path, directory string) (out []byte, boundary string, err error) {
+func observeVersion(ctx context.Context, path string) (out []byte, boundary string, err error) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return nil, "", fmt.Errorf("%w: version observation requires native Linux AMD64", artifact.ErrUnsupported)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, path, "--version")
-	boundary = "native linux/amd64 host"
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		platform, e := exec.CommandContext(ctx, "docker", "info", "--format", "{{.OSType}}/{{.Architecture}}").Output()
-		if e != nil {
-			return nil, "", e
-		}
-		raw := make([]byte, 8)
-		if _, e = rand.Read(raw); e != nil {
-			return nil, "", e
-		}
-		id := "verify-" + hex.EncodeToString(raw)
-		name := "kaferry-lab-" + id
-		record, _ := json.Marshal(map[string]any{"name": name, "owner_label": id, "image": runtimeImage, "docker_platform": strings.TrimSpace(string(platform)), "target_platform": "linux/amd64", "network": "none", "memory": "128m", "cpus": 1})
-		if e = newFile(filepath.Join(directory, "version-runtime.json"), append(record, '\n'), 0644); e != nil {
-			return nil, "", e
-		}
-		defer func() {
-			cleanup, cancelCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancelCleanup()
-			inspect, e := exec.CommandContext(cleanup, "docker", "container", "inspect", name, "--format", `{{index .Config.Labels "io.kaferry-lab.run"}}`).CombinedOutput()
-			if e != nil {
-				if strings.Contains(string(inspect), "No such object") || strings.Contains(string(inspect), "No such container") {
-					e = nil
-				}
-			} else if strings.TrimSpace(string(inspect)) != id {
-				e = fmt.Errorf("refuse cleanup of unowned version container %s", name)
-			} else {
-				_, e = exec.CommandContext(cleanup, "docker", "container", "rm", "-f", name).CombinedOutput()
-			}
-			cleanupRecord, _ := json.Marshal(map[string]any{"name": name, "cleanup_complete": e == nil, "detail": fmt.Sprint(e)})
-			err = errors.Join(err, e, newFile(filepath.Join(directory, "version-cleanup.json"), append(cleanupRecord, '\n'), 0644))
-		}()
-		boundary = "linux/amd64 container on Docker " + strings.TrimSpace(string(platform)) + "; emulated when host architecture differs"
-		command = exec.CommandContext(ctx, "docker", "run", "--rm", "--name", name, "--label", "io.kaferry-lab.run="+id, "--platform", "linux/amd64", "--network", "none", "--read-only", "--memory", "128m", "--cpus", "1", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--mount", "type=bind,src="+directory+",dst=/artifact,readonly", "--entrypoint", "/artifact/kaferry", runtimeImage, "--version")
+	machine, e := exec.CommandContext(ctx, "uname", "-m").Output()
+	if e != nil {
+		return nil, "", fmt.Errorf("observe native kernel architecture: %w", e)
 	}
+	if strings.TrimSpace(string(machine)) != "x86_64" {
+		return nil, "", fmt.Errorf("%w: version observation requires an AMD64 kernel", artifact.ErrUnsupported)
+	}
+	command := exec.CommandContext(ctx, path, "--version")
 	var buffer boundedOutput
 	command.Stdout = &buffer
 	command.Stderr = &buffer
@@ -243,5 +214,5 @@ func observeVersion(ctx context.Context, path, directory string) (out []byte, bo
 	if err != nil {
 		err = fmt.Errorf("verified version observation failed: %w: %s", err, out)
 	}
-	return out, boundary, err
+	return out, "native linux/amd64 host", err
 }

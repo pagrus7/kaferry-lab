@@ -24,7 +24,7 @@ Choose a new output directory for each attempt. Verification accepts only the re
 
 The command has a three-minute overall budget. `verified.json` records the release, hashes, provenance verifier and version runtime; downloaded documents, the archive, executable, verification receipt and version output stay alongside it. A failed attempt retains available files and `FAILED.json`; preserve that directory and use a new one after resolving the failure. These files establish artifact verification, not a fault campaign or qualification.
 
-On a native Linux AMD64 host, version observation runs the executable directly. Other hosts require Docker and the digest-pinned runtime image below; the command records the Docker platform, runs a bounded Linux AMD64 container with no network, and removes only its owned container. An ARM64 Docker host uses emulation and does not establish native AMD64 behavior. The version subprocess has a 20-second budget, so the image must already be available if a pull cannot finish within it.
+Version observation requires native Linux AMD64. The command checks the Go and kernel architectures before launching its 20-second version subprocess. Other hosts cannot complete verification; use the native CI workflow when orchestrating from macOS. Docker remains a prerequisite for live Kafka fixtures.
 
 ## Check a bundle offline
 
@@ -69,7 +69,7 @@ go run ./cmd/fixture down "$run_id"
 
 Always run cleanup after a failed test. Fixture state remains in `.cache/fixtures/<run_id>.json` so cleanup is restartable. Distinct random Kafka cluster IDs are recorded and checked by live metadata observations. Startup has a four-minute total budget, bounded probes, two memory/CPU-limited single-broker clusters, loopback host ports, and unique resource names. Failure triggers cleanup; cleanup refuses names/labels that do not belong to this run. It never prunes global Docker resources. Retain failed startup/broker logs before removing resources when diagnosing an environment failure.
 
-Kafka and the verification runtime are pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02` (3.9.2 multi-platform index). The AMD64 manifest is `sha256:f5f8605794dce59d1d566f63667682771c2fec9e96088b0d6a5ef0f8476dd4b2`; ARM64 is `sha256:ddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0`. Fixture state records the actual Docker platform. Retention/compaction are disabled for initial record-ledger controls. Brokers are plaintext and contain synthetic data only; keep their ports on loopback.
+Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02` (3.9.2 multi-platform index). The AMD64 manifest is `sha256:f5f8605794dce59d1d566f63667682771c2fec9e96088b0d6a5ef0f8476dd4b2`; ARM64 is `sha256:ddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0`. Fixture state records the actual Docker platform. Retention/compaction are disabled for initial record-ledger controls. Brokers are plaintext and contain synthetic data only; keep their ports on loopback.
 
 ## CI and retained evidence
 

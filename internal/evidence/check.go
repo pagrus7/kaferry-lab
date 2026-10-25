@@ -373,22 +373,8 @@ func validatePosition(p identity.SourcePosition) error {
 	return nil
 }
 func recordSignature(r identity.Record) (string, error) {
-	if _, err := r.Key.Bytes(); err != nil {
-		return "", err
-	}
-	if _, err := r.Value.Bytes(); err != nil {
-		return "", err
-	}
 	if r.Headers == nil {
 		return "", fmt.Errorf("headers must be an explicit ordered array")
-	}
-	for _, h := range r.Headers {
-		if _, err := h.KeyBytes(); err != nil {
-			return "", err
-		}
-		if _, err := h.Value.Bytes(); err != nil {
-			return "", err
-		}
 	}
 	if r.TimestampKind != "unknown" && r.TimestampKind != "create_time" && r.TimestampKind != "log_append_time" {
 		return "", fmt.Errorf("unknown timestamp kind")
@@ -396,6 +382,7 @@ func recordSignature(r identity.Record) (string, error) {
 	if (r.TimestampKind == "unknown") != (r.TimestampMS == nil) {
 		return "", fmt.Errorf("timestamp kind and nullable milliseconds disagree")
 	}
+	// The identity marshaler validates byte encodings while forming the signature.
 	wire, err := json.Marshal(r)
 	return string(wire), err
 }
