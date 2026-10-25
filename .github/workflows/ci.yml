@@ -199,7 +199,7 @@ jobs:
           if-no-files-found: error
   m2-release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       max-parallel: 2
