@@ -78,20 +78,23 @@ Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness
 Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. The partial M2 jobs have a 25-minute budget. They attempt no packet capture and retain its separate `UNSUPPORTED` status with the denied run reference. They execute healthy PRESERVE/KEY controls, an inaccessible-source startup case and repeated crashes with fresh artifact verification, retained operation evidence, restoration and cleanup. When a finalized bundle exists, they remove the disposable target executable before repeated network-isolated offline rechecks, including nonpassing histories. An incomplete scenario still fails its execution step; successful rechecking confirms the recorded verdict. These jobs are development checks; all mandatory M2 variants still need measured acceptance. Retained Go profiles cover unit checks, actual M1 commands, live M2 helpers and these release cases for changed-line review. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.
 
 The optional stock-link fixture and its opt-in topology/nonce controls are
-source integrations awaiting accepted native proxy execution. They are not
-part of the current CI runtime matrix. See [the current observation and
+source integrations awaiting accepted native proxy execution. The last accepted
+native workflow kept them disabled; the activation candidate must remain local
+until its separate publication decision. See [the current observation and
 private-retention limits](m2.md) before enabling any proxy run; no proxy
 qualification or durable private-notice route is currently established.
 
 Private notice sealing, authenticated retrieval and offline recovery are
-described in [private-notices](private-notices.md). They do not enable an
-unreviewed upload or a linked-runtime campaign.
+described in [private-notices](private-notices.md). They grant no publication
+authority; pushing the activation candidate requires the explicit decision.
 
 The feature-push `links` job builds `cmd/link-calibration` and a fresh
 `internal/campaign` test binary on native Linux AMD64 with clean exact-head VCS
-metadata. Its workflow selection is `LAB_LINK_RUNTIME: 'disabled'`; only
-selected build metadata is uploaded. Driver execution, stock-proxy runtime,
-linked notice sealing and unknown-notice ciphertext upload remain disabled.
+metadata. Accepted run `40236814641` used `LAB_LINK_RUNTIME: 'disabled'` and
+uploaded selected build metadata only. The activation candidate sets the flag
+to `enabled`; a trusted push would request driver execution, stock-proxy
+runtime, linked notice sealing and the sole encrypted artifact upload. That
+push requires explicit publication authorization, independently of this flag.
 The foreground driver command and its fixed run paths are encoded in CI;
 local Go execution remains stopped under the recorded denial. No local command
 is offered as a substitute. This job has a 20-minute outer budget, with separate

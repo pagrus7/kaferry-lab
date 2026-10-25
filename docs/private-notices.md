@@ -3,14 +3,16 @@
 The optional stock-link source stores raw Docker and in-process HTTP/TCP failure
 notices separately from public selected facts. Those owner-only files under
 `.cache/fixtures-private/RUN_ID-links/` cannot survive an ephemeral runner by
-hashes alone. Proxy runtime remains disabled in the current CI matrix until a
-reviewed durable retention route is available.
+hashes alone. The last independently accepted native run, `b61b6145`, kept
+proxy runtime disabled. The local activation candidate requests live execution;
+it must not be pushed until the publication decision below is explicit.
 
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
 reviewed, redacted evidence containing synthetic inputs.” Encryption provides
-confidentiality, not content review or redaction. No exception to that rule has
-been authorized, and no unknown-notice public encrypted upload is enabled. The integrated caller is explicitly disabled by
-`LAB_LINK_RUNTIME`; no enabled unknown-notice upload is authorized.
+confidentiality, not content review or redaction. The activation candidate
+sets `LAB_LINK_RUNTIME` to `enabled`; that source selection supplies no
+publication authority. An explicit user exception for the bounded public
+ciphertext or a reviewed private durable route is required before its push.
 These helpers prepare a concrete retention option; they are not qualification.
 
 ## Implemented helpers and bounds
@@ -117,11 +119,11 @@ synthetic evidence before any ordinary release-evidence publication.
 A future enabled producer needs an exact reviewed source/CI binding, explicit
 writer-stop/reap evidence, native tool checks, the approved recipient and either
 an actual private durable transfer or explicit authorization for the proposed
-public ciphertext exception. Until then, linked runtime and unknown-notice encrypted public
-retention remain off. Real product fault coverage and M2–M6 acceptance remain
+public ciphertext exception. Until that decision, the enabled candidate stays local and published linked
+runtime and unknown-notice encrypted public retention stay off. Real product fault coverage and M2–M6 acceptance remain
 separate requirements.
 
-## Linked v2 source and disabled caller
+## Linked v2 and caller activation
 
 V2 requires the caller declaration `--notice-writers-stopped-and-reaped`.
 The helper records `observed_proof:false`: it does not observe processes.
@@ -145,19 +147,23 @@ resources or successful calibration. The final job remains failed even if its
 notice bytes could be retained. `SealingReady` and `PublicationAuthorized` in
 the driver stay false; neither a marker nor the sealer declaration grants
 permission. Native positive/negative lifecycle and caller controls are required
-before enabling runtime.
+before enabling runtime. Native `b61b6145` passed the authored isolated
+lifecycle and data-only caller controls; actual combined driver/courier
+execution remains unmeasured.
 
-The new v2 source passed 168 local synthetic controls in its preserved proposal;
-its integrated native controls remain pending. Those tests include independent
-literal archive membership and byte expectations and tampered/missing absence
-records. The last independently supported native head is `b18a691e`, with the
-older 115-control helper source and no proxy execution. Prior results do not
-approve changed v2 source.
+The new v2 source passed 168 local synthetic controls in its preserved proposal.
+Integrated native `b61b6145` passed the 169-control helper gate, including the
+native small-pipe case. The public artifact retains six selected numeric rows
+and exact source hashes; the private full 169-row report was not uploaded.
+Independent literal archive membership/bytes and tampered/missing absence
+controls are in that reviewed source. All 46 data-only caller rows are retained
+and passed natively. This validates the bounded helper gates, not actual proxy
+execution, combined writer closure or authenticated linked-v2 retrieval.
 
 An enabled head would skip the unit fixed-sample producer/upload so the current
 retriever still admits exactly one canonical encrypted artifact in a run.
-The disabled `links` job builds only specimens. Its future guarded upload
-selects only the sole CMS member for 14 days, with read-only contents permission
+The last accepted `links` job built only specimens. The activation candidate's
+guarded upload selects only the sole CMS member for 14 days, with read-only contents permission
 and no publishing credential or recipient key. Before such a head is pushed,
 the concrete source, native controls and exact publication exception or private
 transfer require review. Encryption remains separate from redaction.
