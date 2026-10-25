@@ -67,8 +67,12 @@ the already verified release. Neither source nor static addresses establish
 a reached instruction, debugger capability, acknowledgment, fault or data
 property. No breakpoint, target-memory access, application import or source
 build is used. Predecessor probes in retained native runs 40224306022 and 40225832123
-mapped four static function ranges. The changed shared reader and owned-image
-calibration require new native validation.
+mapped four static function ranges. Native `525bb5ea` and `b18a691e` passed
+the shared-reader/owned-image calibration, independent pointer comparison and
+wrong/missing-entry controls; b18 also passed wrong-source, unsupported-ELF,
+mixed missing-point and out-of-text-range controls. These are static metadata
+results. The new driver, lifecycle, latency and v2 integration require fresh
+native validation; no live path or proxy capability follows.
 
 ## M3 — Ownership, links, transactions and discovery
 

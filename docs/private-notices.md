@@ -132,8 +132,9 @@ inside the encrypted manifest with exact byte length, SHA-256, base64 body,
 run identity and scope. Recovery checks that bounded record before writing the
 same bytes privately. Missing descendants, malformed existing roots,
 permissions, unknown failures and failed retention cannot use this exception.
-The driver root is mandatory. The absence record is capped at 16KiB within the
-existing 256KiB manifest, 10MiB tar, 12MiB CMS and 16MiB ZIP limits.
+The driver root is mandatory. The serialized absence observation body is capped at 16KiB. Its larger
+base64/identity envelope stays within the complete 256KiB manifest limit;
+archive limits remain 10MiB tar, 12MiB CMS and 16MiB ZIP.
 
 The driver final marker follows selected-result staging, actual child/adopted
 waits and ECHILD, then primary private sink sync/close. CI additionally requires
