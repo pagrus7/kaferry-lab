@@ -50,7 +50,11 @@ is live. The sink is detached and closed exactly once before a final rename
 publishes COMPLETE. Failure of that terminal close or rename is explicitly
 incomplete with exact notice unavailable; it never opens a replacement sink.
 Interrupted command drains mark streams incomplete and retain actual cleanup
-outcomes, including unavailable reap results.
+outcomes, including unavailable reap results. An early stdin closure is retained
+as the original failed write and cannot pass even if the child exits zero.
+Receipts distinguish intended input bytes from bytes accepted by successful pipe
+writes; complete input also requires successful stdin closure. These counts do
+not prove that the child processed the input.
 
 Both command/OS notice paths reserve private error storage before sensitive
 operations. Exact original failures stay private when that sink works; public
@@ -65,8 +69,8 @@ release or prove a source-save/threshold/worker-ACK mechanism.
 Local synthetic controls cover real stock-CMS roundtrip and algorithm IDs,
 wrong keys, ZIP-digest admission, unsafe input/archive paths, bounds, injected
 OS failures, original private notices/public suppression and authenticated API
-tuple rejection using fake HTTPS. The isolated repaired source passed 107 local controls, including terminal-close,
-interruption/cleanup and late sample-mutation failures. Native checks are required
+tuple rejection using fake HTTPS. The isolated repaired source passed 112 local controls, including terminal-close,
+interruption/cleanup, late sample-mutation and early-stdin-closure failures. Native checks are required
 for the final source. The CI unit job runs those controls without real HTTPS, Docker or
 released Kaferry. Test keys/private bytes stay outside its public artifact tree.
 

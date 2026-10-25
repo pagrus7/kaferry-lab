@@ -346,7 +346,8 @@ def openssl(args, body, directory, label, maximum):
     output, stderr = bytearray(), bytearray()
     started = time.monotonic()
     status, child, original_error = None, None, None
-    reaped = drained = False
+    reaped = drained = input_closed = False
+    input_accepted = 0
     cleanup = []
     receipt = reserve_receipt(directory, label + "-command.json")
     def notice(error):
@@ -357,21 +358,23 @@ def openssl(args, body, directory, label, maximum):
             for stream, event, kind in [(child.stdin, selectors.EVENT_WRITE, "in"), (child.stdout, selectors.EVENT_READ, "out"), (child.stderr, selectors.EVENT_READ, "err")]:
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, event, kind)
-            offset = 0
             while selector.get_map():
                 if time.monotonic() - started > 30:
                     raise Rejected("stock command timeout")
                 for key, _ in selector.select(0.1):
                     if key.data == "in":
-                        if offset == len(body):
+                        if input_accepted == len(body):
                             selector.unregister(key.fileobj)
                             key.fileobj.close()
+                            input_closed = True
                         else:
-                            try:
-                                offset += os.write(key.fd, body[offset:offset + 65536])
-                            except BrokenPipeError:
-                                selector.unregister(key.fileobj)
-                                key.fileobj.close()
+                            # A zero exit cannot excuse an early stdin closure.
+                            # Preserve the original EPIPE through the ordinary
+                            # private failure/cleanup boundary; never retry it.
+                            written = os.write(key.fd, body[input_accepted:input_accepted + 65536])
+                            if written <= 0:
+                                raise OSError(5, "stock command stdin accepted no bytes")
+                            input_accepted += written
                     else:
                         chunk = os.read(key.fd, 65536)
                         if not chunk:
@@ -383,6 +386,8 @@ def openssl(args, body, directory, label, maximum):
                         target.extend(chunk[:available])
                         if len(chunk) > available:
                             raise Rejected("stock command output bound exceeded")
+            if input_accepted != len(body) or not input_closed:
+                raise EvidenceIncomplete("stock command input delivery incomplete")
             drained = True
         status = child.wait(timeout=max(0.001, 30 - (time.monotonic() - started)))
         reaped = True
@@ -412,12 +417,16 @@ def openssl(args, body, directory, label, maximum):
                   "cleanup_failures": [dict(action=action, **notice(error)) for action, error in cleanup],
                   "child_pid": child.pid if child is not None else None, "child_launched": child is not None,
                   "child_reaped": reaped, "interrupted": any(isinstance(error, (KeyboardInterrupt, SystemExit)) for error in ([original_error] + [error for _, error in cleanup])),
+                  "input_intended_bytes": len(body), "input_accepted_bytes": input_accepted,
+                  "input_complete": input_accepted == len(body) and input_closed,
                   "stderr_base64": base64.b64encode(stderr).decode(), "stderr_bytes": len(stderr),
                   "streams_complete": drained and original_error is None and not cleanup,
                   "stdout_bytes": len(output), "stdout_sha256": digest(output)}
         encoded = encode(record)
         if len(encoded) > MAX_FILE:
             encoded = encode({"streams_complete": False, "receipt_overflow": True, "child_reaped": reaped,
+                              "input_intended_bytes": len(body), "input_accepted_bytes": input_accepted,
+                              "input_complete": input_accepted == len(body) and input_closed,
                               "reported_bytes": len(encoded), "captured_prefix_base64": base64.b64encode(encoded[:65536]).decode()})
             if original_error is None:
                 original_error = EvidenceIncomplete("stock command notice bound exceeded")

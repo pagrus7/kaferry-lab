@@ -485,6 +485,161 @@ def run():
             ("stream-close-retains-original", True, "stream", "keyboard"),
         ]:
             cancelled_cli(name, consumer, fault, cancellation)
+        # Reproduce early stdin closure with genuine local-pipe EPIPE and an
+        # already-zero-exited fake child. A valid tiny recovery tar makes the
+        # consumer control fail on the old swallowed-EPIPE implementation too.
+        tiny_recovery, _ = s.pack({"PRIVATE.json": expected["PRIVATE.json"]}, identity)
+        class StdinChild:
+            pid = 999999992  # synthetic; never passed to an actual kill
+            returncode = None
+            def __init__(self, mode, response):
+                self.mode, self.kills, self.waits, self.polls = mode, 0, 0, 0
+                self.reader, write_in = os.pipe()
+                read_out, write_out = os.pipe()
+                read_err, write_err = os.pipe()
+                assert os.write(write_out, response) == len(response)
+                assert os.write(write_err, b"PRIVATE-EPIPE exact stderr") == len(b"PRIVATE-EPIPE exact stderr")
+                os.close(write_out)
+                os.close(write_err)
+                self.stdin, self.stdout, self.stderr = PipeStream(write_in, "stdin", ""), PipeStream(read_out, "stdout", ""), PipeStream(read_err, "stderr", "")
+                self.stdin_fd = write_in
+                self.consumed = bytearray()
+                if mode == "closed":
+                    self.drop_reader()
+            def drop_reader(self):
+                if self.reader is not None:
+                    os.close(self.reader)
+                    self.reader = None
+            def poll(self):
+                self.polls += 1
+                self.returncode = 0
+                return 0
+            def kill(self):
+                self.kills += 1
+                raise AssertionError("zero-exited fake child must not be killed")
+            def wait(self, timeout):
+                self.waits += 1
+                if self.mode == "full":
+                    while True:
+                        chunk = os.read(self.reader, 65536)
+                        if not chunk:
+                            break
+                        self.consumed.extend(chunk)
+                self.returncode = 0
+                return 0
+            def release_fixture(self):
+                self.drop_reader()
+                for stream in (self.stdin, self.stdout, self.stderr):
+                    if not stream.closed:
+                        stream.stream.close()
+        class InputSelector:
+            def __init__(self):
+                self.real, self.calls = original_selector(), 0
+            def __enter__(self):
+                self.real.__enter__()
+                return self
+            def __exit__(self, *args):
+                return self.real.__exit__(*args)
+            def register(self, *args):
+                return self.real.register(*args)
+            def unregister(self, *args):
+                return self.real.unregister(*args)
+            def get_map(self):
+                return self.real.get_map()
+            def select(self, timeout):
+                self.calls += 1
+                keys = list(self.real.get_map().values())
+                wanted = "err" if self.calls == 1 else "in"
+                key = next((key for key in keys if key.data == wanted), keys[0])
+                return [(key, s.selectors.EVENT_WRITE if key.data == "in" else s.selectors.EVENT_READ)]
+        def early_stdin_cli(name, consumer=False, partial=False):
+            case_base, tree = input_tree("stdin-" + name)
+            if partial:
+                s.write_private(tree / "large.json", s.encode({"notice": "x" * 150000}))
+            child = StdinChild("partial" if partial else "closed", tiny_recovery if consumer else b"synthetic zero-exit output")
+            original_write, original_open = s.os.write, s.os.open
+            attempts, accepted, original_pipe_error = 0, 0, None
+            def written(fd, body):
+                nonlocal attempts, accepted, original_pipe_error
+                if fd != child.stdin_fd:
+                    return original_write(fd, body)
+                attempts += 1
+                try:
+                    count = original_write(fd, body)
+                except BrokenPipeError as error:
+                    original_pipe_error = error
+                    raise
+                accepted += count
+                if partial:
+                    child.drop_reader()
+                return count
+            def opened(*args, **kwargs):
+                if original_pipe_error is not None:
+                    raise AssertionError("new path opened after original EPIPE")
+                return original_open(*args, **kwargs)
+            argv = ["unseal" if consumer else "seal", "--run-id", run_id, "--source-head", head,
+                    "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
+            if consumer:
+                argv += ["--artifact-zip", str(zip_path), "--trusted-artifact-zip-sha256", trusted, "--private-key", str(key)]
+            stdout, stderr = io.StringIO(), io.StringIO()
+            try:
+                with contextlib.ExitStack() as stack:
+                    for module, name_, value in [(s, "CERT_PIN", identity["recipient_sha256"]), (s, "__file__", str(root / "seal-link-notices.py")), (u, "__file__", str(root / "unseal-link-notices.py")), (Path, "cwd", lambda: case_base), (sys, "argv", argv)]:
+                        stack.enter_context(mock.patch.object(module, name_, value))
+                    stack.enter_context(contextlib.redirect_stdout(stdout))
+                    stack.enter_context(contextlib.redirect_stderr(stderr))
+                    stack.enter_context(mock.patch.object(s.os, "write", side_effect=written))
+                    stack.enter_context(mock.patch.object(s.os, "open", side_effect=opened))
+                    stack.enter_context(mock.patch.object(s.selectors, "DefaultSelector", InputSelector))
+                    popen = stack.enter_context(mock.patch.object(s.subprocess, "Popen", return_value=child))
+                    commands = stack.enter_context(mock.patch.object(s, "openssl", wraps=s.openssl))
+                    assert (u.cli() if consumer else s.cli()) == 1
+                    assert popen.call_count == commands.call_count == 1
+                    intended = len(commands.call_args.args[1])
+                assert original_pipe_error is not None and original_pipe_error.errno == errno.EPIPE
+                assert attempts == (2 if partial else 1)
+                assert (0 < accepted < intended) if partial else accepted == 0
+                assert child.polls == child.waits == 1 and child.kills == 0
+                assert all(stream.closes == 1 for stream in (child.stdin, child.stdout, child.stderr))
+                public = stdout.getvalue() + stderr.getvalue()
+                assert "private evidence incomplete" in public and "PRIVATE-EPIPE" not in public
+                assert str(original_pipe_error) not in public
+                directory = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-sealing-private") / run_id
+                record = json.loads((directory / ("unseal-command.json" if consumer else "seal-command.json")).read_bytes())
+                assert record["failure"] == {"type": "BrokenPipeError", "errno": errno.EPIPE, "exact_text": str(original_pipe_error)}
+                assert record["input_intended_bytes"] == intended and record["input_accepted_bytes"] == accepted
+                assert not record["input_complete"] and not record["streams_complete"]
+                assert record["child_reaped"] and record["returncode"] == 0
+                assert not record["cleanup_failures"] and s.base64.b64decode(record["stderr_base64"]) == b"PRIVATE-EPIPE exact stderr"
+                notice = json.loads((directory / "OS-ERROR.json").read_bytes())
+                assert notice["complete"] and any(node["errno"] == errno.EPIPE and node["exact_text"] == str(original_pipe_error) for node in notice["exceptions"])
+                marker = case_base / (".cache/unsealed-link-notices" if consumer else ".cache/link-quarantine") / run_id / "COMPLETE.json"
+                assert not marker.exists()
+                passed("actual CLI early stdin zero-exit " + name, synthetic_child=True, real_pipe_EPIPE=True,
+                       intended_bytes=intended, accepted_bytes=accepted, write_attempts=attempts, waits=child.waits, kills=child.kills)
+            finally:
+                child.release_fixture()
+        early_stdin_cli("producer-empty-acceptance")
+        early_stdin_cli("consumer-empty-acceptance", consumer=True)
+        early_stdin_cli("producer-partial-acceptance", partial=True)
+        version_receipt = json.loads((root / "version-command.json").read_bytes())
+        assert version_receipt["input_intended_bytes"] == version_receipt["input_accepted_bytes"] == 0
+        assert version_receipt["input_complete"] and version_receipt["streams_complete"]
+        passed("zero-input real stock version retains complete zero counts")
+        full_body = b"reviewed bounded synthetic full input\n" * 20
+        full_child = StdinChild("full", b"reviewed full-input response")
+        try:
+            with mock.patch.object(s.subprocess, "Popen", return_value=full_child):
+                with mock.patch.object(s.selectors, "DefaultSelector", InputSelector):
+                    full_output = s.openssl(["version"], full_body, root, "full-input-control", 65536)
+            assert full_output == b"reviewed full-input response" and full_child.consumed == full_body
+            full_receipt = json.loads((root / "full-input-control-command.json").read_bytes())
+            assert full_receipt["input_intended_bytes"] == full_receipt["input_accepted_bytes"] == len(full_body)
+            assert full_receipt["input_complete"] and full_receipt["streams_complete"] and full_receipt["child_reaped"]
+            assert full_child.waits == 1 and full_child.polls == full_child.kills == 0
+            passed("full real-pipe input accepted and independently consumed exactly", intended_bytes=len(full_body), synthetic_child=True)
+        finally:
+            full_child.release_fixture()
         for consumer in [False, True]:
             argv = ["unseal" if consumer else "seal", "--run-id", "../PRIVATE-SENTINEL", "--source-head", head,
                     "--recipient-sha256", identity["recipient_sha256"], "--job", identity["job"], "--attempt", identity["attempt"]]
