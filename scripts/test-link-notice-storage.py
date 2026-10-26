@@ -327,6 +327,53 @@ class StorageControls(unittest.TestCase):
         self.assertTrue(state["failed"])
         self.no_complete()
 
+    def test_cancellation_and_close_failures_both_survive_without_completion(self):
+        # Given a capsule copy, when write/sync and close fail together,
+        # then both originals remain private and no completion is published.
+        for interruption in ("write", "sync", "close"):
+            with self.subTest(interruption=interruption):
+                case = StorageControls("test_readonly_preflight_and_exact_literal_copy")
+                case.setUp()
+                try:
+                    opened, write, sync, close = os.open, os.write, os.fsync, os.close
+                    state = {"capsule": None, "primary": False, "secondary": False}
+                    primary = KeyboardInterrupt(SENTINEL + "-cancel-" + interruption)
+                    secondary = OSError(errno.EIO, SENTINEL + "-secondary-close")
+                    if interruption == "close":
+                        primary, secondary = OSError(errno.EIO, SENTINEL + "-primary-write"), KeyboardInterrupt(SENTINEL + "-cancel-close")
+                    def remember(path, *args, **kwargs):
+                        fd = opened(path, *args, **kwargs)
+                        if path == "notice.cms":
+                            state["capsule"] = fd
+                        return fd
+                    def fail_write(fd, body):
+                        if fd == state["capsule"] and interruption != "sync":
+                            state["primary"] = True
+                            raise primary
+                        return write(fd, body)
+                    def fail_sync(fd):
+                        if fd == state["capsule"] and interruption == "sync":
+                            state["primary"] = True
+                            raise primary
+                        return sync(fd)
+                    def fail_close(fd):
+                        if fd == state["capsule"] and not state["secondary"]:
+                            state["secondary"] = True
+                            close(fd)  # Model a consumed descriptor; never retry it.
+                            raise secondary
+                        return close(fd)
+                    with mock.patch.object(m.os, "open", side_effect=remember), mock.patch.object(m.os, "write", side_effect=fail_write), mock.patch.object(m.os, "fsync", side_effect=fail_sync), mock.patch.object(m.os, "close", side_effect=fail_close):
+                        with self.assertRaises(m.s.EvidenceIncomplete):
+                            case.store()
+                    self.assertTrue(state["primary"] and state["secondary"])
+                    case.no_complete()
+                    self.assertFalse((case.target / "COMPLETE.pending.json").exists())
+                    errors = json.loads((case.target / "OS-ERROR.json").read_bytes())
+                    self.assertIs(errors["complete"], True)
+                    self.assertEqual([(row["type"], row["exact_text"]) for row in errors["failures"]], [(type(primary).__name__, str(primary)), (type(secondary).__name__, str(secondary))])
+                finally:
+                    case.doCleanups()
+
     def test_error_sink_close_failure_stops_before_promotion(self):
         opened, close = os.open, os.close
         state = {"sink": None, "failed": False}

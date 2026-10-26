@@ -145,6 +145,12 @@ sealing can remain unavailable/incomplete. Live calibration is disabled and
 unknown-notice CMS is excluded from public uploads. Actual custody and required
 M2 mechanisms still need independent reached evidence.
 
+A further synthetic storage control interrupts a write or sync while closing
+also fails, and interrupts close after a failed write. It checks both exact
+causes survive privately without a successful completion marker or receipt.
+This covers cancellation error accounting missed by the earlier ordinary-I/O
+write/close control; it adds no product scenario or reached Kaferry mechanism.
+
 ## M3 — Ownership, links, transactions and discovery
 
 | Planned ID | Exact closest core test and path | Added mechanism and reached proof | Oracle |

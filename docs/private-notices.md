@@ -6,15 +6,50 @@ The earlier `b4eca248` public-CMS activation proposal is superseded, not awaitin
 another publication exception. Live linked calibration remains disabled while
 the private storage route is prepared and verified.
 
+On 2026-10-25, the user selected direct private-network transfer and explicitly
+rejected temporary encrypted copies in a private GitHub repository too. Raw
+originals and unknown-notice capsules must not be retained in GitHub artifacts,
+repositories, caches, releases or logs. Native hosted Linux execution still has
+a transient private producer workspace; direct transfer must move the selected
+evidence to the Mac without using GitHub as its retention destination.
+
 The selected route is to keep completed sealed originals on the user's worker
 storage, described by the user as a Mac mini. The actual runner-visible private
 mount and its backing/lifecycle mapping are **unverified**. Current workflow
-jobs select `ubuntu-24.04`; no registered self-hosted runner was found in the
-read-only preflight. The local session is separately Darwin/arm64. Host inspection found four Mac runner services under
-`/Users/pg/services/github-runners/`, all registered to
-`pagrus7/knowledge-assistant`. They do not supply a configured storage path for
-this lab’s current Ubuntu jobs. Native Linux AMD64 execution
-remains a separate requirement.
+jobs still select `ubuntu-24.04`. The read-only preflight found no registered
+lab runner; on 2026-10-25, the user authorized preparing a dedicated Mac runner.
+The official ARM64 runner is now installed and registered to `kaferry-lab` as
+`kaferry-lab-mac-mini-20261025`, runner ID 21, with one custom label and no default
+labels. GitHub reports it **offline**. No listener, service or workflow target
+was enabled. Labels select jobs; they do not authorize trusted code. The public
+repository's current first-time-contributor approval policy and the shared Mac
+UID do not provide the required job isolation.
+
+The four existing Mac services remain registered to
+`pagrus7/knowledge-assistant` and were not changed. A dedicated owner-only local
+evidence directory passed a 171-byte synthetic write/sync/close and separate
+process readback. This measures local filesystem access only: no native-worker
+transport, runner lifecycle, reboot, backup or private recovery was verified.
+Mac registration supplies no storage path to the current Ubuntu jobs. Native
+Linux AMD64 execution remains a separate requirement.
+
+A separate collector-only Lima VZ ARM64 VM, `klc-20261025`, was prepared on
+2026-10-25 with one CPU, 1 GiB RAM and a 6 GiB virtual disk. Its Ubuntu image
+matched the installed official template's SHA-256. Plain mode has no host
+filesystem mounts or SSH-agent forwarding. A 147-byte synthetic file survived
+one clean stop/start, was copied through loopback SSH into private host storage,
+and matched again after the VM stopped. This is collector storage calibration,
+not a network transfer or Kaferry qualification. The VM is now stopped.
+
+The measured boundary excludes host filesystem mounts; it does not exclude
+all host network access or other processes running as the Mac owner. Lima
+2.2.1 permits guest access to host loopback, and the Mac owner controls its VM
+disk and management key. No recipient decryption key entered the guest.
+The shared Mac Tailscale client remains stopped and reports no current tailnet.
+The authorized tailnet/account, short-lived CI enrollment, narrow effective
+network grants, receiver authentication, transfer receipts and private recovery
+remain prerequisites. No tailnet settings, host firewall or existing workers
+were changed; the public-repository Mac runner remains offline.
 
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
 reviewed, redacted evidence containing synthetic inputs.” Encryption is not
@@ -74,6 +109,13 @@ Go or native custody was exercised. Fresh frozen source reviews and final-head
 native CI remain required. A marker can remain after uncertain final close;
 recovery must also require the successful exact-attempt store receipt and hashes.
 Successful private storage does not change failed calibration into success.
+
+A subsequent cancellation control covers interrupted write/sync plus failed
+close, and failed write plus interrupted close. The writer retains both causes
+before rejecting the copy. These are injected synthetic exceptions, not real
+platform refusals or network execution. All seventeen storage functions passed
+locally; frozen source reviews and final-head native CI are required before
+accepting this change as a bounded harness result.
 
 The existing raw writers and sealer keep their fixed checkout paths. Only an
 already sealed, closure-admitted capsule is selected for the private copy;

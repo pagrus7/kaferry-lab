@@ -226,18 +226,19 @@ def payloads(base, value):
 def write_file(fd, name, body):
     # Single write; a short/failed write is fatal, never retried through any route.
     out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
+    # Cancellation must not discard a second failure while closing this file.
     failures = []
     try:
         try:
             if os.write(out, body) != len(body):
                 raise OSError(5, "private storage short write")
             os.fsync(out)
-        except OSError as error:
+        except BaseException as error:
             failures.append(("write/sync " + name, error))
     finally:
         try:
             os.close(out)
-        except OSError as error:
+        except BaseException as error:
             failures.append(("close " + name, error))
     if failures:
         raise IOFailures(failures)
