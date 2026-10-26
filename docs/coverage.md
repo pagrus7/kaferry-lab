@@ -130,7 +130,7 @@ unmeasured. No live Kaferry path or proxy capability follows.
 ### Private evidence handoff calibration
 
 The filesystem handoff is a measurement boundary, not another Kaferry scenario.
-Fifteen local synthetic Python controls exercise exclusive capsule retention,
+Sixteen local synthetic Python controls exercise exclusive capsule retention,
 identity/closure rejection, collision/quota, short writes, joined write/close
 causes and terminal sync/close uncertainty. Twenty-six data-only controls execute
 the exact workflow preflight/store projections and reject malformed identities,

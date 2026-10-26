@@ -23,7 +23,11 @@ def load_helper():
     global m
     spec = importlib.util.spec_from_file_location("notice_private_store", Path(__file__).with_name("store-link-notices-private.py"))
     loaded = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(loaded)
+    bootstrap = io.StringIO()
+    with contextlib.redirect_stdout(bootstrap), contextlib.redirect_stderr(bootstrap):
+        spec.loader.exec_module(loaded)
+    if bootstrap.getvalue():
+        raise RuntimeError("helper bootstrap incomplete")
     m = loaded  # only publish a fully loaded module
 RUN = "links-123456-2"
 HEAD = "a" * 40
@@ -43,6 +47,30 @@ def put(path, body):
 
 
 class StorageControls(unittest.TestCase):
+    def test_failed_public_stream_has_one_write_no_fallback(self):
+        class FailedOutput:
+            def __init__(self):
+                self.writes = 0
+            def write(self, _body):
+                self.writes += 1
+                raise OSError(errno.EIO, SENTINEL + "-public-output")
+            def flush(self):
+                raise AssertionError("flush after failed write")
+        for production in (True, False):
+            with self.subTest(production_store_cli=production):
+                stream, diagnostic = FailedOutput(), io.StringIO()
+                if production:
+                    patcher = mock.patch.object(m, "main", return_value={"synthetic": True})
+                    target = m.cli
+                else:
+                    patcher = mock.patch.dict(globals(), {"main": lambda: (0, {"synthetic": True})})
+                    target = cli
+                with patcher, contextlib.redirect_stdout(stream), contextlib.redirect_stderr(diagnostic):
+                    status = target()
+                self.assertEqual(status, 1)
+                self.assertEqual(stream.writes, 1)
+                self.assertEqual(diagnostic.getvalue(), "")
+
     def test_loader_failure_never_prints_original(self):
         failure = OSError(errno.EIO, SENTINEL + "-module-loader")
         out, err = io.StringIO(), io.StringIO()
@@ -386,20 +414,24 @@ def main():
             put(directory / "PRIVATE-FAILURES.txt", capture.getvalue().encode())
         put(directory / "public-report.json", encoded(report))
     except Exception:
-        print('{"namespace":"calibration/private-storage-controls","status":"failed-incomplete-report","release_qualified":false}')
-        return 1
-    print(json.dumps({"namespace": "calibration/private-storage-controls", "status": report["status"],
+        return 1, {"namespace": "calibration/private-storage-controls", "status": "failed-incomplete-report", "release_qualified": False}
+    return (0 if result.wasSuccessful() else 1), {"namespace": "calibration/private-storage-controls", "status": report["status"],
                       "tests_run": result.testsRun, "failures": report["failures"], "errors": report["errors"],
-                      "release_qualified": False}, sort_keys=True))
-    return 0 if result.wasSuccessful() else 1
+                      "release_qualified": False}
 
 
 def cli():
     try:
-        return main()
+        status, summary = main()
+    except (Exception, KeyboardInterrupt, SystemExit):
+        summary = {"namespace": "calibration/private-storage-controls", "status": "failed-incomplete-report", "release_qualified": False}
+        status = 1  # module/report bootstrap may precede any original-notice sink
+    try:
+        sys.stdout.write(encoded(summary).decode())
+        sys.stdout.flush()
     except (Exception, KeyboardInterrupt):
-        print('{"namespace":"calibration/private-storage-controls","status":"failed-incomplete-report","release_qualified":false}')
-        return 1  # module/report bootstrap may precede any original-notice sink
+        return 1  # failed output: no second write or traceback
+    return status
 
 
 if __name__ == "__main__":

@@ -25,7 +25,10 @@ try:
     _spec.loader.exec_module(s)
 except Exception:
     # Before any private sink exists, loading failure has no guaranteed original.
-    print('{"namespace":"calibration/private-notice-store","status":"rejected-incomplete","complete":false,"release_qualified":false}')
+    try:
+        print('{"namespace":"calibration/private-notice-store","status":"rejected-incomplete","complete":false,"release_qualified":false}', flush=True)
+    except (Exception, KeyboardInterrupt):
+        pass  # failed public output has no retry or alternate diagnostic route
     raise SystemExit(1) from None
 
 REPOSITORY = "pagrus7/kaferry-lab"
@@ -366,16 +369,28 @@ def main(argv=None):
 
 
 def cli(argv=None):
-    previous = signal.signal(signal.SIGTERM, s.terminal_signal)
+    failed = {"namespace": NAMESPACE, "status": "rejected-incomplete", "complete": False,
+              "release_qualified": False}
+    previous = None
+    result, status = failed, 1
     try:
-        print(s.encode(main(argv)).decode(), end="")
-        return 0
+        previous = signal.signal(signal.SIGTERM, s.terminal_signal)
+        result = main(argv)
+        status = 0
     except (Exception, KeyboardInterrupt):
-        print(s.encode({"namespace": NAMESPACE, "status": "rejected-incomplete", "complete": False,
-                        "release_qualified": False}).decode(), end="")
-        return 1
+        result, status = failed, 1
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        if previous is not None:
+            try:
+                signal.signal(signal.SIGTERM, previous)
+            except (Exception, KeyboardInterrupt):
+                result, status = failed, 1
+    try:
+        sys.stdout.write(s.encode(result).decode())
+        sys.stdout.flush()
+    except (Exception, KeyboardInterrupt):
+        return 1  # one public write; no fallback print or original traceback
+    return status
 
 
 if __name__ == "__main__":

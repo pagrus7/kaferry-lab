@@ -66,7 +66,7 @@ retry, alternative slot or automatic deletion. Public output contains only exact
 identity, hashes, byte counts and status. The workflow checks those fields against
 its preflight, sealer and caller receipts before publishing selected facts.
 
-Fifteen local synthetic Python controls passed, including literal short-write,
+Sixteen local synthetic Python controls passed, including one-attempt failed public output, literal short-write,
 write-plus-close causes, final-sync/close failures, collision, quota and metadata
 rejection. Twenty-six data-only workflow/caller controls passed, including guarded root resolution, entry/report-write and failed-private-sink suppression with available originals retained privately.
 These use synthetic files and injected errors; no real root, host mount, crypto,
