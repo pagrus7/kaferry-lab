@@ -197,8 +197,8 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 					}
 				}
 				if len(workers) == 0 {
-					if current != "warmup" || pw.SettingsID != "primary-threshold4" {
-						return bad("phase_profile_order", "primary starts only on warmup with threshold4")
+					if current != "warmup" || pw.SettingsID != m.Profiles[0].ID {
+						return bad("phase_profile_order", "primary starts only on warmup with its explicitly selected settings ID")
 					}
 					primary = id.WorkerID
 				} else {
@@ -384,8 +384,16 @@ func phaseWarmup(full Ledger) Ledger {
 }
 
 func phaseProfiles(m PhaseManifest, l Ledger) (map[string]M2Settings, error) {
-	if len(m.Profiles) != 2 || m.Profiles[0].ID != "primary-threshold4" || m.Profiles[1].ID != "recovery-unlimited" {
-		return nil, fmt.Errorf("exact primary-threshold4 and recovery-unlimited settings IDs are required")
+	if len(m.Profiles) != 2 || (m.Profiles[0].ID != "primary-threshold4" && m.Profiles[0].ID != "primary-unlimited") || m.Profiles[1].ID != "recovery-unlimited" {
+		return nil, fmt.Errorf("one explicit primary-threshold4 or primary-unlimited profile followed by recovery-unlimited is required")
+	}
+	primaryID := m.Profiles[0].ID
+	threshold := identity.Int64(4)
+	if primaryID == "primary-unlimited" {
+		if m.ScenarioID != "delivery-stop" {
+			return nil, fmt.Errorf("primary-unlimited is only the explicit delivery-stop variant")
+		}
+		threshold = 0
 	}
 	for _, endpoint := range []string{m.SourceEndpoint, m.DestinationEndpoint} {
 		host, port, err := net.SplitHostPort(endpoint)
@@ -395,8 +403,8 @@ func phaseProfiles(m PhaseManifest, l Ledger) (map[string]M2Settings, error) {
 		}
 	}
 	p, recovery := m.Profiles[0].Settings, m.Profiles[1].Settings
-	if p.RecordThreshold != 4 || recovery.RecordThreshold != 0 || p.Routing != recovery.Routing || (p.Routing != "PRESERVE" && p.Routing != "KEY") || p.MeasurementsVersion != 0 || recovery.MeasurementsVersion != 0 || p.Environment == nil || recovery.Environment == nil {
-		return nil, fmt.Errorf("only threshold4 to unlimited with identical routing/environment is admitted; measurement extension remains separate")
+	if p.RecordThreshold != threshold || recovery.RecordThreshold != 0 || p.Routing != recovery.Routing || (p.Routing != "PRESERVE" && p.Routing != "KEY") || p.MeasurementsVersion != 0 || recovery.MeasurementsVersion != 0 || p.Environment == nil || recovery.Environment == nil {
+		return nil, fmt.Errorf("primary count must match its explicit profile, recovery must be unlimited, and routing/environment identical; measurement extension remains separate")
 	}
 	if err := m2Routes(l, p.Routing); err != nil {
 		return nil, err
@@ -419,10 +427,14 @@ func phaseProfiles(m PhaseManifest, l Ledger) (map[string]M2Settings, error) {
 	if err := m2SQLValid(M2Manifest{Group: m.Group, Settings: recovery}, l, m.SourceEndpoint, m.DestinationEndpoint); err != nil {
 		return nil, err
 	}
-	if p.SQL != strings.TrimSuffix(recovery.SQL, ";\n")+" OPTIONS (WORKER_STOP_AFTER_RECORDS=4);\n" {
-		return nil, fmt.Errorf("primary SQL must contain the exact worker-stop option4; record_cap is not that option")
+	primarySQL := recovery.SQL
+	if threshold == 4 {
+		primarySQL = strings.TrimSuffix(recovery.SQL, ";\n") + " OPTIONS (WORKER_STOP_AFTER_RECORDS=4);\n"
 	}
-	return map[string]M2Settings{"primary-threshold4": p, "recovery-unlimited": recovery}, nil
+	if p.SQL != primarySQL {
+		return nil, fmt.Errorf("primary SQL must match its explicit threshold4 or unlimited profile; record_cap is not the worker-stop option")
+	}
+	return map[string]M2Settings{primaryID: p, "recovery-unlimited": recovery}, nil
 }
 
 func phaseSourceScan(v PhaseVerification) error {

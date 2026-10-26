@@ -678,3 +678,103 @@ func TestVersion3SerialMutationReceiptsCannotBackdateWitnesses(t *testing.T) {
 		})
 	}
 }
+
+// The profile ID is an explicit variant, not a relabeling of threshold4 work.
+// This literal history records a live primary TERM after the same full readback;
+// it still supplies no independently observed delivery-timeout mechanism.
+func unlimitedPhaseControl() *phaseControl {
+	c := preparedPhaseControl()
+	c.m.ScenarioID = "delivery-stop"
+	p := &c.m.Profiles[0]
+	p.ID = "primary-unlimited"
+	p.Settings.Args = []string{"run", "--file", "/synthetic/primary-unlimited.sql", "--config", "/synthetic/worker.toml"}
+	p.Settings.RecordThreshold = 0
+	p.Settings.SQL = c.m.Profiles[1].Settings.SQL
+	p.Settings.SQLSHA256 = phaseTestHash([]byte(p.Settings.SQL))
+	c.worker("primary", "primary-unlimited", "start", "")
+	c.audit("warmup-progress", "warmup", 1, 1, false, false)
+	c.worker("primary", "primary-unlimited", "signal", "SIGSTOP")
+	c.publish("full", "primary")
+	c.verify("full")
+	c.worker("primary", "primary-unlimited", "signal", "SIGCONT")
+	c.worker("primary", "primary-unlimited", "signal", "SIGTERM")
+	c.worker("primary", "primary-unlimited", "exit", "")
+	c.worker("primary", "primary-unlimited", "cleanup", "")
+	c.broker("destination", "restart")
+	c.verify("full")
+	c.audit("stopped-safety", "full", 1, 1, true, false)
+	phaseRecoveryControl(c)
+	return c
+}
+
+func TestVersion3ExplicitUnlimitedPrimaryStillNeedsMechanism(t *testing.T) {
+	// Given an explicitly unlimited primary and recovery with a recorded live
+	// TERM, when data admission completes, then neither TERM nor zero threshold
+	// supplies an actual reached delivery-timeout predicate or qualification.
+	c := unlimitedPhaseControl()
+	r := CheckPhaseHistory(c.m, c.a, c.e)
+	if r.Verdict != Unsupported || !phaseFinding(r, "phase_admission_complete") || !phaseFinding(r, "mechanism_unobserved") || len(r.Findings) != 2 || r.ReleaseQualified {
+		t.Fatalf("explicit unlimited preparation changed mechanism admission: %+v", r)
+	}
+}
+
+func TestVersion3UnlimitedPrimaryRejectsMixedProfilesAndSQLNormalization(t *testing.T) {
+	for _, control := range []struct {
+		name string
+		code string
+		edit func(*phaseControl)
+	}{
+		{"threshold-settings-under-unlimited-ID", "phase_profiles", func(c *phaseControl) {
+			p := &c.m.Profiles[0].Settings
+			p.RecordThreshold = 4
+			p.SQL = strings.TrimSuffix(c.m.Profiles[1].Settings.SQL, ";\n") + " OPTIONS (WORKER_STOP_AFTER_RECORDS=4);\n"
+			p.SQLSHA256 = phaseTestHash([]byte(p.SQL))
+		}},
+		{"unlimited-settings-under-threshold-ID", "phase_profiles", func(c *phaseControl) { c.m.Profiles[0].ID = "primary-threshold4" }},
+		{"unlimited-primary-for-threshold-scenario", "phase_profiles", func(c *phaseControl) { c.m.ScenarioID = "delivery-threshold" }},
+		{"rebound-SQL-option-with-zero-count", "phase_profiles", func(c *phaseControl) {
+			p := &c.m.Profiles[0].Settings
+			p.SQL = strings.TrimSuffix(p.SQL, ";\n") + " OPTIONS (WORKER_STOP_AFTER_RECORDS=4);\n"
+			p.SQLSHA256 = phaseTestHash([]byte(p.SQL))
+		}},
+		{"rebound-primary-config-path", "phase_profiles", func(c *phaseControl) {
+			p := &c.m.Profiles[0].Settings
+			p.Args = append([]string(nil), p.Args...)
+			p.Args[4] = "/synthetic/another-worker.toml"
+			args, _ := json.Marshal(p.Args)
+			for _, e := range c.e {
+				if e.Worker != nil && e.Worker.SettingsID == "primary-unlimited" {
+					e.Worker.Observation.Identity.ArgsSHA256 = phaseTestHash(args)
+				}
+			}
+		}},
+		{"threshold-worker-in-unlimited-history", "phase_worker", func(c *phaseControl) {
+			for _, e := range c.e {
+				if e.Worker != nil && e.Worker.Observation.Action == "start" && e.Worker.SettingsID == "primary-unlimited" {
+					e.Worker.SettingsID = "primary-threshold4"
+				}
+			}
+		}},
+		{"rebound-recovery-using-primary-profile", "phase_recovery", func(c *phaseControl) {
+			args, _ := json.Marshal(c.m.Profiles[0].Settings.Args)
+			for _, e := range c.e {
+				if e.Worker != nil && e.Worker.SettingsID == "recovery-unlimited" {
+					e.Worker.SettingsID = "primary-unlimited"
+					e.Worker.Observation.Identity.ArgsSHA256 = phaseTestHash(args)
+				}
+			}
+		}},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			// Given independently literal valid unlimited work, when profile or
+			// SQL/settings identity is mixed (including fresh hashes), then the
+			// specific boundary must reject it before generic mechanism limits.
+			c := unlimitedPhaseControl()
+			control.edit(c)
+			r := CheckPhaseHistory(c.m, c.a, c.e)
+			if r.Verdict != HarnessError || !phaseFinding(r, control.code) || phaseFinding(r, "phase_admission_complete") || r.ReleaseQualified {
+				t.Fatalf("mixed unlimited/threshold profile escaped admission: %+v", r)
+			}
+		})
+	}
+}

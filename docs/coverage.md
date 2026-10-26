@@ -40,8 +40,14 @@ and `internal/franz/recovery_test.go`:
 in-process acceptance/flush failures or restart with a new cap. The added lab
 observation is an immutable final declaration followed by complete independent
 source scans of warmup and additive full input while the same primary is
-observed stopped, exact threshold4/unlimited profile binding, phase-bound audits,
-and settled full membership/saved-prefix checking. Warmup progress names the
+observed stopped, exact profile binding, phase-bound audits, and settled full
+membership/saved-prefix checking. The first profile ID explicitly selects
+`primary-threshold4` or, only for `delivery-stop`, `primary-unlimited`; the second
+is always `recovery-unlimited`. The existing threshold-labelled admission is
+preserved and is not reinterpreted as unlimited live-TERM evidence. In the new
+unlimited variant both invocations have zero threshold and identical SQL and
+settings except their separate SQL argument paths. Actual live TERM and reached
+delivery-timeout proof remain missing. Warmup progress names the
 same live primary, with output/saved/group scans after completed launch. Recovery
 requires completed broker health before launch and fresh settled safety after
 any later impairment/restoration. Full-source readback must begin at or after completed
@@ -56,8 +62,15 @@ prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
 publication/STOP/CONT ordering, rebound configuration-path changes, profiles and
 warmup-only completion. Declared future input creates no
 early delivery obligation; saving past the verified published end is still a
-violation. This is source-only, uncompiled checker preparation with synthetic
-controls authored but unexecuted. Valid data admission remains `UNSUPPORTED`
+violation. The threshold-only checker at `73d407e` passed its native synthetic
+controls in run40243640023; the added unlimited-profile variant is source-only,
+uncompiled, with mixed-profile/SQL-normalization controls authored but unexecuted.
+`WritePhaseBundle` exclusively reserves a new four-file version3 history; its
+completion marker binds the retained bytes, not a passing verdict. Writer
+controls for offline recheck/corruption, collision preservation, and rejection
+of open or oversized streams before reservation are authored but unrun. The
+writer supplies no controller or mechanism witness.
+Valid data admission remains `UNSUPPORTED`
 for delivery/failed-threshold mechanism acceptance; counts, timers and logs do
 not establish ACK receipt or drain-path entry. Historical evidence-v2 semantics
 and all required M2 live observations remain unchanged.

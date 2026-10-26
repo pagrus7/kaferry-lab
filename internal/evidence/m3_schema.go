@@ -8,7 +8,7 @@ const PhaseSchemaVersion = 3
 const PhaseCheckerVersion = "evidence-v3"
 
 type PhaseSettings struct {
-	ID       string     `json:"id"` // primary-threshold4 or recovery-unlimited only
+	ID       string     `json:"id"` // first: primary-threshold4 or primary-unlimited; second: recovery-unlimited
 	Settings M2Settings `json:"settings"`
 }
 
