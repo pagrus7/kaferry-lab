@@ -61,6 +61,9 @@ func LoadAndCheck(dir string) Result {
 	if err := json.Unmarshal(manifestRaw, &version); err != nil {
 		return fail("manifest_json", err.Error())
 	}
+	if version.SchemaVersion == PhaseSchemaVersion {
+		return loadPhaseBundle(dir, manifestRaw)
+	}
 	if version.SchemaVersion == M2SchemaVersion {
 		return loadM2(dir, manifestRaw)
 	}

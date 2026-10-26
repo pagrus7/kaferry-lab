@@ -1,19 +1,88 @@
 # Private linked-fixture notices
 
-The optional stock-link source stores raw Docker and in-process HTTP/TCP failure
-notices separately from public selected facts. Those owner-only files under
-`.cache/fixtures-private/RUN_ID-links/` cannot survive an ephemeral runner by
-hashes alone. The last independently accepted native run, `b61b6145`, kept
-proxy runtime disabled. The local activation candidate requests live execution;
-it must not be pushed until the publication decision below is explicit.
+The publication decision is settled: reviewed structured facts may be public;
+original raw diagnostics stay private. This includes their encrypted capsules.
+The earlier `b4eca248` public-CMS activation proposal is superseded, not awaiting
+another publication exception. Live linked calibration remains disabled while
+the private storage route is prepared and verified.
+
+The selected route is to keep completed sealed originals on the user's worker
+storage, described by the user as a Mac mini. The actual runner-visible private
+mount and its backing/lifecycle mapping are **unverified**. Current workflow
+jobs select `ubuntu-24.04`; no registered self-hosted runner was found in the
+read-only preflight. The local session is separately Darwin/arm64. Host inspection found four Mac runner services under
+`/Users/pg/services/github-runners/`, all registered to
+`pagrus7/knowledge-assistant`. They do not supply a configured storage path for
+this lab’s current Ubuntu jobs. Native Linux AMD64 execution
+remains a separate requirement.
 
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
-reviewed, redacted evidence containing synthetic inputs.” Encryption provides
-confidentiality, not content review or redaction. The activation candidate
-sets `LAB_LINK_RUNTIME` to `enabled`; that source selection supplies no
-publication authority. An explicit user exception for the bounded public
-ciphertext or a reviewed private durable route is required before its push.
-These helpers prepare a concrete retention option; they are not qualification.
+reviewed, redacted evidence containing synthetic inputs.” Encryption is not
+review or redaction. The existing reviewed fixed synthetic transport sample
+remains an allowed public calibration; it grants no exception for unknown
+notices. Public unknown-notice CMS upload stays off, with no fallback to it
+when private retention fails.
+
+## Private filesystem handoff — source and synthetic controls
+
+The configuration prerequisite is one existing absolute private directory,
+visible to the actual executing worker, outside the checkout, temporary storage
+and public artifact/cache trees. Identify its owner/account, narrow mount path,
+actual retained backing and the runner/VM/container lifecycle it survives.
+Confirm that lifecycle with bounded write/sync/close/readback and later private
+recovery before claiming durable custody. A path string, runner label or
+same-directory hash is insufficient. One host is one failure domain.
+
+Expose only this dedicated mount to the trusted job/account. Untrusted PR/fork
+jobs must not receive it; mode 0700 alone cannot isolate jobs sharing the same
+UID. Do not mount a whole home directory. The recipient private key stays in
+private coordinator custody and is never mounted, fetched or copied onto the
+worker. The pinned public certificate is enough to seal. If that worker has a
+verified persistent mount, the filesystem handoff needs no publishing credential
+or object-storage service. The current native-worker-to-Mac connection is still
+unconfigured.
+
+`scripts/store-link-notices-private.py` implements `preflight` and `store`.
+Both require `--private-root`, `--storage-id`, `--run-id`, `--source-head`,
+`--job links` and `--attempt`, with the exact canonical trusted-push CI context.
+The workflow obtains the two storage settings from repository variables
+`LAB_PRIVATE_EVIDENCE_ROOT` and `LAB_PRIVATE_STORAGE_ID`. Live runtime remains
+disabled; an enabled job must pass private-root admission before fixture setup.
+
+The root must already be an owner-only0700 directory outside the checkout. Its
+owner-only0600 `PRIVATE-STORE.json` has exactly `version` (integer1), `storage_id`,
+`root_device`, `root_inode`, `operator_confirmed_persistent`, `private`,
+`exclusive_trusted_writer`, `repository` and `repository_id`. Device/inode are
+those observed by the executing worker; the three operator flags must be true.
+These are explicit operator attestations, not empirical proof of persistence,
+Mac backing or trusted-job isolation. The helper does not provision the root.
+
+After completed writer closure and sealing, `store` exclusively copies three
+fixed payloads: `notice.cms`, original sealer metadata as `SEAL-COMPLETE.json`,
+and `caller-proof.json`. An owned private `OS-ERROR.json` and final storage
+`COMPLETE.json` account for copy failures/finalization. The dedicated root admits
+at most64 attempt directories with a13MiB helper-owned budget each, no overwrite,
+retry, alternative slot or automatic deletion. Public output contains only exact
+identity, hashes, byte counts and status. The workflow checks those fields against
+its preflight, sealer and caller receipts before publishing selected facts.
+
+Fourteen local synthetic Python controls passed, including literal short-write,
+write-plus-close causes, final-sync/close failures, collision, quota and metadata
+rejection. Twenty-two data-only controls of the exact workflow projection passed.
+These use synthetic files and injected errors; no real root, host mount, crypto,
+Go or native custody was exercised. Fresh frozen source reviews and final-head
+native CI remain required. A marker can remain after uncertain final close;
+recovery must also require the successful exact-attempt store receipt and hashes.
+Successful private storage does not change failed calibration into success.
+
+The existing raw writers and sealer keep their fixed checkout paths. Only an
+already sealed, closure-admitted capsule is selected for the private copy;
+this does not relocate every writer or preserve every early failure. Private
+local recovery must verify the selected repository/head/run/attempt/job,
+successful retention result and exact capsule bytes. The existing authenticated
+GitHub retriever remains strict for GitHub artifacts; local custody must not be
+relabeled API-authenticated. A local recovery entry point and custody validation
+are still pending.
 
 ## Implemented helpers and bounds
 
@@ -31,8 +100,9 @@ The helper puts the run/head/job/attempt/certificate and file hashes in a fixed
 inner tar manifest, then uses stock OpenSSL CMS with AES-256-CBC,
 RSA-OAEP/SHA-256 and MGF1/SHA-256. **CBC is not authenticated encryption.**
 The fixed quarantine contains bounded ciphertext and completion metadata, never
-raw tar, notices or keys. Any future upload must select only `notice.cms`.
-Completion metadata is not publication permission or a product verdict.
+raw tar, notices or keys. Unknown-notice `notice.cms` stays private; only the
+separately reviewed fixed sample may be uploaded publicly. Completion metadata
+is not publication permission or a product verdict.
 
 `scripts/unseal-link-notices.py` requires an externally trusted SHA-256 for the
 entire artifact ZIP before it parses the ZIP or decrypts. It accepts exactly one
@@ -72,7 +142,7 @@ and fatal. No alternate sink, retry, tool or trust setting repairs a
 denied action. Helpers do not upload, grant a publication exception, qualify a
 release or prove a source-save/threshold/worker-ACK mechanism.
 
-## Current validation and remaining gate
+## Existing helper validation and remaining work
 
 Local synthetic controls cover stock-CMS roundtrip and algorithm IDs,
 wrong keys, ZIP-digest admission, unsafe paths/bounds, injected OS failures,
@@ -119,11 +189,11 @@ commit/upload the private key or recovered notices. Recover, inspect and redact
 synthetic evidence before any ordinary release-evidence publication.
 
 A future enabled producer needs an exact reviewed source/CI binding, explicit
-writer-stop/reap evidence, native tool checks, the approved recipient and either
-an actual private durable transfer or explicit authorization for the proposed
-public ciphertext exception. Until that decision, the enabled candidate stays local and published linked
-runtime and unknown-notice encrypted public retention stay off. Real product fault coverage and M2–M6 acceptance remain
-separate requirements.
+writer-stop/reap evidence, native tool checks, the pinned recipient and a
+verified private mount/retention route. The selected policy needs no further
+publication exception. Current private-copy integration is source preparation;
+no actual private custody, lifecycle recovery or linked runtime has been
+measured. Real product fault coverage and M2–M6 acceptance remain separate.
 
 ## Linked v2 and caller activation
 
@@ -162,15 +232,18 @@ controls are in that reviewed source. All 46 data-only caller rows are retained
 and passed natively. This validates the bounded helper gates, not actual proxy
 execution, combined writer closure or authenticated linked-v2 retrieval.
 
-An enabled head would skip the unit fixed-sample producer/upload so the current
-retriever still admits exactly one canonical encrypted artifact in a run.
-The last accepted `links` job built only specimens. The activation candidate's
-guarded upload selects only the sole CMS member for 14 days, with read-only contents permission
-and no publishing credential or recipient key. Before such a head is pushed,
-the concrete source, native controls and exact publication exception or private
-transfer require review. Encryption remains separate from redaction.
+The reviewed fixed-sample unit producer/upload remains a separate public
+calibration under its existing guards. The last accepted `links` job built only
+specimens; unknown linked-notice ciphertext must have no public upload path.
+Private-copy integration requires frozen source reviews and final-head native
+checks before any activation. Earlier native helper/sample results do not
+validate the new storage path. Encryption remains separate from redaction.
 
-No guarantee covers a first required sink failure, failed final close, missing
-accepted archive, failed encryption, cancelled unconfirmed writer or lost
-runner. Such failures are incomplete, not durably retained by assumption.
+No guarantee covers a first required sink failure, overflow, failed final close,
+missing accepted archive/closure, failed encryption, failed private copy, or
+cancelled/lost runner before the copy completes. Raw checkout files can be lost
+in those cases. The capsule does not automatically include every sealer/copy
+diagnostic or the separate hardware proposal root. Partial v2 evidence remains
+partial. Sync/close and hashes do not establish power-loss durability or
+independent backup. Such failures are incomplete, not retained by assumption.
 There is no alternate sink, cleanup tool or capture route after denial.

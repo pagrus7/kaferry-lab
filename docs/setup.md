@@ -79,26 +79,45 @@ Jobs have explicit time budgets, read-only contents permission, commit-pinned ac
 
 The optional stock-link fixture and its opt-in topology/nonce controls are
 source integrations awaiting accepted native proxy execution. The last accepted
-native workflow kept them disabled; the activation candidate must remain local
-until its separate publication decision. See [the current observation and
-private-retention limits](m2.md) before enabling any proxy run; no proxy
-qualification or durable private-notice route is currently established.
+native workflow kept them disabled. The earlier public-CMS activation proposal
+is superseded: reviewed structured facts may be public, while original raw
+diagnostics and their encrypted capsules remain private. The reviewed fixed
+synthetic unit transport sample remains separately allowed. Unknown-notice CMS
+has no public retention fallback.
 
-Private notice sealing, authenticated retrieval and offline recovery are
-described in [private-notices](private-notices.md). They grant no publication
-authority; pushing the activation candidate requires the explicit decision.
+The selected private route keeps completed sealed originals on the user's
+worker storage, described as a Mac mini. Supply one existing runner-visible
+absolute private directory outside the checkout, temporary storage and public
+artifact/cache paths, with its owner, narrow mount and actual persistent backing
+identified. The actual mapping and survival across checkout/worker lifecycle
+are unverified. Current workflow jobs select `ubuntu-24.04`; read-only preflight
+found no registered self-hosted runner. Local Darwin/arm64 does not establish
+what backs those jobs. Host inspection found four Mac runner services registered
+to `pagrus7/knowledge-assistant`; this lab’s native-worker-to-Mac storage connection
+is not configured. Native Linux AMD64 readiness remains separate.
+
+Expose only the dedicated private mount to the trusted job/account; no whole
+home directory or untrusted PR/fork access. The recipient private key stays off
+the worker in coordinator custody. The private filesystem helper preflights that
+root before driver launch and stores an exclusive, identity-bound copy only after
+actual closure and sealing. Repository variables `LAB_PRIVATE_EVIDENCE_ROOT` and
+`LAB_PRIVATE_STORAGE_ID` select the preprovisioned root/descriptor. They are not
+configured here; `LAB_LINK_RUNTIME` remains disabled. Local synthetic storage and
+caller controls passed, but actual persistence has not been observed. See
+[private-notices](private-notices.md) for the implemented helper interface, exact
+custody prerequisites, existing helper evidence and early-failure limits, and
+[M2](m2.md) for the missing mechanism observations.
 
 The feature-push `links` job builds `cmd/link-calibration` and a fresh
 `internal/campaign` test binary on native Linux AMD64 with clean exact-head VCS
 metadata. Accepted run `40236814641` used `LAB_LINK_RUNTIME: 'disabled'` and
-uploaded selected build metadata only. The activation candidate sets the flag
-to `enabled`; a trusted push would request driver execution, stock-proxy
-runtime, linked notice sealing and the sole encrypted artifact upload. That
-push requires explicit publication authorization, independently of this flag.
-The foreground driver command and its fixed run paths are encoded in CI;
-local Go execution remains stopped under the recorded denial. No local command
-is offered as a substitute. This job has a 20-minute outer budget, with separate
-build, driver, proof and retention limits if execution is later authorized.
+uploaded selected build metadata only. Integration keeps runtime disabled;
+actual private retention, later private recovery and combined driver/fixture
+execution remain unmeasured. The foreground driver and its fixed paths remain
+encoded in CI. Local Go execution remains stopped under the recorded denial.
+The job has a 20-minute outer budget with separate build, driver, proof and
+retention limits. Frozen source reviews and final-head native CI are required
+for the new integration; earlier native results do not validate it.
 
 Feature pushes are the working premerge trigger. Read-only API preflight found
 no CI workflow file on default branch `main`; manual dispatch has not been

@@ -25,6 +25,56 @@ Use named restart groups, at least three selected partitions, short recorded tim
 | `M2.delivery-outage-stop` | `internal/franz/recovery_test.go`: `TestAmbiguousDeliveryReplaysWithoutLosingProgress`; `internal/copy/worker_stop_test.go`: `TestWorkerStopFailuresSaveOnlyConfirmedProgress/{delivery,timeout,commit}`; `tests/compat/soak_test.go`: `TestStreamingSoakFidelityCommitLagMemoryAndShutdown` | Measured destination impairment past delivery timeout with required output absent, separately combined with SIGTERM and threshold drain. Record actual timeout/exit, interval, restoration and resume. Core soak pauses for one second and shuts down after verified catch-up. | Kafka audit proves no loss/unsafe save; measure overshoot and replay amplification. Threshold/log counters do not prove drain. Tracked-work caps and RSS are different measurements. |
 | `M2.source-startup-save-outage` | `internal/franz/recovery_test.go`: `TestProductionCopyClosesBlockedStartupAndFetchRequests/{coordinator,join,offset fetch,offset lookup,initial commit,fetch}`; `tests/compat/fault_test.go`: `TestBlockingCommitAcrossBrokerOutage`; `internal/copy/runner_test.go`: `TestRevocationCommitFailures` | Release startup against observed cold/inaccessible coordinator; separate source disconnection with output active and saves due, restore/restart. Core real-broker test calls adapter Save directly; kfake intercepts exact requests. | Kafka audit and bounded recovery; distinguish startup/periodic failure from revocation replay behavior. A timer/outage alone cannot prove a particular commit was hit. |
 
+### M2 two-phase checker preparation
+
+The isolated evidence-version3 proposal (`internal/evidence/m3_*.go`) adds a
+fixed warmup3/full96 admission boundary for M2 delivery experiments; the filename
+is a schema version, not roadmap milestone M3. Closest tagged v0.6.0 tests read:
+`internal/copy/worker_stop_test.go`:
+`TestWorkerStopCapsBatchedWritesAcrossPartitions`,
+`TestWorkerStopCountsAcrossProgressSaves`,
+`TestWorkerStopFailuresSaveOnlyConfirmedProgress/{delivery,timeout,commit}`;
+`tests/compat/worker_stop_test.go`: `TestWorkerStopAcrossEndpointDirections`;
+and `internal/franz/recovery_test.go`:
+`TestAmbiguousDeliveryReplaysWithoutLosingProgress`. Those controls inspect
+in-process acceptance/flush failures or restart with a new cap. The added lab
+observation is an immutable final declaration followed by complete independent
+source scans of warmup and additive full input while the same primary is
+observed stopped, exact profile binding, phase-bound audits, and settled full
+membership/saved-prefix checking. The first profile ID explicitly selects
+`primary-threshold4` or, only for `delivery-stop`, `primary-unlimited`; the second
+is always `recovery-unlimited`. The existing threshold-labelled admission is
+preserved and is not reinterpreted as unlimited live-TERM evidence. In the new
+unlimited variant both invocations have zero threshold and identical SQL and
+settings except their separate SQL argument paths. Actual live TERM and reached
+delivery-timeout proof remain missing. Warmup progress names the
+same live primary, with output/saved/group scans after completed launch. Recovery
+requires completed broker health before launch and fresh settled safety after
+any later impairment/restoration. Full-source readback must begin at or after completed
+relevant restart/restore; its later end cannot hide an overlapping start. Profiles
+differ only at SQL argument slot2. The fixed v3 history requires a serial controller: each
+pause/restore/restart interval must begin at or after the preceding event's
+`elapsed_ns`, with its receipt retained before the next controller operation.
+Delayed broker receipts cannot backdate mutations across readback, launch or
+settled-safety witnesses; a later fault after completed readback remains valid.
+Literal negative histories challenge omitted scans, replaced prefixes/identities,
+prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
+publication/STOP/CONT ordering, rebound configuration-path changes, profiles and
+warmup-only completion. Declared future input creates no
+early delivery obligation; saving past the verified published end is still a
+violation. The threshold-only checker at `73d407e` passed its native synthetic
+controls in run40243640023; the added unlimited-profile variant is source-only,
+uncompiled, with mixed-profile/SQL-normalization controls authored but unexecuted.
+`WritePhaseBundle` exclusively reserves a new four-file version3 history; its
+completion marker binds the retained bytes, not a passing verdict. Writer
+controls for offline recheck/corruption, collision preservation, and rejection
+of open or oversized streams before reservation are authored but unrun. The
+writer supplies no controller or mechanism witness.
+Valid data admission remains `UNSUPPORTED`
+for delivery/failed-threshold mechanism acceptance; counts, timers and logs do
+not establish ACK receipt or drain-path entry. Historical evidence-v2 semantics
+and all required M2 live observations remain unchanged.
+
 ### M2 executable bindings
 
 `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` runs a partial case against the
@@ -75,6 +125,21 @@ results. Native `b61b6145` also passed eight isolated lifecycle controls,
 literal long-delay/pending timing predicates, the 169-control helper gate and
 46 retained caller controls. Actual complete driver/proxy execution remains
 unmeasured. No live Kaferry path or proxy capability follows.
+
+### Private evidence handoff calibration
+
+The filesystem handoff is a measurement boundary, not another Kaferry scenario.
+Fourteen local synthetic Python controls exercise exclusive capsule retention,
+identity/closure rejection, collision/quota, short writes, joined write/close
+causes and terminal sync/close uncertainty. Twenty-two data-only controls execute
+the exact workflow preflight/store projections and reject malformed identities,
+boolean counts, changed hashes/storage binding and extra private fields; they
+also check the public upload allowlist. No real capsule, crypto, native storage
+mount, lifecycle recovery or product-path observation is established by these
+controls. Original raw writers remain unchanged; early failures before completed
+sealing can remain unavailable/incomplete. Live calibration is disabled and
+unknown-notice CMS is excluded from public uploads. Actual custody and required
+M2 mechanisms still need independent reached evidence.
 
 ## M3 — Ownership, links, transactions and discovery
 

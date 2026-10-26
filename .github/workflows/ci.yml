@@ -9,7 +9,7 @@ concurrency:
   group: harness-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 env:
-  LAB_LINK_RUNTIME: 'enabled'
+  LAB_LINK_RUNTIME: 'disabled'
 jobs:
   unit:
     runs-on: ubuntu-24.04
@@ -94,6 +94,24 @@ jobs:
               json.dump(output, stream, indent=2, sort_keys=True)
               stream.write("\n")
           PYOBS
+      - name: Synthetic private-filesystem retention and caller controls
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/unit .cache/m2
+          storage_status=0
+          python3 scripts/test-link-notice-storage.py 2>&1 | tee .cache/unit/private-storage-controls.log || storage_status=$?
+          storage_reports=(.cache/m2/private-notice-storage-controls/run-*/public-report.json)
+          test "${#storage_reports[@]}" -eq 1
+          cp "${storage_reports[0]}" .cache/unit/private-storage-observations.json
+          test "$storage_status" -eq 0
+          caller_status=0
+          python3 scripts/test-private-store-caller.py 2>&1 | tee .cache/unit/private-store-caller-controls.log || caller_status=$?
+          caller_reports=(.cache/m2/private-store-caller-controls/run-*/public-report.json)
+          test "${#caller_reports[@]}" -eq 1
+          cp "${caller_reports[0]}" .cache/unit/private-store-caller-observations.json
+          test "$caller_status" -eq 0
       - name: Format, vet, and unit controls
         shell: bash
         run: |
@@ -433,7 +451,7 @@ jobs:
           if-no-files-found: error
 
   links:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
+    if: ${{ github.repository == 'pagrus7/kaferry-lab' && github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -500,9 +518,38 @@ jobs:
               json.dump(record, stream, indent=2, sort_keys=True)
               stream.write('\n')
           PYMETA
+      - name: Require the configured private store before any live fixture setup
+        id: private_preflight
+        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          LAB_PRIVATE_ROOT: ${{ vars.LAB_PRIVATE_EVIDENCE_ROOT }}
+          LAB_PRIVATE_STORAGE_ID: ${{ vars.LAB_PRIVATE_STORAGE_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if test -z "$LAB_PRIVATE_ROOT" || test -z "$LAB_PRIVATE_STORAGE_ID"; then
+            echo 'Private evidence storage is not configured; calibration not started.' >&2
+            exit 1
+          fi
+          python3 scripts/store-link-notices-private.py preflight --private-root "$LAB_PRIVATE_ROOT" --storage-id "$LAB_PRIVATE_STORAGE_ID" --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job links --attempt "$GITHUB_RUN_ATTEMPT" > .cache/links/private-preflight.pending.json
+          python3 - <<'PYSTORECHECK'
+          import json, os, pathlib, re
+          r = json.loads(pathlib.Path('.cache/links/private-preflight.pending.json').read_bytes())
+          expected = {'namespace': 'calibration/private-notice-store', 'status': 'preflight-ready', 'complete': False, 'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'layout': 'linked-calibration-v2', 'repository': 'pagrus7/kaferry-lab', 'repository_id': '1432555755', 'retention_limit_attempts': 64, 'retention_limit_bytes_per_attempt': 13631488, 'release_qualified': False}
+          assert type(r) is dict and set(r) == set(expected) | {'storage_binding_sha256'}
+          for key, value in expected.items():
+              assert type(r[key]) is type(value) and r[key] == value
+          assert type(r['storage_binding_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}', r['storage_binding_sha256'])
+          # This is root admission, not empirical persistence or custody proof.
+          pathlib.Path('.cache/links/private-preflight.json').write_text(json.dumps(r, sort_keys=True) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('ready=true\n')
+          PYSTORECHECK
       - name: Run the sole foreground driver which owns setup tests and cleanup
         id: driver
-        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' }}
+        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' && steps.private_preflight.outcome == 'success' && steps.private_preflight.outputs.ready == 'true' }}
         timeout-minutes: 10
         shell: bash
         run: |
@@ -644,18 +691,42 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
               stream.write('complete=true\n')
           PYSEALED
-      - name: Upload only the sole encrypted linked-notice member
+      - name: Retain the sealed originals only on the configured private filesystem
+        id: private_store
         if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.seal.outputs.complete == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        timeout-minutes: 2
-        with:
-          name: encrypted-link-notices-links-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .cache/link-quarantine/links-${{ github.run_id }}-${{ github.run_attempt }}/notice.cms
-          include-hidden-files: true
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-          overwrite: false
+        timeout-minutes: 1
+        shell: bash
+        env:
+          LAB_PRIVATE_ROOT: ${{ vars.LAB_PRIVATE_EVIDENCE_ROOT }}
+          LAB_PRIVATE_STORAGE_ID: ${{ vars.LAB_PRIVATE_STORAGE_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/store-link-notices-private.py store --private-root "$LAB_PRIVATE_ROOT" --storage-id "$LAB_PRIVATE_STORAGE_ID" --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job links --attempt "$GITHUB_RUN_ATTEMPT" > .cache/links/private-store.pending.json
+          python3 - <<'PYSTORERESULT'
+          import hashlib, json, os, pathlib, re
+          r = json.loads(pathlib.Path('.cache/links/private-store.pending.json').read_bytes())
+          expected = {'namespace': 'calibration/private-notice-store', 'status': 'stored', 'complete': True, 'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'layout': 'linked-calibration-v2', 'repository': 'pagrus7/kaferry-lab', 'repository_id': '1432555755', 'stored_payload_files': 3, 'release_qualified': False}
+          hashes = {'storage_binding_sha256', 'cms_sha256', 'seal_complete_sha256', 'caller_proof_sha256', 'storage_receipt_sha256'}
+          assert type(r) is dict and set(r) == set(expected) | hashes | {'cms_bytes', 'stored_payload_bytes'}
+          for key, value in expected.items():
+              assert type(r[key]) is type(value) and r[key] == value
+          for key in hashes:
+              assert type(r[key]) is str and re.fullmatch(r'[0-9a-f]{64}', r[key])
+          assert type(r['cms_bytes']) is int and 0 < r['cms_bytes'] <= 12 << 20
+          assert type(r['stored_payload_bytes']) is int and 0 < r['stored_payload_bytes'] <= (12 << 20) + (256 << 10)
+          before = json.loads(pathlib.Path('.cache/links/private-preflight.json').read_bytes())
+          assert r['storage_binding_sha256'] == before['storage_binding_sha256']
+          sealed = pathlib.Path('.cache/link-quarantine') / os.environ['LAB_RUN_ID']
+          metadata = json.loads((sealed / 'COMPLETE.json').read_bytes())
+          assert r['cms_sha256'] == metadata['cms_sha256'] and r['cms_bytes'] == metadata['cms_bytes']
+          assert r['seal_complete_sha256'] == hashlib.sha256((sealed / 'COMPLETE.json').read_bytes()).hexdigest()
+          assert r['caller_proof_sha256'] == hashlib.sha256(pathlib.Path('.cache/links/caller-proof.json').read_bytes()).hexdigest()
+          # Only this exact projection is public; the capsule and original bodies stay private.
+          pathlib.Path('.cache/links/private-store.json').write_text(json.dumps(r, sort_keys=True) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('complete=true\n')
+          PYSTORERESULT
       - name: Keep incomplete or failed calibration nonpassing after retention
         if: ${{ always() && env.LAB_LINK_RUNTIME == 'enabled' }}
         timeout-minutes: 1
@@ -663,13 +734,15 @@ jobs:
         env:
           PROOF_PASSED: ${{ steps.proof.outputs.calibration_passed }}
           SEALED: ${{ steps.seal.outputs.complete }}
+          PRIVATE_STORED: ${{ steps.private_store.outputs.complete }}
           CALLER_CANCELLED: ${{ job.status == 'cancelled' }}
         run: |
           set -euo pipefail
           test "$CALLER_CANCELLED" = false
           test "$PROOF_PASSED" = true
           test "$SEALED" = true
-      - name: Upload only selected public build and caller facts
+          test "$PRIVATE_STORED" = true
+      - name: Upload only selected public build, caller and private-store facts
         if: ${{ always() && !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         timeout-minutes: 1
@@ -678,6 +751,7 @@ jobs:
           path: |
             .cache/links/build.json
             .cache/links/caller-proof.json
+            .cache/links/private-store.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
