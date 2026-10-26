@@ -38,8 +38,9 @@ A separate collector-only Lima VZ ARM64 VM, `klc-20261025`, was prepared on
 matched the installed official template's SHA-256. Plain mode has no host
 filesystem mounts or SSH-agent forwarding. A 147-byte synthetic file survived
 one clean stop/start, was copied through loopback SSH into private host storage,
-and matched again after the VM stopped. This is collector storage calibration,
-not a network transfer or Kaferry qualification. The VM is now stopped.
+and matched again after the VM stopped. This calibrates local collector storage.
+Transfer from CI over a private network is unmeasured; this does not qualify
+Kaferry. The VM is now stopped.
 
 The measured boundary excludes host filesystem mounts; it does not exclude
 all host network access or other processes running as the Mac owner. Lima
