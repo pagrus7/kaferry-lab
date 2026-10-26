@@ -15,7 +15,7 @@ from pathlib import Path
 import time
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = None
 RUN = 'links-123456-2'
 HEAD = 'a' * 40
 PIN = 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57'
@@ -127,7 +127,8 @@ def run_case(case_dir, body, phase, candidate, before, seal, caller, accept):
 
 
 def main():
-    global _private_error_fd, _private_error_records, _private_error_broken
+    global ROOT, _private_error_fd, _private_error_records, _private_error_broken
+    ROOT = Path(__file__).resolve().parents[1]
     output_root = ROOT / '.cache/m2/private-store-caller-controls'
     output_root.mkdir(parents=True, mode=0o700, exist_ok=True)
     attempt = output_root / ('run-' + str(time.time_ns()))
@@ -196,24 +197,28 @@ def main():
         safe = safe and "LAB_LINK_RUNTIME: 'disabled'" in workflow
         safe = safe and 'steps.private_preflight.outputs.ready' in links_job and 'test "$PRIVATE_STORED" = true' in links_job
         rows.append({'case': 'public-upload-allowlist-and-disabled-runtime', 'passed': safe})
-        for stage in ('entry-before-sink', 'report-write-with-sink', 'private-sink-write-failure'):
+        for stage in ('entry-before-sink', 'root-resolution-before-sink', 'report-write-with-sink', 'private-sink-write-failure'):
             marker = 'PRIVATE_LITERAL_REPORTER_ERROR_' + stage
             failure = OSError(5, marker)
             case = attempt / ('reporter-' + stage)
             case.mkdir(mode=0o700)
             private = case / 'original.jsonl'
-            fd = None if stage == 'entry-before-sink' else os.open(private, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = None if stage in ('entry-before-sink', 'root-resolution-before-sink') else os.open(private, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             def fail_entry():
                 raise failure
             def fail_report_write():
                 return (case / 'public-report.json').write_bytes(b'{}')
             def fail_private_sink():
                 retain_private_error(failure)
-            fake = fail_entry if fd is None else fail_private_sink if stage == 'private-sink-write-failure' else fail_report_write
+            fake = main if stage == 'root-resolution-before-sink' else fail_entry if fd is None else fail_private_sink if stage == 'private-sink-write-failure' else fail_report_write
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.dict(globals(), {'main': fake, '_private_error_fd': fd, '_private_error_records': 0, '_private_error_broken': False}):
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    if fd is None:
+                    if stage == 'root-resolution-before-sink':
+                        with mock.patch.object(Path, 'resolve', side_effect=failure) as resolves:
+                            status = cli()
+                        assert resolves.call_count == 1
+                    elif fd is None:
                         status = cli()
                     elif stage == 'private-sink-write-failure':
                         with mock.patch.object(os, 'write', side_effect=failure) as writes:

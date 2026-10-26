@@ -130,9 +130,9 @@ unmeasured. No live Kaferry path or proxy capability follows.
 ### Private evidence handoff calibration
 
 The filesystem handoff is a measurement boundary, not another Kaferry scenario.
-Fourteen local synthetic Python controls exercise exclusive capsule retention,
+Fifteen local synthetic Python controls exercise exclusive capsule retention,
 identity/closure rejection, collision/quota, short writes, joined write/close
-causes and terminal sync/close uncertainty. Twenty-five data-only controls execute
+causes and terminal sync/close uncertainty. Twenty-six data-only controls execute
 the exact workflow preflight/store projections and reject malformed identities,
 boolean counts, changed hashes/storage binding and extra private fields; they
 also check the public upload allowlist and fixed public failure handling for
@@ -168,11 +168,12 @@ Kafka response types or worker ACK receipt. The dedicated driver adds bounded
 subreaper/anchor wait controls and run-journal-based cleanup of the extra nonce
 container; these calibrate evidence ownership, not a Kaferry scenario.
 These controls have no accepted native proxy execution. Accepted b61/run
-40236814641 built specimens with runtime disabled. The local enabled candidate
-requests guarded runtime and ciphertext production; it stays unpushed until
-the explicit publication decision. Neither establishes M3 release coverage.
-Raw private notice durability and publication authorization must be resolved
-before ephemeral proxy runtime. Source assertions establish no measured delay,
+40236814641 built specimens with runtime disabled. The earlier enabled/public-CMS
+candidate is superseded. Current runtime remains disabled, unknown-notice CMS has
+no public upload path, and the policy is settled: reviewed facts public, originals
+private. The native-worker-to-Mac private route, actual custody and later recovery
+remain unconfigured/unmeasured. Neither source nor these controls establish M3
+release coverage. Source assertions establish no measured delay,
 pending-response behavior, timeout, drain or save path.
 
 ## M4 — Archive storage and replay

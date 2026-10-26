@@ -16,9 +16,15 @@ from unittest import mock
 
 sys.dont_write_bytecode = True
 
-spec = importlib.util.spec_from_file_location("notice_private_store", Path(__file__).with_name("store-link-notices-private.py"))
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+m = None
+
+
+def load_helper():
+    global m
+    spec = importlib.util.spec_from_file_location("notice_private_store", Path(__file__).with_name("store-link-notices-private.py"))
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    m = loaded  # only publish a fully loaded module
 RUN = "links-123456-2"
 HEAD = "a" * 40
 PIN = "ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57"
@@ -37,6 +43,18 @@ def put(path, body):
 
 
 class StorageControls(unittest.TestCase):
+    def test_loader_failure_never_prints_original(self):
+        failure = OSError(errno.EIO, SENTINEL + "-module-loader")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(importlib.util, "module_from_spec", side_effect=failure) as loader:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                status = cli()
+        self.assertEqual(loader.call_count, 1)
+        self.assertEqual(status, 1)
+        self.assertEqual(err.getvalue(), "")
+        self.assertNotIn(SENTINEL, out.getvalue())
+        self.assertEqual(json.loads(out.getvalue()), {"namespace": "calibration/private-storage-controls", "status": "failed-incomplete-report", "release_qualified": False})
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="private-store-synthetic-")
         self.addCleanup(self.temp.cleanup)
@@ -341,6 +359,7 @@ class StorageControls(unittest.TestCase):
 
 
 def main():
+    load_helper()
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(StorageControls)
     capture = io.StringIO()
     result = unittest.TextTestRunner(stream=capture, verbosity=0).run(suite)
@@ -375,10 +394,13 @@ def main():
     return 0 if result.wasSuccessful() else 1
 
 
-if __name__ == "__main__":
+def cli():
     try:
-        status = main()
+        return main()
     except (Exception, KeyboardInterrupt):
         print('{"namespace":"calibration/private-storage-controls","status":"failed-incomplete-report","release_qualified":false}')
-        status = 1
-    raise SystemExit(status)
+        return 1  # module/report bootstrap may precede any original-notice sink
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
