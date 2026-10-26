@@ -27,7 +27,7 @@ Use named restart groups, at least three selected partitions, short recorded tim
 
 ### M2 two-phase checker preparation
 
-The isolated evidence-version3 proposal (`internal/evidence/m3_*.go`) adds a
+The integrated evidence-version3 checker (`internal/evidence/m3_*.go`) adds a
 fixed warmup3/full96 admission boundary for M2 delivery experiments; the filename
 is a schema version, not roadmap milestone M3. Closest tagged v0.6.0 tests read:
 `internal/copy/worker_stop_test.go`:
@@ -62,14 +62,15 @@ prelaunch/stale/foreign progress, overlapping restoration, stale settled safety,
 publication/STOP/CONT ordering, rebound configuration-path changes, profiles and
 warmup-only completion. Declared future input creates no
 early delivery obligation; saving past the verified published end is still a
-violation. The threshold-only checker at `73d407e` passed its native synthetic
-controls in run40243640023; the added unlimited-profile variant is source-only,
-uncompiled, with mixed-profile/SQL-normalization controls authored but unexecuted.
-`WritePhaseBundle` exclusively reserves a new four-file version3 history; its
-completion marker binds the retained bytes, not a passing verdict. Writer
-controls for offline recheck/corruption, collision preservation, and rejection
-of open or oversized streams before reservation are authored but unrun. The
-writer supplies no controller or mechanism witness.
+violation. The byte-identical imported profile/checker/writer at `6ba34a7`
+passed native run40248058277: six new profile/writer test functions, including
+seven mixed-profile negatives and five writer cases. Earlier threshold-only
+`73d407e` evidence remains preserved. These are proposal-head observations;
+the integrated successor still requires its own final-head native CI. All40
+new uncovered/partial decisions remain unapproved, and late writer I/O/multiple
+error failures were not injected. `WritePhaseBundle` exclusively reserves a new
+four-file version3 history; completion binds bytes, not a passing verdict. It
+supplies no real phase controller, measurement extension or mechanism witness.
 Valid data admission remains `UNSUPPORTED`
 for delivery/failed-threshold mechanism acceptance; counts, timers and logs do
 not establish ACK receipt or drain-path entry. Historical evidence-v2 semantics
@@ -131,10 +132,13 @@ unmeasured. No live Kaferry path or proxy capability follows.
 The filesystem handoff is a measurement boundary, not another Kaferry scenario.
 Fourteen local synthetic Python controls exercise exclusive capsule retention,
 identity/closure rejection, collision/quota, short writes, joined write/close
-causes and terminal sync/close uncertainty. Twenty-two data-only controls execute
+causes and terminal sync/close uncertainty. Twenty-five data-only controls execute
 the exact workflow preflight/store projections and reject malformed identities,
 boolean counts, changed hashes/storage binding and extra private fields; they
-also check the public upload allowlist. No real capsule, crypto, native storage
+also check the public upload allowlist and fixed public failure handling for
+entry/report-write errors and no repeated write after a failed private sink,
+retaining an available original privately. First or
+terminal diagnostic-sink failures can remain incomplete. No real capsule, crypto, native storage
 mount, lifecycle recovery or product-path observation is established by these
 controls. Original raw writers remain unchanged; early failures before completed
 sealing can remain unavailable/incomplete. Live calibration is disabled and

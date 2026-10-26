@@ -68,7 +68,7 @@ its preflight, sealer and caller receipts before publishing selected facts.
 
 Fourteen local synthetic Python controls passed, including literal short-write,
 write-plus-close causes, final-sync/close failures, collision, quota and metadata
-rejection. Twenty-two data-only controls of the exact workflow projection passed.
+rejection. Twenty-five data-only workflow/caller controls passed, including entry, report-write and failed-private-sink suppression with available originals retained privately.
 These use synthetic files and injected errors; no real root, host mount, crypto,
 Go or native custody was exercised. Fresh frozen source reviews and final-head
 native CI remain required. A marker can remain after uncertain final close;

@@ -4,6 +4,7 @@
 No store helper, crypto, Go, Docker, network or original diagnostic is executed.
 """
 import ast
+import base64
 import contextlib
 import copy
 import hashlib
@@ -18,6 +19,36 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN = 'links-123456-2'
 HEAD = 'a' * 40
 PIN = 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57'
+_private_error_fd = None
+_private_error_records = 0
+_private_error_broken = False
+
+
+def close_private_error():
+    global _private_error_fd
+    owned, _private_error_fd = _private_error_fd, None
+    if owned is not None:
+        os.close(owned)  # one terminal close; uncertainty never opens another sink
+
+
+def retain_private_error(error):
+    global _private_error_records, _private_error_broken
+    if _private_error_broken or _private_error_fd is None or _private_error_records >= 2:
+        return False
+    raw = str(error).encode('utf-8', errors='backslashreplace')
+    prefix = raw[:64 << 10]
+    record = {'type': type(error).__name__, 'original_bytes': len(raw),
+              'complete': len(prefix) == len(raw), 'cause_base64': base64.b64encode(prefix).decode()}
+    body = encoded(record)
+    try:
+        if os.write(_private_error_fd, body) != len(body):
+            raise OSError('private reporter error record incomplete')
+        os.fsync(_private_error_fd)
+    except BaseException:
+        _private_error_broken = True  # no further records after sink failure
+        raise
+    _private_error_records += 1
+    return len(prefix) == len(raw)
 
 
 def sha(raw):
@@ -96,10 +127,14 @@ def run_case(case_dir, body, phase, candidate, before, seal, caller, accept):
 
 
 def main():
+    global _private_error_fd, _private_error_records, _private_error_broken
     output_root = ROOT / '.cache/m2/private-store-caller-controls'
     output_root.mkdir(parents=True, mode=0o700, exist_ok=True)
     attempt = output_root / ('run-' + str(time.time_ns()))
     attempt.mkdir(mode=0o700)
+    _private_error_fd = os.open(attempt / 'PRIVATE-ERROR.jsonl', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    _private_error_records = 0
+    _private_error_broken = False
     workflow_raw = (ROOT / '.github/workflows/ci.yml').read_bytes()
     workflow = workflow_raw.decode()
     bodies = {'preflight': extract(workflow, 'PYSTORECHECK'),
@@ -140,7 +175,8 @@ def main():
                 run_case(case, bodies[phase], phase, candidate, before, seal, caller, key is None)
             except Exception as error:
                 rows.append({'case': phase + '-' + name, 'passed': False})
-                private_failure = {'case': phase + '-' + name, 'type': type(error).__name__, 'exact_text': str(error)}
+                private_failure = {'case': phase + '-' + name}
+                retain_private_error(error)
                 break  # no more filesystem work after an unexpected platform failure
             rows.append({'case': phase + '-' + name, 'passed': True})
         if private_failure:
@@ -160,18 +196,83 @@ def main():
         safe = safe and "LAB_LINK_RUNTIME: 'disabled'" in workflow
         safe = safe and 'steps.private_preflight.outputs.ready' in links_job and 'test "$PRIVATE_STORED" = true' in links_job
         rows.append({'case': 'public-upload-allowlist-and-disabled-runtime', 'passed': safe})
+        for stage in ('entry-before-sink', 'report-write-with-sink', 'private-sink-write-failure'):
+            marker = 'PRIVATE_LITERAL_REPORTER_ERROR_' + stage
+            failure = OSError(5, marker)
+            case = attempt / ('reporter-' + stage)
+            case.mkdir(mode=0o700)
+            private = case / 'original.jsonl'
+            fd = None if stage == 'entry-before-sink' else os.open(private, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            def fail_entry():
+                raise failure
+            def fail_report_write():
+                return (case / 'public-report.json').write_bytes(b'{}')
+            def fail_private_sink():
+                retain_private_error(failure)
+            fake = fail_entry if fd is None else fail_private_sink if stage == 'private-sink-write-failure' else fail_report_write
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.dict(globals(), {'main': fake, '_private_error_fd': fd, '_private_error_records': 0, '_private_error_broken': False}):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    if fd is None:
+                        status = cli()
+                    elif stage == 'private-sink-write-failure':
+                        with mock.patch.object(os, 'write', side_effect=failure) as writes:
+                            status = cli()
+                        assert writes.call_count == 1
+                    else:
+                        with mock.patch.object(Path, 'write_bytes', side_effect=failure):
+                            status = cli()
+                assert _private_error_fd is None
+            assert status == 1 and err.getvalue() == '' and marker not in out.getvalue()
+            selected = json.loads(out.getvalue())
+            assert selected == {'namespace': 'calibration/private-store-caller-controls', 'all_passed': False, 'report_complete': False, 'release_qualified': False}
+            if fd is None:
+                assert not private.exists()
+            elif stage == 'private-sink-write-failure':
+                assert private.read_bytes() == b''
+            else:
+                original = [json.loads(line) for line in private.read_bytes().splitlines()]
+                assert len(original) == 1 and original[0]['complete'] is True
+                assert base64.b64decode(original[0]['cause_base64']) == str(failure).encode()
+                assert not (case / 'public-report.json').exists()
+            rows.append({'case': 'fixed-safe-reporter-' + stage, 'passed': True})
     report = {'namespace': 'calibration/private-store-caller-controls', 'release_qualified': False,
               'controls': rows, 'all_passed': private_failure is None and all(row['passed'] for row in rows),
               'workflow_sha256': sha(workflow_raw), 'controller_sha256': {k: sha(v.encode()) for k, v in bodies.items()},
               'test_source_sha256': sha(Path(__file__).read_bytes()),
               'scope': 'Synthetic data-only exact workflow projections; no actual storage persistence or native custody.'}
-    if private_failure:
-        (attempt / 'private-failure.json').write_bytes(encoded(private_failure))
     public = attempt / 'public-report.json'
     public.write_bytes(encoded(report))
-    print(json.dumps({'controls': len(rows), 'all_passed': report['all_passed'], 'release_qualified': False}))
-    return 0 if report['all_passed'] else 1
+    return report
+
+
+def cli():
+    try:
+        report = main()
+        close_private_error()
+        summary = {'controls': len(report['controls']), 'all_passed': report['all_passed'],
+                   'report_complete': True, 'release_qualified': False}
+        status = 0 if report['all_passed'] else 1
+    except (Exception, KeyboardInterrupt) as error:
+        # A first-sink or terminal sink failure may leave no exact original.
+        # Preserve an available existing sink; never reopen or print the cause.
+        try:
+            retain_private_error(error)
+        except Exception:
+            pass
+        try:
+            close_private_error()
+        except Exception:
+            pass
+        summary = {'namespace': 'calibration/private-store-caller-controls',
+                   'all_passed': False, 'report_complete': False, 'release_qualified': False}
+        status = 1
+    try:
+        print(json.dumps(summary), flush=True)
+    except (Exception, KeyboardInterrupt):
+        return 1  # failed public stream: no second write, route or traceback
+    return status
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(cli())
