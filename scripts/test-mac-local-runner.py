@@ -181,6 +181,33 @@ class CustodyControls(unittest.TestCase):
                 self.op('start')
         self.assertEqual(set(p.name for p in self.root.iterdir()), {m.DESCRIPTOR})
 
+    def test_read_failure_and_secondary_close_denial_both_retained(self):
+        # Given an owned retained payload, when its read and final close both
+        # fail, neither original may be replaced by the secondary failure.
+        self.op('start')
+        actual_read, actual_close = m.os.read, m.os.close
+        failed_fd = [None]
+        def fail_read(fd, maximum):
+            if os.fstat(fd).st_size == len(m.PAYLOADS['sample.bin']):
+                failed_fd[0] = fd
+                raise OSError(5, 'synthetic original read failure')
+            return actual_read(fd, maximum)
+        def fail_close(fd):
+            actual_close(fd)
+            if fd == failed_fd[0]:
+                failed_fd[0] = -1
+                raise PermissionError(1, 'synthetic secondary close denial')
+        with patch.object(m.os, 'read', side_effect=fail_read), patch.object(m.os, 'close', side_effect=fail_close):
+            self.failed('calibrate')
+        errors = json.loads((self.target() / 'OS-ERROR.json').read_bytes())['failures']
+        self.assertEqual([row['exact_text'] for row in errors],
+                         ['[Errno 5] synthetic original read failure',
+                          '[Errno 1] synthetic secondary close denial'])
+        self.assertEqual([row['errno'] for row in errors], [5, 1])
+        self.assertEqual((self.target() / 'sample.bin').read_bytes(), m.PAYLOADS['sample.bin'])
+        self.assertFalse((self.target() / 'MANIFEST.json').exists())
+        self.assertFalse((self.target() / 'VERIFIED.json').exists())
+
     def test_attempt_cap_rejects_before_new_reservation(self):
         for number in range(1, 17):
             path = self.root / (str(number) + '-1-local-retention-' + 'a' * 40)

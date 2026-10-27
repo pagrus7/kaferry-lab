@@ -81,13 +81,17 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 
 ## CI and retained evidence
 
-The sole active job is `local-retention` on the owned Mac runner. It reserves a
-private unique attempt before checkout through an installed reviewed hook,
-writes fixed synthetic bytes directly to the host root, and checks them after
-the job. All data remains on the Mac; there is no sealer, artifact/cache upload,
-metadata request or native product command in this workflow. A failed or missing
-callback leaves partial bytes and a latch that blocks the next job. Completion
-of this no-child calibration is not process/writer or qualification evidence.
+The sole source-selected job is `local-retention` on the owned Mac runner.
+Once the reviewed hooks and root are installed, the pre-job hook reserves a
+private unique attempt before checkout. The fixed calibration writes synthetic
+bytes directly there, and the post-job hook checks them. All data remains on
+the Mac; there is no sealer, artifact/cache upload, metadata request or native
+product command. Installation and actual hook observations are separate gates;
+PROGRESS.md records their measured state. A missing callback or failure before
+latch release preserves partial bytes and blocks the next job. A final public
+output failure after release can return failure with the latch already absent;
+no process/closure or universal retention guarantee follows. Completion of this
+no-child calibration is not process/writer or qualification evidence.
 
 [Local runner setup](local-runners.md) describes roots, approved-head admission,
 installation, observations and limits. Actual source/review/runtime status is

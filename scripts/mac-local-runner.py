@@ -83,13 +83,23 @@ def read(path, maximum=MAX_FILE):
     private(before)
     require(0 <= before.st_size <= maximum)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    errors = []
+    body = None
     try:
-        require(signature(before) == signature(os.fstat(fd)))
-        body = os.read(fd, maximum + 1)
-        require(len(body) == before.st_size and signature(before) == signature(os.fstat(fd))
-                and signature(before) == signature(path.lstat()))
+        try:
+            require(signature(before) == signature(os.fstat(fd)))
+            body = os.read(fd, maximum + 1)
+            require(len(body) == before.st_size and signature(before) == signature(os.fstat(fd))
+                    and signature(before) == signature(path.lstat()))
+        except BaseException as error:
+            errors.append(('read/validate ' + path.name, error))
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException as error:
+            errors.append(('close ' + path.name, error))
+    if errors:
+        raise IOFailures(errors)
     return body
 
 

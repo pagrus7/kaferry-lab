@@ -34,8 +34,8 @@ remains incomplete. There is no alternate sink or retry after a denied action.
 
 ## Runner hooks and interrupted jobs
 
-The reviewed helper and shell hooks are installed outside the runner application
-and checkout, under `/Users/pg/services/kaferry-lab-mac-control-20261027`.
+The reviewed helper and shell hooks must be installed outside the runner
+application and checkout, under `/Users/pg/services/kaferry-lab-mac-control-20261027`.
 GitHub's synchronous pre-job hook validates the exact repository/id/ref, trusted
 push or manual-dispatch event, fixed job and operator-approved source head
 **before checkout**. It reserves a private attempt and an INFLIGHT latch first.
