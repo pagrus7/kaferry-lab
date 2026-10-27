@@ -235,6 +235,15 @@ Reuse reviewed M2–M5 components and their exact core comparisons. A seed recor
 
 ## Recording completed coverage
 
+The metadata diagnostic is harness calibration, not another Kaferry scenario.
+The prior tag-metadata HTTP403 occurred before the executable or fault started;
+the discarded response cannot establish its cause. The narrow capture retains
+one newly selected original-endpoint response, bounded client-decoded fields,
+body and errors, with actual child/writer closure and encrypted custody. Its
+synthetic HTTP, child-cleanup and admission controls establish measurement
+sensitivity only. Neither a complete HTTP200/403 nor recovered ciphertext
+fulfills any M2 fault, recovery or saved-progress requirement.
+
 Bind each planned ID to executable test/command, exact variants, reviewed source identity and durable evidence URL/path when implemented. Keep this a coverage map; histories belong in bundles and milestone status in PROGRESS.md. Missing mandatory observations block their scenarios. At audits stop/reap workers, restore services, state stabilization assumptions and fully scan to fixed ends; unchanged ends alone do not exclude pending output. Retain INCONCLUSIVE if late output can change verdict. Compare only promised per-session order and permit at-least-once duplicates.
 
 No required scenario is removed. Combined faults, independent release checking and observed output/progress boundaries add evidence; parser/obsolete syntax, standalone routing/ACL/codec matrices and broad migration remain outside scope.

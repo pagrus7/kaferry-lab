@@ -20,8 +20,8 @@ NOTICE = "Reviewed fixed synthetic notice transport sample."
 
 def sample_identity(run, head, job, attempt, reviewed_synthetic_transport):
     identity = s.identities(run, head, s.CERT_PIN, job, attempt)
-    if reviewed_synthetic_transport is not True or job != "unit":
-        raise s.Rejected("explicit reviewed synthetic unit transport control required")
+    if reviewed_synthetic_transport is not True or job not in ("unit", "metadata"):
+        raise s.Rejected("explicit reviewed synthetic transport control required")
     return identity
 
 

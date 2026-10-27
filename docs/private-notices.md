@@ -57,6 +57,54 @@ retention first. Do not retry with alternate credentials, endpoints, source or
 cache. Existing source verification and capsule runtime are not proved by this
 policy change.
 
+## Planned metadata-only modes
+
+The next narrow increment proposes `workflow_dispatch` modes `normal`,
+`calibration` and `diagnostic` in the existing workflow, restricted to the
+reviewed `codex/resilience-release-lab` branch and exact reviewed head. The
+planned default is `normal`, preserving the partial harness path. Dispatch
+availability and these mode gates are not established by this document; their
+implementation, frozen-source review and native evidence remain required.
+The `m1` and `m2-release` jobs stay disabled in every mode.
+
+`calibration` is planned to exercise the metadata producer/caller and existing
+encrypted transport using fixed synthetic observations and controlled child,
+stream and sink failures. It must not contact the original metadata endpoint.
+Before selecting `diagnostic`, independently review the exact native calibration
+result and authenticate, retrieve, decrypt and compare its known synthetic bytes
+on the Mac. An earlier transport sample or successful upload alone cannot meet
+that prerequisite for the newly selected path.
+
+`diagnostic` must be explicitly selected after those prerequisites. It is one
+unauthenticated GET of
+`https://api.github.com/repos/pagrus7/kaferry/git/ref/tags/v0.6.0`, with Accept
+`application/vnd.github+json` and User-Agent `kaferry-lab-artifact`. It has no
+alternate URL, credentials, cache, redirect following or automatic chained
+retry. A client invocation count does not prove remote receipt. The original403
+body/headers were discarded and its reason remains unknown. A new response is
+a separate observation; even an explicit explanation describes that new attempt,
+and200 does not authorize release verification or qualify Kaferry.
+
+Both metadata modes must suppress the ordinary unit sample and linked runtime
+ciphertext uploads, leaving exactly one encrypted notice artifact across the
+entire run. They reuse the existing fixture-v1 sealing, artifact convention,
+authenticated ZIP retrieval and private unsealing without a new transport or
+payload protocol. Their receipts use the calibration namespace and
+`release_qualified:false`. Source-only proposals do not establish that these
+paths have executed or that any new capsule has survived recovery.
+
+The planned caller reserves its private error/stream sinks before launch and
+actually waits/reaps its sole producer, observes pipe EOF, closes its readers and
+syncs/closes its private writers. Private caller errors stored outside the
+fixture may be copied as bounded JSON receipts into the fixed fixture tree only
+after that actual closure; the copier must also finish its writes, sync and
+close before the foreground caller returns. The workflow must observe that
+return and validate the matching typed closure before sealing. A file, stable
+inventory or closure declaration alone cannot establish that any writer stopped.
+Missing or uncertain closure suppresses sealing/upload. A closed, explicitly
+incomplete observation can retain useful failure evidence without passing the
+request or capture check; an unreached request must remain explicitly unreached.
+
 The private-filesystem handoff is no longer a workflow dependency. Its helper
 and storage controls remain retained; the retired26caller integration controls
 are preserved at `codex/m2-private-filesystem-retained-6ee`. The ARM64 source
@@ -72,6 +120,24 @@ run/head/job/attempt/certificate/member bytes. Tar/CMS/ZIP caps remain10/12/16Mi
 Two inventories check consistency, not quiescence; actual caller closure proof
 remains mandatory. Missing fixture roots use only the existing narrowly
 admitted v2 absence receipt; other missing, malformed or denied inputs fail.
+
+For the planned metadata path, the outer caller bounds each stdout/stderr pipe
+prefix to64KiB. The producer's private stderr error envelope, including JSON,
+base64 and newline, must be strictly smaller than48KiB; its underlying framed
+error graph is capped at32KiB. Base64 preserves bytes and supplies no redaction
+or encryption. These limits describe different encoding layers, not competing
+caps on the same bytes.
+
+The client-decoded response header frame prefix is capped at16KiB, exposed body
+prefix at64KiB plus one overflow-detection byte, and framed observed
+setup/transport/read/close/cancellation errors at32KiB. Decoded headers and a
+possibly transparently decompressed body are not wire octets. Every affected
+stream records completeness/overflow and observed-length limits; a truncated
+prefix cannot claim the unseen bytes. Each final serialized JSON receipt,
+including encoding expansion and newline, must fit the existing256KiB file cap.
+These are planned admission bounds, not measurements or proof that all retained
+causes fit. Overflow may leave incomplete evidence; missing or failed final
+persistence cannot pass.
 
 Complete input, terminal child wait/reap, joined stream copies and sink
 sync/close must be observed. First-sink failure, lost runners, incomplete input,

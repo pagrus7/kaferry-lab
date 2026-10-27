@@ -125,5 +125,56 @@ capture stops remain in force; hosted CI is separately authorized.
 
 Feature pushes are the working premerge trigger. Read-only API preflight found
 no CI workflow file on default branch `main`; manual dispatch has not been
-established for this branch. Manual and scheduled required campaigns remain M6
-work, with no default-branch or repository-setting change made here.
+established for this branch. The planned narrow dispatch below does not establish
+manual or scheduled M6 campaigns and makes no default-branch or repository-setting
+change by itself.
+
+## Planned metadata-only calibration and diagnostic
+
+The next increment proposes `workflow_dispatch` on the exact reviewed head of
+`codex/resilience-release-lab`, with modes `normal` (default), `calibration` and
+`diagnostic`. This section is a plan, not an implemented invocation or a measured
+capability. No dispatch command is supplied until the actual workflow and its
+admission path are reviewed and available. Local Go/build/verification/capture
+stops remain in force; separately authorized hosted CI supplies future native
+Linux AMD64 evidence.
+
+The planned `normal` mode keeps the current partial harness behavior. The two
+metadata-only modes suppress ordinary unit-sample and linked-runtime ciphertext
+uploads so the existing retriever sees exactly one encrypted notice artifact
+across the whole run. `m1` and `m2-release` remain disabled in every mode; a
+successful diagnostic does not turn them on.
+
+Select `calibration` first, after frozen-source review. It must use fixed
+synthetic responses and controlled native child/stream/sink failures without
+querying the original endpoint. Review the native result, then authenticate the
+expected GitHub run/job/artifact and whole-ZIP digest before private Mac
+decryption. Compare the recovered known synthetic bytes and independently review
+that recovery. Upload completion, mocked controls and historical sample recovery
+cannot establish this new path's custody.
+
+Only after those prerequisites may `diagnostic` be explicitly selected for one
+unauthenticated original tag-metadata GET. There is no automatic transition from
+calibration, no alternate credentials/endpoint/cache/redirect route and no
+chained retry or release verification. The discarded original403 response cannot
+be recovered retroactively; its reason remains unknown. A new403 or200 is a
+separate diagnostic observation and always has `release_qualified:false`.
+
+The planned producer and caller use the existing fixture-v1 encryption and
+authenticated retrieval unchanged. Caller errors outside the fixture enter it
+only as bounded private JSON after actual producer/pipe/error-writer closure;
+those copies must also finish sync/close before foreground return and sealing.
+Admission needs that actual return and matching typed closure, never existence
+of a receipt alone. Closed incomplete prefixes can be useful evidence, while
+unreached requests, uncertain closure and failed sinks cannot pass.
+
+Planned limits are64KiB for each caller stdout/stderr pipe prefix, a producer
+private error envelope strictly below48KiB after JSON/base64/newline encoding,
+and32KiB for its raw framed error graph. Response header frames are capped
+at16KiB, exposed body prefix at64KiB plus one detection byte, and framed observed
+errors at32KiB. Final serialized JSON receipts must fit256KiB each. Client-decoded
+headers and potentially decompressed body bytes are not wire octets; completeness,
+overflow and observed-length facts must stay explicit. See
+[encrypted diagnostics](private-notices.md) for closure, recovery and sink-loss
+limits. No new request, native run, key operation or recovery is established by
+this plan.
