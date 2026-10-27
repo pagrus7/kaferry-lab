@@ -4,11 +4,15 @@ Tool resilience and data integrity testing for **published Kaferry releases**, s
 
 **Status: M0 and M1 accepted. M2 targeted release scenarios and independent observations are in development; required M2–M6 fault evidence and campaigns are incomplete. No Kaferry release is qualified.**
 
-Execution uses GitHub-hosted Ubuntu24.04/native Linux AMD64 runners. Bounded diagnostic capsules may be uploaded encrypted; the private decryption key and recovered plaintext stay on the Mac. See [encrypted diagnostics](docs/private-notices.md). The local ARM64 draft is preserved separately and is not the active qualification target.
+Execution is moving to the Mac mini with private local evidence and no active
+encryption or artifact uploads. The current workflow calibrates local retention
+only; it does not run Go or qualify Kaferry. See [local runner setup](docs/local-runners.md).
+The host is ARM64; the native qualification platform is pending clarification.
+Recorded local Go/build/verification/capture stops remain binding.
 
 The purpose is to test how Kaferry handles failures during data copies, preserves records and saved progress, and recovers after faults are removed. Independent observers and combined failure scenarios provide evidence beyond its core suite. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 
-Build the implemented CLI, then check an authored synthetic history. Checking needs no Docker, Kafka, network access or Kaferry executable:
+The following are reference commands, currently stopped on this Mac after recorded denials. Once the ordinary prerequisites are resolved, build the implemented CLI, then check an authored synthetic history. Checking needs no Docker, Kafka, network access or Kaferry executable:
 
 ```sh
 mkdir -p .cache/bin

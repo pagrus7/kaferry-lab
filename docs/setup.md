@@ -2,11 +2,13 @@
 
 M0 and M1 are accepted. M2 targeted release scenarios are in development; required M2–M6 fault evidence and campaigns are incomplete. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
 
-Selected execution is GitHub-hosted native Linux AMD64. Diagnostic capsules may
-use the explicit [encrypted-artifact exception](private-notices.md); the private
-key stays on the Mac. Local Go/verification/capture stops remain binding.
-Trusted feature pushes select fresh release verification, the existing narrow
-release cases and stock-link calibration. The zero-byte/close-observation readiness repair awaits native validation; harness CI does not establish M2 or final qualification.
+Selected execution is the owned Mac mini runner with [private local evidence](private-notices.md).
+The active workflow performs fixed local retention calibration only; hosted jobs,
+encryption and artifact/cache uploads are removed. No Go/build/test/verification,
+product or capture step is active. The Mac is ARM64; the existing native Linux
+AMD64 gate cannot pass here, and an architecture choice is pending. See
+[local runner setup](local-runners.md). The commands below remain implemented
+reference interfaces, not permission to retry the recorded local denials.
 
 ## Prepare and check the harness
 
@@ -30,7 +32,7 @@ Choose a new output directory for each attempt. Verification accepts only the re
 
 The command has a three-minute overall budget. `verified.json` records the release, hashes, provenance verifier and version runtime; downloaded documents, the archive, executable, verification receipt and version output stay alongside it. A failed attempt retains available files and `FAILED.json`; preserve that directory and use a new one after resolving the failure. These files establish artifact verification, not a fault campaign or qualification.
 
-Version observation requires native Linux AMD64. The command checks the Go and kernel architectures before launching its 20-second version subprocess. Other hosts cannot complete verification; use the native CI workflow when orchestrating from macOS. Docker remains a prerequisite for live Kafka fixtures.
+Version observation requires native Linux AMD64. The command checks the Go and kernel architectures before launching its 20-second version subprocess. Other hosts cannot complete verification; the new custody-only workflow does not launch it from macOS. Docker remains a prerequisite for live Kafka fixtures.
 
 ## Check a bundle offline
 
@@ -79,130 +81,24 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 
 ## CI and retained evidence
 
-Harness CI selects GitHub-hosted native Linux AMD64 `ubuntu-24.04` runners.
-Trusted feature pushes select unit/offline/controller controls, live observer
-calibration, fresh release verification, the existing four-case release matrix
-and stock-link calibration. Actions are commit-pinned, jobs have explicit time
-budgets and contents-read permission, and untrusted PR code receives no
-publishing credential. Release and link runtime jobs admit only the exact lab
-repository and trusted feature-branch push. Metadata-only dispatch runs none of
-those jobs. Calibration checks the lab, not Kaferry.
+The sole active job is `local-retention` on the owned Mac runner. It reserves a
+private unique attempt before checkout through an installed reviewed hook,
+writes fixed synthetic bytes directly to the host root, and checks them after
+the job. All data remains on the Mac; there is no sealer, artifact/cache upload,
+metadata request or native product command in this workflow. A failed or missing
+callback leaves partial bytes and a latch that blocks the next job. Completion
+of this no-child calibration is not process/writer or qualification evidence.
 
-The source reactivates `m1` and `m2-release` after reviewed diagnostic retention
-and authenticated recovery at `e521c099`. The activation run passed fresh verification and the four release cases; its
-linked setup failed. The readiness repair still needs native CI/evidence review. The release matrix covers healthy PRESERVE/KEY,
-source-startup and repeated-kill development cases with fresh artifact
-verification, restoration/cleanup and network-isolated offline rechecks after
-target removal. It supplies no missing timeout, threshold-drain or source-save
-witness, and is not a complete M2 campaign. Packet capture remains stopped.
+[Local runner setup](local-runners.md) describes roots, approved-head admission,
+installation, observations and limits. Actual source/review/runtime status is
+in PROGRESS.md. Preserve the retired hosted matrix and historical failures via
+`codex/retained-hosted-encryption-4f625ad`; do not equate their job API statuses or
+partial artifacts with new native acceptance. The metadata diagnostic and old
+ciphertext recovery are historical, not active workflow modes. Earlier
+source-startup403 remains unexplained; later200 does not resolve its cause.
 
-The historical source-startup tag GET403 discarded its body/headers; its cause
-remains unknown. The separate one-shot diagnostic returned200 with the expected
-annotated tag reference; it made no tag-target, release-asset or provenance
-request. New ordinary verification must complete all those checks itself. No
-alternate credentials, endpoint, source or cache replaces a failed request.
-
-The user now authorizes bounded encrypted diagnostic artifacts from hosted
-synthetic runs. Plaintext originals and the private recipient key remain
-private; the runner needs only the pinned public certificate. No Mac mount,
-private network or `LAB_PRIVATE_*` variables are required by this route.
-Ciphertext is treated as public and recovery authenticates the whole ZIP via the
-expected GitHub API tuple/digest before parsing or decryption. See
-[encrypted diagnostics](private-notices.md) for exact bounds and early/late
-failure limits. The old private-filesystem route is retained in its explicit
-branch, not as an active setup prerequisite.
-
-The feature-push `links` job builds `cmd/link-calibration` and the campaign test
-binary with clean exact-head metadata. `LAB_LINK_RUNTIME` is enabled in source;
-its first setup at `bfc99057` failed before the calibration child started. The unit transport sample
-is suppressed, leaving one linked ciphertext artifact for the run. Actual
-foreground return, waits/tree/stream/sink closure and matching sealed metadata
-admit only `notice.cms`, with seven-day retention and no overwrite. Failed
-calibration may retain complete evidence but remains failed. Public selected
-build/caller/admission facts have separate14-day retention. The32-original failed linked-v2 capsule was recovered and independently checked;
-that failure is preserved. The zero-byte/actual-close readiness repair awaits
-new native controls, and links now depends on their unit job. Recover each new
-linked capsule; metadata recovery does not prove stock-proxy behavior. Local Go
-and capture stops remain in force; hosted CI is separately authorized.
-
-Feature pushes remain the premerge release trigger. Narrow metadata-only manual
-dispatch is now measured on the feature branch. It does not establish manual or
-scheduled M6 campaigns or change the default branch.
-
-## Metadata-only calibration and diagnostic
-
-The source implements `workflow_dispatch` on
-`codex/resilience-release-lab`, with modes `normal` (default),
-`metadata-calibration` and `metadata-diagnostic`. The exact-head source and native path at `e521c099` passed independent review.
-Select a reviewed head, verify the resulting run identity and obtain fresh
-calibration/recovery evidence before any newly selected diagnostic. Local Go/build/verification/capture
-stops remain in force; separately authorized hosted CI supplies future native
-Linux AMD64 evidence.
-
-The `normal` mode keeps the current partial harness behavior. The two
-metadata-only modes suppress ordinary unit-sample and linked-runtime ciphertext
-uploads so the existing retriever sees exactly one encrypted notice artifact
-across the whole run. `m1` and `m2-release` require trusted pushes and cannot run in either
-metadata mode; a successful diagnostic does not trigger them.
-
-Select `metadata-calibration` first, after frozen-source review. It must use fixed
-synthetic responses and controlled native child/stream/sink failures without
-querying the original endpoint. The final calibration also runs the freshly built Go
-executable through the same foreground, admission, sealing and upload steps as the
-diagnostic. Only that synthetic invocation selects a fixed, confirmed-absent trust file;
-ordinary trust setup must fail before any HTTP client invocation. Admission requires the
-exact ENOENT cause, attempt_count0, no response and closed incomplete return2. This is a
-negative fixture, never a TLS bypass or an alternate trust route for the real request.
-Its recovered capsule contains PRIVATE.json, metadata.json and capture-closure.json;
-verify those originals and actual closure on the Mac before selecting the diagnostic.
-Review the native result, then authenticate the
-expected GitHub run/job/artifact and whole-ZIP digest before private Mac
-decryption. Compare the recovered known synthetic bytes and independently review
-that recovery. Upload completion, mocked controls and historical sample recovery
-cannot establish this new path's custody.
-
-Only after those prerequisites may `metadata-diagnostic` be explicitly selected for one
-unauthenticated original tag-metadata GET. There is no automatic transition from
-calibration, no alternate credentials/endpoint/cache/redirect route and no
-chained retry or release verification. The discarded original403 response cannot
-be recovered retroactively; its reason remains unknown. A new403 or200 is a
-separate diagnostic observation and always has `release_qualified:false`.
-
-The producer and caller source use the existing fixture-v1 encryption and
-authenticated retrieval unchanged. The final closure JSON includes bounded original caller errors and base64 stream
-prefixes after actual producer/pipe/error-writer closure. Its own write, sync and
-close must finish before foreground return and sealing.
-Admission needs that actual return and matching typed closure, never existence
-of a receipt alone. Closed incomplete prefixes can be useful evidence, while
-unreached requests, uncertain closure and failed sinks cannot pass.
-
-Source limits are64KiB for each caller stdout/stderr pipe prefix, a producer
-private error envelope strictly below48KiB after JSON/base64/newline encoding,
-and32KiB for its raw framed error graph. Response header frames are capped
-at16KiB, exposed body prefix at64KiB plus one detection byte, and framed observed
-errors at32KiB. Final serialized JSON receipts must fit256KiB each. Client-decoded
-headers and potentially decompressed body bytes are not wire octets; completeness,
-overflow and observed-length facts must stay explicit. See
-[encrypted diagnostics](private-notices.md) for closure, recovery and sink-loss
-limits. Measured diagnostic and recovery evidence is listed below; none is Kaferry
-qualification.
-
-The reviewed native calibration at
-[run40509295871](https://github.com/pagrus7/kaferry-lab/actions/runs/40509295871)
-passed17Go,27mocked caller,9admission and10native child cases, followed by
-Mac recovery of the actual three-file setup-failure capsule. Two native cleanup
-cases inject deadline/cancellation triggers and measure actual TERM/KILL/reap.
-The reviewed single diagnostic at
-[run40510578859](https://github.com/pagrus7/kaferry-lab/actions/runs/40510578859)
-returned200 and the pinned annotated tag reference; all three receipts were
-privately recovered after API whole-ZIP authentication. That observation does
-not explain the historical403 or verify the complete release.
-
-The `cefef523` EOF-repair attempt passed the native unit job and reached linked
-calibration; topology passed and latency stopped at initial mapping readback.
-New raw-readback retention and exact absence-format repairs await native
-validation. An external network quota currently prevents completing artifact
-retention. Keep the failed transfer and partial collection; inspect only
-already-authenticated local evidence until ordinary network access is restored.
-No complete-head acceptance follows from the currently unavailable unit and
-healthy-PRESERVE artifact bytes.
+Before product work, select a reviewed matching native Linux platform and
+resolve the existing Go/verification execution prerequisites. The four narrow
+historical release cases do not fulfill the M2 timeout/threshold/source-save
+requirements; M3–M6 remain required. No PR or release qualification follows from
+this local-retention switch.

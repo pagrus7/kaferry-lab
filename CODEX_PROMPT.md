@@ -20,7 +20,19 @@ Required work
 
 Complete every required M0–M6 roadmap acceptance criterion, starting with the first unfinished requirement. Test verified, digest-pinned published Kaferry v0.6.0 artifacts against the reviewed tagged contract. Keep the sibling Kaferry repository read-only. No source-build fallback, Kaferry imports/internal codecs as oracles, prior-syntax rejection, broad migration coverage or redundant core regression matrices. Preserve the scope and individual acceptance criteria in ROADMAP.md.
 
-The user selected GitHub-hosted Ubuntu24.04/native Linux AMD64 runners and encrypted diagnostic artifacts on 2026-10-26, superseding the Mac-only ARM64 and no-GitHub-ciphertext directions. No Tailscale or Mac runner is required. Only bounded encrypted capsules from synthetic lab runs may use this publication exception; plaintext diagnostics and the private decryption key stay private. Authenticate the entire downloaded artifact ZIP using the expected GitHub API run/artifact identity and digest before local decryption. Local Go/build/test/attestation-cache and packet-capture stops remain binding; separately authorized hosted CI is permitted.
+The user selected Mac mini runners and local evidence retention on2026-10-27,
+superseding the hosted encryption direction. Remove active encryption and
+artifact/cache uploads; preserve all historical originals, encrypted evidence,
+keys and isolated proposals. Use the owned repository-scoped Mac runner and
+private host-root directories independent of workspace reuse. The current
+workflow calibrates fixed local custody only, with trusted pre/post-job hooks
+and no Go or release execution. The host is Darwin/arm64; the existing native
+Linux AMD64 qualification requirement remains until the user clarifies a change.
+No emulation may silently qualify. Local Go/build/test/attestation-cache and
+packet-capture stops remain binding, including service/VM/cache routes around
+them. The earlier artifact-transfer quota failure remains retained and does not
+justify retrying it through this runner. Normal control-plane work for the newly
+requested runner setup is separate; retain and stop on any actual new refusal.
 
 Use independent observations and offline checking for record fidelity, membership, routing, saved progress and recovery. Missing observations, unreached conditions, incomplete scans and product violations never become passing results. Separate calibration histories and faulty stand-ins from release evidence. Local AMD64 emulation is development evidence; final required qualification runs natively on Linux AMD64, such as GitHub Actions ubuntu-24.04.
 
