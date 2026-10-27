@@ -6,6 +6,8 @@ The earlier `b4eca248` public-CMS activation proposal is superseded, not awaitin
 another publication exception. Live linked calibration remains disabled while
 the private storage route is prepared and verified.
 
+On 2026-10-26, the user selected local native Linux ARM64 execution under OrbStack. This supersedes the direct-network/Tailscale preparation described below: no remote-worker transfer or tailnet enrollment is selected. Private originals and unknown-notice capsules must stay off GitHub. The [local ARM64 transition](local-linux-arm64.md) records the current prerequisites; runner activation and private lifecycle/recovery remain unverified. The earlier network design and collector calibration are retained as historical work.
+
 On 2026-10-25, the user selected direct private-network transfer and explicitly
 rejected temporary encrypted copies in a private GitHub repository too. Raw
 originals and unknown-notice capsules must not be retained in GitHub artifacts,
@@ -13,8 +15,8 @@ repositories, caches, releases or logs. Native hosted Linux execution still has
 a transient private producer workspace; direct transfer must move the selected
 evidence to the Mac without using GitHub as its retention destination.
 
-The selected route is to keep completed sealed originals on the user's worker
-storage, described by the user as a Mac mini. The actual runner-visible private
+The retention destination is the user's Mac mini. Earlier preparation aimed
+to copy completed sealed originals there from hosted workers. The actual runner-visible private
 mount and its backing/lifecycle mapping are **unverified**. Current workflow
 jobs still select `ubuntu-24.04`. The read-only preflight found no registered
 lab runner; on 2026-10-25, the user authorized preparing a dedicated Mac runner.
@@ -31,7 +33,8 @@ evidence directory passed a 171-byte synthetic write/sync/close and separate
 process readback. This measures local filesystem access only: no native-worker
 transport, runner lifecycle, reboot, backup or private recovery was verified.
 Mac registration supplies no storage path to the current Ubuntu jobs. Native
-Linux AMD64 execution remains a separate requirement.
+The existing CLI still supports Linux AMD64 only; the selected local Linux
+ARM64 target requires a port and new runtime evidence.
 
 A separate collector-only Lima VZ ARM64 VM, `klc-20261025`, was prepared on
 2026-10-25 with one CPU, 1 GiB RAM and a 6 GiB virtual disk. Its Ubuntu image
@@ -47,9 +50,10 @@ all host network access or other processes running as the Mac owner. Lima
 2.2.1 permits guest access to host loopback, and the Mac owner controls its VM
 disk and management key. No recipient decryption key entered the guest.
 The shared Mac Tailscale client remains stopped and reports no current tailnet.
-The authorized tailnet/account, short-lived CI enrollment, narrow effective
-network grants, receiver authentication, transfer receipts and private recovery
-remain prerequisites. No tailnet settings, host firewall or existing workers
+The earlier network design required tailnet/account enrollment, effective
+network grants, receiver authentication, transfer receipts and recovery. Those
+network prerequisites are superseded by the local-only decision; local trusted
+admission and private storage/recovery still require measurement. No tailnet settings, host firewall or existing workers
 were changed; the public-repository Mac runner remains offline.
 
 [AGENTS.md](../AGENTS.md#operations-and-publication) requires: “Publish only
@@ -75,8 +79,8 @@ UID. Do not mount a whole home directory. The recipient private key stays in
 private coordinator custody and is never mounted, fetched or copied onto the
 worker. The pinned public certificate is enough to seal. If that worker has a
 verified persistent mount, the filesystem handoff needs no publishing credential
-or object-storage service. The current native-worker-to-Mac connection is still
-unconfigured.
+or object-storage service. That earlier remote-worker connection was not configured and is no longer
+selected. Local trusted admission and persistence remain unverified.
 
 `scripts/store-link-notices-private.py` implements `preflight` and `store`.
 Both require `--private-root`, `--storage-id`, `--run-id`, `--source-head`,
