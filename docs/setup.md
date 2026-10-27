@@ -79,51 +79,49 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 
 ## CI and retained evidence
 
-Harness CI uses native Linux AMD64 `ubuntu-24.04` runners. It checks the harness, golden offline histories, actual stand-in calibration, the full published-artifact verification/version path, and live observer capabilities. A four-minute M2 controller calibration uses the same owned fixtures to check actual pause/recovery/restart and known input readback; it does not execute Kaferry or establish M2 scenario coverage. The combined observer job has a 16-minute budget to include this calibration and cleanup. Offline CLI checks run in a network namespace with no network interfaces available beyond loopback. CI retains logs, verification output, calibration bundles and fixture evidence with `always()`, including failed attempts, for 14 days under unique run/attempt names.
+Harness CI selects GitHub-hosted native Linux AMD64 `ubuntu-24.04` runners.
+The current partial workflow runs unit/offline/controller controls, live observer
+calibration and fresh linked driver/test builds. Actions are commit-pinned, jobs
+have explicit time budgets and contents-read permission, and untrusted PR code
+receives no publishing credential. Calibration checks the lab, not Kaferry.
 
-Jobs have explicit time budgets, read-only contents permission, commit-pinned actions and no publishing credentials. The partial M2 jobs have a 25-minute budget. They attempt no packet capture and retain its separate `UNSUPPORTED` status with the denied run reference. They execute healthy PRESERVE/KEY controls, an inaccessible-source startup case and repeated crashes with fresh artifact verification, retained operation evidence, restoration and cleanup. When a finalized bundle exists, they remove the disposable target executable before repeated network-isolated offline rechecks, including nonpassing histories. An incomplete scenario still fails its execution step; successful rechecking confirms the recorded verdict. These jobs are development checks; all mandatory M2 variants still need measured acceptance. Retained Go profiles cover unit checks, actual M1 commands, live M2 helpers and these release cases for changed-line review. A green workflow is harness evidence, not release qualification. Native AMD64 required release campaigns and reviewed bundle publication remain later milestones.
+The implemented `m1` verification/version and four-case `m2-release` development
+matrix are **currently skipped** with `if: false`. The original source-startup
+tag GET returned403 without retaining provider body/headers. Before another
+original-endpoint attempt, prepare bounded private response retention and
+reviewed encrypted recovery. Do not rerun using alternate credentials,
+endpoints, source or cache. Existing M1/M2 histories and coverage remain
+historical; a green partial workflow cannot establish current release execution
+or final qualification CI.
 
-The optional stock-link fixture and its opt-in topology/nonce controls are
-source integrations awaiting accepted native proxy execution. The last accepted
-native workflow kept them disabled. The earlier public-CMS activation proposal
-is superseded: reviewed structured facts may be public, while original raw
-diagnostics and their encrypted capsules remain private. The reviewed fixed
-synthetic unit transport sample remains separately allowed. Unknown-notice CMS
-has no public retention fallback.
+When enabled after that prerequisite, the existing release matrix covers healthy
+PRESERVE/KEY, source-startup and repeated-kill development cases with fresh
+artifact verification, restoration/cleanup and network-isolated offline
+rechecks after target removal. It does not attempt packet capture; the recorded
+capture denial remains UNSUPPORTED. All required M2 variants and native AMD64
+campaign/publication remain unfinished requirements.
 
-The selected private route keeps completed sealed originals on the user's
-worker storage, described as a Mac mini. Supply one existing runner-visible
-absolute private directory outside the checkout, temporary storage and public
-artifact/cache paths, with its owner, narrow mount and actual persistent backing
-identified. The actual mapping and survival across checkout/worker lifecycle
-are unverified. Current workflow jobs select `ubuntu-24.04`; read-only preflight
-found no registered self-hosted runner. Local Darwin/arm64 does not establish
-what backs those jobs. Host inspection found four Mac runner services registered
-to `pagrus7/knowledge-assistant`; this lab’s native-worker-to-Mac storage connection
-is not configured. Native Linux AMD64 readiness remains separate.
+The user now authorizes bounded encrypted diagnostic artifacts from hosted
+synthetic runs. Plaintext originals and the private recipient key remain
+private; the runner needs only the pinned public certificate. No Mac mount,
+private network or `LAB_PRIVATE_*` variables are required by this route.
+Ciphertext is treated as public and recovery authenticates the whole ZIP via the
+expected GitHub API tuple/digest before parsing or decryption. See
+[encrypted diagnostics](private-notices.md) for exact bounds and early/late
+failure limits. The old private-filesystem route is retained in its explicit
+branch, not as an active setup prerequisite.
 
-Expose only the dedicated private mount to the trusted job/account; no whole
-home directory or untrusted PR/fork access. The recipient private key stays off
-the worker in coordinator custody. The private filesystem helper preflights that
-root before driver launch and stores an exclusive, identity-bound copy only after
-actual closure and sealing. Repository variables `LAB_PRIVATE_EVIDENCE_ROOT` and
-`LAB_PRIVATE_STORAGE_ID` select the preprovisioned root/descriptor. They are not
-configured here; `LAB_LINK_RUNTIME` remains disabled. Local synthetic storage and
-caller controls passed, but actual persistence has not been observed. See
-[private-notices](private-notices.md) for the implemented helper interface, exact
-custody prerequisites, existing helper evidence and early-failure limits, and
-[M2](m2.md) for the missing mechanism observations.
-
-The feature-push `links` job builds `cmd/link-calibration` and a fresh
-`internal/campaign` test binary on native Linux AMD64 with clean exact-head VCS
-metadata. Accepted run `40236814641` used `LAB_LINK_RUNTIME: 'disabled'` and
-uploaded selected build metadata only. Integration keeps runtime disabled;
-actual private retention, later private recovery and combined driver/fixture
-execution remain unmeasured. The foreground driver and its fixed paths remain
-encoded in CI. Local Go execution remains stopped under the recorded denial.
-The job has a 20-minute outer budget with separate build, driver, proof and
-retention limits. Frozen source reviews and final-head native CI are required
-for the new integration; earlier native results do not validate it.
+The feature-push `links` job builds `cmd/link-calibration` and the campaign test
+binary with clean exact-head metadata. `LAB_LINK_RUNTIME` remains disabled.
+Before live runtime is selected, frozen source review, native controls and
+actual authenticated Mac recovery are required. When selected, actual
+foreground return, waits/tree/stream/sink closure and matching sealed metadata
+admit only the fixed `notice.cms` upload, with seven-day retention and no
+overwrite. Failed calibration may retain complete evidence but remains failed;
+missing proof/retention never passes. Public selected build/caller/admission
+facts have their separate existing14-day retention. No new native runtime or
+unknown-capsule recovery is established by these instructions. Local Go and
+capture stops remain in force; hosted CI is separately authorized.
 
 Feature pushes are the working premerge trigger. Read-only API preflight found
 no CI workflow file on default branch `main`; manual dispatch has not been
