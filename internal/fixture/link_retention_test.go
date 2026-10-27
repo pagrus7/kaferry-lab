@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -560,6 +561,188 @@ func TestPrivateLinkReceiptCapIncludesFinalNewline(t *testing.T) {
 					t.Fatal("over-bound receipt reserved/written bytes", e)
 				}
 			}
+		})
+	}
+}
+
+// Match the literal retained bytes, not a marker or the executor's output hash.
+func assertLinkedMetadataReadback(t *testing.T, id, kind string, argv []string, want []byte) {
+	t.Helper()
+	root := linkPrivateDirectory(id)
+	info, e := os.Stat(root)
+	if e != nil || info.Mode().Perm() != 0700 {
+		t.Fatal("metadata private root unavailable", e)
+	}
+	found, files := 0, 0
+	e = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		files++
+		if files > 128 {
+			return errors.New("metadata private file bound")
+		}
+		info, e := entry.Info()
+		if e != nil {
+			return e
+		}
+		if info.Mode().Perm() != 0600 || info.Size() > 256<<10 {
+			return errors.New("metadata private file mode/size")
+		}
+		raw, e := os.ReadFile(path)
+		if e != nil {
+			return e
+		}
+		var receipt struct {
+			RunID, PrivateReadbackKind, SemanticAdmission, CombinedSHA256 string
+			Argv                                                          []string
+			Combined                                                      []byte
+			CommandSucceeded, CombinedComplete                            bool
+			CapturedCombinedBytes                                         int
+			ObservedCombinedBytes                                         int64
+		}
+		if json.Unmarshal(raw, &receipt) != nil || receipt.PrivateReadbackKind == "" {
+			return nil
+		}
+		if receipt.PrivateReadbackKind == kind && reflect.DeepEqual(receipt.Argv, argv) && bytes.Equal(receipt.Combined, want) {
+			if receipt.RunID != id || !receipt.CommandSucceeded || receipt.SemanticAdmission != "not-observed-by-executor" || !receipt.CombinedComplete || receipt.CombinedSHA256 != linkDigest(want) || receipt.CapturedCombinedBytes != len(want) || receipt.ObservedCombinedBytes != int64(len(want)) {
+				return errors.New("metadata readback completion or identity claim mismatch")
+			}
+			found++
+		}
+		return nil
+	})
+	if e != nil || found != 1 {
+		t.Fatalf("exact private metadata readback missing/ambiguous: matches=%d err=%v", found, e)
+	}
+}
+
+// Isolated error injection at the same three-method writer used by real receipts.
+// There is no context policy, global hook or alternate evidence destination.
+type metadataReceiptFaultFile struct {
+	body                        []byte
+	calls                       []string
+	writeErr, syncErr, closeErr error
+	short                       bool
+}
+
+func (f *metadataReceiptFaultFile) Write(body []byte) (int, error) {
+	f.calls = append(f.calls, "write")
+	f.body = append([]byte(nil), body...)
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	if f.short {
+		return len(body) - 1, nil
+	}
+	return len(body), nil
+}
+func (f *metadataReceiptFaultFile) Sync() error { f.calls = append(f.calls, "sync"); return f.syncErr }
+func (f *metadataReceiptFaultFile) Close() error {
+	f.calls = append(f.calls, "close")
+	return f.closeErr
+}
+
+func TestLinkedMetadataReceiptWriterRequiresWriteSyncAndClose(t *testing.T) {
+	// Given command-success metadata, When any actual persistence stage fails,
+	// Then success cannot replace the primary or secondary write/Sync/Close errors.
+	body := []byte(`{"CommandSucceeded":true,"SemanticAdmission":"not-observed-by-executor","Combined":"PRIVATE_SYNTHETIC_METADATA"}` + "\n")
+	primary, syncFailure, closeFailure := errors.New("TEST ONLY write failure"), errors.New("TEST ONLY sync failure"), errors.New("TEST ONLY close failure")
+	for _, kind := range []string{"healthy", "write", "sync", "close", "joined", "short-write"} {
+		t.Run(kind, func(t *testing.T) {
+			f := &metadataReceiptFaultFile{}
+			switch kind {
+			case "write":
+				f.writeErr = primary
+			case "sync":
+				f.syncErr = syncFailure
+			case "close":
+				f.closeErr = closeFailure
+			case "joined":
+				f.writeErr = primary
+				f.syncErr = syncFailure
+				f.closeErr = closeFailure
+			case "short-write":
+				f.short = true
+			}
+			err := persistLinkPrivateReceipt(f, body)
+			if !reflect.DeepEqual(f.calls, []string{"write", "sync", "close"}) || !bytes.Equal(f.body, body) {
+				t.Fatal("receipt persistence omitted/reordered a stage or changed bytes")
+			}
+			if (err == nil) != (kind == "healthy") {
+				t.Fatal("failed persistence became success", err)
+			}
+			for _, cause := range []error{f.writeErr, f.syncErr, f.closeErr} {
+				if cause != nil && !errors.Is(err, cause) {
+					t.Fatal("primary/secondary persistence error lost", err)
+				}
+			}
+			if kind == "short-write" && !errors.Is(err, io.ErrShortWrite) {
+				t.Fatal("silent short write accepted", err)
+			}
+		})
+	}
+}
+
+func TestLinkedSuccessfulRawRetentionIsLimitedToExactMetadataCommands(t *testing.T) {
+	// Given successful bounded bytes, When the fixed command identity differs,
+	// Then it keeps the old hash-only policy and cannot broaden raw success capture.
+	for _, tc := range []struct {
+		name, kind string
+		args       []string
+	}{
+		{"engine", "linked-docker-engine-info", []string{"info", "--format", "{{.OSType}}/{{.Architecture}}"}},
+		{"broker", "linked-docker-image-inspect", []string{"image", "inspect", Image, "--format", "{{json .}}"}},
+		{"amd64-proxy", "linked-docker-image-inspect", []string{"image", "inspect", ProxyImage, "--format", "{{json .}}"}},
+		{"arm64-proxy", "linked-docker-image-inspect", []string{"image", "inspect", arm64ProxyImage, "--format", "{{json .}}"}},
+		{"other-image", "", []string{"image", "inspect", "unreviewed/image:tag", "--format", "{{json .}}"}},
+		{"other-format", "", []string{"image", "inspect", Image, "--format", "{{.Id}}"}},
+		{"extra-image-arg", "", []string{"image", "inspect", Image, "--format", "{{json .}}", "extra"}},
+		{"other-info-format", "", []string{"info", "--format", "{{json .}}"}},
+		{"container", "", []string{"container", "inspect", "synthetic-owned", "--format", "{{json .}}"}},
+		{"logs", "", []string{"logs", "--tail", "200", "synthetic-owned"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := linkRetentionState(t)
+			raw := []byte("PRIVATE_SUCCESS_METADATA_SYNTHETIC\n")
+			run, e := LinkExecutor(s, func(context.Context, ...string) ([]byte, error) { return raw, nil })
+			if e != nil {
+				t.Fatal(e)
+			}
+			got, e := run(context.Background(), tc.args...)
+			if e != nil || !bytes.Equal(got, raw) {
+				t.Fatal("successful command changed", e)
+			}
+			if _, e = os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "STOPPED.json")); !errors.Is(e, os.ErrNotExist) {
+				t.Fatal("successful persisted command remained pending", e)
+			}
+			if tc.kind != "" {
+				assertLinkedMetadataReadback(t, s.RunID, tc.kind, append([]string{"docker"}, tc.args...), raw)
+			} else {
+				e = filepath.WalkDir(linkPrivateDirectory(s.RunID), func(path string, d os.DirEntry, cause error) error {
+					if cause != nil {
+						return cause
+					}
+					if d.IsDir() {
+						return nil
+					}
+					b, e := os.ReadFile(path)
+					if e != nil {
+						return e
+					}
+					if bytes.Contains(b, raw) || bytes.Contains(b, []byte(base64.StdEncoding.EncodeToString(raw))) {
+						return errors.New("unselected successful raw output retained")
+					}
+					return nil
+				})
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			assertLinkPublicWithholds(t, s, raw)
 		})
 	}
 }

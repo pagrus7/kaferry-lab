@@ -1,6 +1,7 @@
 package fixture
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -735,4 +736,191 @@ func TestLinkedImageInspectionPreservesJoinedFailure(t *testing.T) {
 	if calls != 1 || !errors.Is(err, syscall.EACCES) || err != cause {
 		t.Fatalf("failure changed: calls=%d err=%v", calls, err)
 	}
+}
+
+func TestFreshLinkedMetadataReadbackSurvivesSemanticRejection(t *testing.T) {
+	// Given fresh id-authorized UpLinks, When a successful metadata command returns
+	// semantically invalid bytes, Then those exact originals precede refusal/STOP.
+	engineArgs := []string{"docker", "info", "--format", "{{.OSType}}/{{.Architecture}}"}
+	armProxy := "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"
+	cases := []struct {
+		name, reference string
+		raw             []byte
+	}{
+		{"unknown-engine", "", []byte("linux/riscv64\nPRIVATE_ENGINE_UNKNOWN\n")},
+		{"malformed-engine", "", []byte("{PRIVATE_ENGINE_MALFORMED")},
+	}
+	for _, reference := range []string{Image, armProxy} {
+		correct, other := "sha256:5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f", "sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1"
+		if reference == armProxy {
+			correct, other = "sha256:b0e75e62fcf0abd5c8aea482fd4aa00ff5052fd24d8d0b4103c94668a95b8c99", "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
+		}
+		for _, tc := range []struct{ name, body string }{
+			{"malformed", `{"PRIVATE_IMAGE":`},
+			{"missing-config", `{"Os":"linux","Architecture":"arm64","PRIVATE_IMAGE":"missing"}`},
+			{"wrong-config", `{"Id":"sha256:` + strings.Repeat("e", 64) + `","Os":"linux","Architecture":"arm64","PRIVATE_IMAGE":"wrong"}`},
+			{"cross-config", `{"Id":"` + other + `","Os":"linux","Architecture":"arm64","PRIVATE_IMAGE":"cross"}`},
+			{"missing-architecture", `{"Id":"` + correct + `","Os":"linux","PRIVATE_IMAGE":"missing-architecture"}`},
+		} {
+			cases = append(cases, struct {
+				name, reference string
+				raw             []byte
+			}{reference + "/" + tc.name, reference, []byte(tc.body)})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			id := "meta-test"
+			calls, selected := 0, 0
+			_, err := UpLinks(context.Background(), id, func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				switch args[0] {
+				case "info":
+					if tc.reference == "" {
+						selected++
+						return tc.raw, nil
+					}
+					return []byte("linux/aarch64\n"), nil
+				case "pull":
+					return nil, nil
+				case "image":
+					if args[2] == tc.reference {
+						selected++
+						return tc.raw, nil
+					}
+					if args[2] != Image {
+						t.Fatal("unexpected image query", args)
+					}
+					return []byte(`{"Id":"sha256:5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f","Os":"linux","Architecture":"arm64"}`), nil
+				default:
+					t.Fatal("downstream Docker resource operation after semantic refusal", args)
+					return nil, nil
+				}
+			})
+			expected := 1
+			if tc.reference != "" {
+				expected = 4
+				if tc.reference == armProxy {
+					expected = 5
+				}
+			}
+			if err == nil || calls != expected || selected != 1 || strings.Contains(err.Error(), "PRIVATE_") {
+				t.Fatalf("semantic gate/call boundary: calls=%d selected=%d err=%v", calls, selected, err)
+			}
+			kind, args := "linked-docker-engine-info", engineArgs
+			if tc.reference != "" {
+				kind, args = "linked-docker-image-inspect", []string{"docker", "image", "inspect", tc.reference, "--format", "{{json .}}"}
+			}
+			assertLinkedMetadataReadback(t, id, kind, args, tc.raw)
+			if _, e := os.Stat(filepath.Join(linkPrivateDirectory(id), "STOPPED.json")); e != nil {
+				t.Fatal("semantic rejection lost STOP", e)
+			}
+			if _, e := linkExecutor(id, func(context.Context, ...string) ([]byte, error) {
+				t.Fatal("fresh wrapper executed after STOP")
+				return nil, nil
+			}); e == nil {
+				t.Fatal("semantic STOP bypassed")
+			}
+			assertLinkPublicWithholds(t, State{RunID: id}, []byte("PRIVATE_"))
+		})
+	}
+}
+
+func TestFreshLinkedMetadataReadbackPersistenceFailureKeepsStop(t *testing.T) {
+	// Given a fresh linked attempt, When its already-authorized receipt path is
+	// replaced by a lab-owned test file after a successful image command, Then no
+	// alternate path, semantic admission or Docker/resource operation follows.
+	t.Chdir(t.TempDir())
+	id := "meta-persist"
+	calls := 0
+	originalFiles := map[string][]byte{}
+	var kept string
+	var originalStop []byte
+	raw := []byte(`{"Id":"sha256:5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f","Os":"linux","Architecture":"arm64","PRIVATE_METADATA":"synthetic-readback"}`)
+	_, err := UpLinks(context.Background(), id, func(_ context.Context, args ...string) ([]byte, error) {
+		calls++
+		switch args[0] {
+		case "info":
+			return []byte("linux/aarch64\n"), nil
+		case "pull":
+			return nil, nil
+		case "image":
+			if args[2] != Image {
+				t.Fatal("image operation passed failed receipt", args)
+			}
+			root := linkPrivateDirectory(id)
+			operations, e := filepath.Glob(filepath.Join(root, "operation-*"))
+			if e != nil || len(operations) != 1 {
+				t.Fatal("unexpected private operation reservation", e)
+			}
+			entries, e := os.ReadDir(operations[0])
+			if e != nil || len(entries) > 32 {
+				t.Fatal("private test operation bound", e)
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					t.Fatal("unexpected operation subtree")
+				}
+				b, e := os.ReadFile(filepath.Join(operations[0], entry.Name()))
+				if e != nil {
+					t.Fatal(e)
+				}
+				originalFiles[entry.Name()] = b
+			}
+			originalStop, e = os.ReadFile(filepath.Join(root, "STOPPED.json"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			kept = operations[0] + ".preserved"
+			if e = os.Rename(operations[0], kept); e != nil {
+				t.Fatal(e)
+			}
+			if e = os.WriteFile(operations[0], []byte("PRIVATE_SYNTHETIC_PATH_OCCUPIED"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			return raw, nil
+		default:
+			t.Fatal("Docker mutation after metadata receipt failure", args)
+			return nil, nil
+		}
+	})
+	if err == nil || calls != 4 || strings.Contains(err.Error(), "PRIVATE_") {
+		t.Fatalf("metadata receipt failure admitted: calls=%d err=%v", calls, err)
+	}
+	stop, e := os.ReadFile(filepath.Join(linkPrivateDirectory(id), "STOPPED.json"))
+	if e != nil || !bytes.Equal(stop, originalStop) {
+		t.Fatal("pending STOP replaced after persistence failure", e)
+	}
+	for name, want := range originalFiles {
+		got, e := os.ReadFile(filepath.Join(kept, name))
+		if e != nil || !bytes.Equal(got, want) {
+			t.Fatal("preexisting private bytes changed", e)
+		}
+	}
+	// No new sink/operation or receipt is authorized after this path fails.
+	entries, e := os.ReadDir(linkPrivateDirectory(id))
+	allowed := map[string]bool{"PRIVATE.json": true, "STOPPED.json": true, filepath.Base(kept): true, strings.TrimSuffix(filepath.Base(kept), ".preserved"): true}
+	if e != nil || len(entries) != len(allowed) {
+		t.Fatal("persistence refusal created an alternate private sink", e)
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			t.Fatal("unexpected private destination after refusal", entry.Name())
+		}
+	}
+	keptEntries, e := os.ReadDir(kept)
+	if e != nil || len(keptEntries) != len(originalFiles) {
+		t.Fatal("failed readback claimed a new completed private receipt", e)
+	}
+	// The earlier engine readback is still retained; unavailable image persistence
+	// cannot be relabeled as a complete image receipt or retried elsewhere.
+	assertLinkedMetadataReadback(t, id, "linked-docker-engine-info", []string{"docker", "info", "--format", "{{.OSType}}/{{.Architecture}}"}, []byte("linux/aarch64\n"))
+	if _, e = linkExecutor(id, func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("later Docker action after persistence failure")
+		return nil, nil
+	}); e == nil {
+		t.Fatal("persistence STOP bypassed")
+	}
+	assertLinkPublicWithholds(t, State{RunID: id}, []byte("PRIVATE_"))
 }

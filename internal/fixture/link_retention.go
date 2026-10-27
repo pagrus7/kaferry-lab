@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -104,11 +105,26 @@ func writeLinkPrivate(dir, name string, value any) (string, error) {
 	if err != nil {
 		return "", errors.New("private link receipt reservation failed")
 	}
-	_, we := f.Write(append(body, '\n'))
-	if errors.Join(we, f.Sync(), f.Close()) != nil {
+	if persistLinkPrivateReceipt(f, append(body, '\n')) != nil {
 		return "", errors.New("private link receipt persistence failed; evidence incomplete")
 	}
 	return f.Name(), nil
+}
+
+// A fixed receipt writer, not a filesystem abstraction. Always attempt Sync
+// and Close after Write, preserving primary and secondary errors for its caller.
+type linkPrivateReceiptFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+func persistLinkPrivateReceipt(f linkPrivateReceiptFile, body []byte) error {
+	n, err := f.Write(body)
+	if n != len(body) && err == nil {
+		err = io.ErrShortWrite
+	}
+	return errors.Join(err, f.Sync(), f.Close())
 }
 
 type linkDockerCause struct {
@@ -255,10 +271,27 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 			raw = raw[:linkOutputLimit]
 		}
 		if cause == nil && complete {
-			_, e = writeLinkPrivate(operation, "", struct {
-				Intent, Status, SHA256 string
-				Bytes                  int
-			}{intentPath, "successful bounded command; raw success output discarded", linkDigest(raw), len(raw)})
+			if kind := linkMetadataReadbackKind(args); kind != "" {
+				// A successful command says nothing about the caller's later semantic
+				// admission. Preserve exact selected originals before that caller sees them.
+				_, e = writeLinkPrivate(operation, "", struct {
+					RunID, Intent, PrivateReadbackKind, Stream, Classification string
+					Argv                                                       []string
+					StartedAt, EndedAt                                         time.Time
+					ElapsedNanoseconds                                         int64
+					Combined                                                   []byte
+					CombinedSHA256                                             string
+					CapturedCombinedBytes                                      int
+					ObservedCombinedBytes                                      int64
+					CombinedComplete, CommandSucceeded                         bool
+					SemanticAdmission                                          string
+				}{id, intentPath, kind, "combined stdout/stderr", "PRIVATE RAW EVIDENCE", append([]string{"docker"}, args...), started.UTC(), time.Now().UTC(), time.Since(started).Nanoseconds(), raw, linkDigest(raw), len(raw), int64(len(raw)), true, true, "not-observed-by-executor"})
+			} else {
+				_, e = writeLinkPrivate(operation, "", struct {
+					Intent, Status, SHA256 string
+					Bytes                  int
+				}{intentPath, "successful bounded command; raw success output discarded", linkDigest(raw), len(raw)})
+			}
 			if e != nil {
 				stopped = e
 				return nil, stopped
@@ -324,6 +357,20 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 		stopped = failure
 		return nil, stopped
 	}, nil
+}
+
+// Only these fixed metadata commands feed semantic startup/image admission.
+// Capture precedes the caller's validation, including pre-State engine refusal.
+func linkMetadataReadbackKind(args []string) string {
+	if len(args) == 3 && args[0] == "info" && args[1] == "--format" && args[2] == "{{.OSType}}/{{.Architecture}}" {
+		return "linked-docker-engine-info"
+	}
+	if len(args) == 5 && args[0] == "image" && args[1] == "inspect" && args[3] == "--format" && args[4] == "{{json .}}" {
+		if args[2] == Image || args[2] == ProxyImage || args[2] == arm64ProxyImage {
+			return "linked-docker-image-inspect"
+		}
+	}
+	return ""
 }
 
 func exactLinkAbsence(args []string, raw []byte) bool {

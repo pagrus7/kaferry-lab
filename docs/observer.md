@@ -21,9 +21,11 @@ assertions. Full signed-int64 timestamp interoperability is not claimed.
 
 Local integrated evidence: `.cache/m0/m0-observer-20261024h.log` (all five live
 subtests passed), `.cache/m0/strict-final-unit.log` (format/vet/race controls). This
-measured macOS ARM64 orchestration with Linux ARM64 brokers, not native AMD64
-release behavior. Native AMD64 CI and independent reviews are required before
-M0 is accepted. No Kaferry release has been qualified. See [coverage](coverage.md),
+measured macOS ARM64 orchestration with Linux ARM64 brokers. Later native AMD64
+CI and reviews supported the accepted historical M0 increment. The newly selected
+Linux ARM64 target still needs architecture-sensitive process/runtime calibration;
+these old local observations do not establish released ARM64 behavior. No Kaferry
+release has been qualified. See [coverage](coverage.md),
 [setup](setup.md), and [evidence rules](evidence.md).
 
 ## Evidence identities and bytes

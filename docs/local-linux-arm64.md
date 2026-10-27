@@ -55,9 +55,15 @@ Primary OCI metadata binds same-version Toxiproxy2.12.0 ARM64 manifest
 configb0e75e62fcf0abd5c8aea482fd4aa00ff5052fd24d8d0b4103c94668a95b8c99.
 Kafka3.9.2 retains its pinned multi-platform index; ARM64 childddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0
 has config5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f.
-The source port binds engine/native platform, selected references, both exact
-config IDs and inspected OS/architecture; mismatches fail before creation.
+The fixture source binds selected references, both exact config IDs and inspected
+OS/architecture to its recorded engine profile before creating networks or
+containers. The linked driver checks its native caller against the completed
+fixture before launching its live child; that caller check is not a pre-creation
+fixture gate. Scenario subject/backend admission precedes its runtime mutations.
 Metadata is not an image pull, container identity or reached runtime capability.
+The affected raw-readback repair is scoped to the already reserved linked private
+executor. Legacy nonlinked setup has no such private authority; do not invent an
+invalid-State fallback or claim complete failure custody for it.
 
 ## Remaining acceptance
 

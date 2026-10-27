@@ -27,8 +27,10 @@ cannot pass. Keep the bundle directory stable while checking it.
 An artifact attachment retains source document hashes, recorded checksum text,
 asset identity, executable identity, version output, provenance verification
 status and detail. Release metadata must use the exact pinned tag/commit,
-contract root, Linux AMD64 archive and executable digest measured from that
-archive. Available release provenance must be
+contract root, and one exact reviewed Linux AMD64 or ARM64 archive/executable
+tuple. Platform, names and both digests must belong to the same tuple. AMD64
+records remain historical; the current final qualification target is native
+Linux ARM64. Metadata consistency is not proof of native execution. Available release provenance must be
 verified. The checker validates recorded metadata consistency. It does not
 re-run cryptographic verification or authenticate a hostile author's claim to
 have downloaded/executed an artifact. Upstream `verify` supplies that evidence.

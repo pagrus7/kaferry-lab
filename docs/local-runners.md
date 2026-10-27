@@ -4,8 +4,10 @@ The selected runner is `kaferry-lab-mac-mini-20261025`, repository runner21 for
 `pagrus7/kaferry-lab`, installed at
 `/Users/pg/services/github-runners/kaferry-lab-mac-20261025`. It has only the
 custom label `kaferry-lab-mac-custody-20261025`. Four unrelated runners must not
-be changed. The host is Darwin/arm64. The old owned OrbStack ARM64 machine is
-stopped; it is not selected by this calibration.
+be changed. The host is Darwin/arm64. The owned OrbStack ARM64 machine was
+previously stopped. Its current API reports starting after bounded start/stop
+client timeouts; termination is unconfirmed. It is not used by the custody
+calibration. See PROGRESS.md for current substrate observations.
 
 The active workflow is `Mac local retention calibration`. Its fixed Python
 calibration is distinct from Go harness CI, release execution and M0–M6
