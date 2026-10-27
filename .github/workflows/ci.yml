@@ -94,7 +94,7 @@ jobs:
               json.dump(output, stream, indent=2, sort_keys=True)
               stream.write("\n")
           PYOBS
-      - name: Synthetic private-filesystem retention and caller controls
+      - name: Synthetic retained storage-helper and encrypted-upload admission controls
         timeout-minutes: 2
         shell: bash
         run: |
@@ -107,10 +107,10 @@ jobs:
           cp "${storage_reports[0]}" .cache/unit/private-storage-observations.json
           test "$storage_status" -eq 0
           caller_status=0
-          python3 scripts/test-private-store-caller.py 2>&1 | tee .cache/unit/private-store-caller-controls.log || caller_status=$?
-          caller_reports=(.cache/m2/private-store-caller-controls/run-*/public-report.json)
+          python3 scripts/test-encrypted-notice-upload.py 2>&1 | tee .cache/unit/encrypted-upload-controls.log || caller_status=$?
+          caller_reports=(.cache/m2/encrypted-notice-upload-controls/run-*/public-report.json)
           test "${#caller_reports[@]}" -eq 1
-          cp "${caller_reports[0]}" .cache/unit/private-store-caller-observations.json
+          cp "${caller_reports[0]}" .cache/unit/encrypted-upload-observations.json
           test "$caller_status" -eq 0
       - name: Format, vet, and unit controls
         shell: bash
@@ -151,6 +151,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   m1:
+    # Original product tag GET returned 403; bounded private response capture is required before another attempt.
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -323,6 +325,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   m2-release:
+    # Original product tag GET returned 403; bounded private response capture is required before another attempt.
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -518,38 +522,9 @@ jobs:
               json.dump(record, stream, indent=2, sort_keys=True)
               stream.write('\n')
           PYMETA
-      - name: Require the configured private store before any live fixture setup
-        id: private_preflight
-        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' }}
-        timeout-minutes: 1
-        shell: bash
-        env:
-          LAB_PRIVATE_ROOT: ${{ vars.LAB_PRIVATE_EVIDENCE_ROOT }}
-          LAB_PRIVATE_STORAGE_ID: ${{ vars.LAB_PRIVATE_STORAGE_ID }}
-        run: |
-          set -euo pipefail
-          umask 077
-          if test -z "$LAB_PRIVATE_ROOT" || test -z "$LAB_PRIVATE_STORAGE_ID"; then
-            echo 'Private evidence storage is not configured; calibration not started.' >&2
-            exit 1
-          fi
-          python3 scripts/store-link-notices-private.py preflight --private-root "$LAB_PRIVATE_ROOT" --storage-id "$LAB_PRIVATE_STORAGE_ID" --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job links --attempt "$GITHUB_RUN_ATTEMPT" > .cache/links/private-preflight.pending.json
-          python3 - <<'PYSTORECHECK'
-          import json, os, pathlib, re
-          r = json.loads(pathlib.Path('.cache/links/private-preflight.pending.json').read_bytes())
-          expected = {'namespace': 'calibration/private-notice-store', 'status': 'preflight-ready', 'complete': False, 'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'layout': 'linked-calibration-v2', 'repository': 'pagrus7/kaferry-lab', 'repository_id': '1432555755', 'retention_limit_attempts': 64, 'retention_limit_bytes_per_attempt': 13631488, 'release_qualified': False}
-          assert type(r) is dict and set(r) == set(expected) | {'storage_binding_sha256'}
-          for key, value in expected.items():
-              assert type(r[key]) is type(value) and r[key] == value
-          assert type(r['storage_binding_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}', r['storage_binding_sha256'])
-          # This is root admission, not empirical persistence or custody proof.
-          pathlib.Path('.cache/links/private-preflight.json').write_text(json.dumps(r, sort_keys=True) + '\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write('ready=true\n')
-          PYSTORECHECK
       - name: Run the sole foreground driver which owns setup tests and cleanup
         id: driver
-        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' && steps.private_preflight.outcome == 'success' && steps.private_preflight.outputs.ready == 'true' }}
+        if: ${{ env.LAB_LINK_RUNTIME == 'enabled' && steps.build.outcome == 'success' }}
         timeout-minutes: 10
         shell: bash
         run: |
@@ -669,64 +644,165 @@ jobs:
           PYPROOF
       - name: Seal only after actual stopped and reaped writer proof
         id: seal
-        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.proof.outputs.writers_stopped == 'true' }}
+        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.proof.outcome == 'success' && steps.proof.outputs.writers_stopped == 'true' }}
         timeout-minutes: 1
         shell: bash
+        env:
+          CALLER_CANCELLED: ${{ job.status == 'cancelled' }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+          WRITERS_STOPPED: ${{ steps.proof.outputs.writers_stopped }}
         run: |
           set -euo pipefail
           umask 077
           python3 scripts/seal-link-notices.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --recipient-sha256 ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57 --job links --attempt "$GITHUB_RUN_ATTEMPT" --layout linked-calibration-v2 --notice-writers-stopped-and-reaped
-          # The helper creates notice.cms and COMPLETE.json only after its own terminal finalization.
+          # Admission is independent of the sealer's caller declaration. Only a
+          # successful typed PYPROOF and exact bounded sealed files permit upload.
           python3 - <<'PYSEALED'
-          import hashlib, json, os, pathlib, stat
-          root = pathlib.Path('.cache/link-quarantine') / os.environ['LAB_RUN_ID']
-          metadata = json.loads((root / 'COMPLETE.json').read_bytes())
-          cms = root / 'notice.cms'
-          info = cms.lstat()
-          assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size <= 12 << 20
-          for key, value in {'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'layout': 'linked-calibration-v2', 'manifest_version': 2, 'complete': True, 'release_qualified': False}.items():
-              assert metadata[key] == value
-          assert metadata['cms_bytes'] == info.st_size and metadata['cms_sha256'] == hashlib.sha256(cms.read_bytes()).hexdigest()
-          assert metadata['caller_declaration'] == {'notice_writers_stopped_and_reaped': True, 'observed_proof': False}
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write('complete=true\n')
+          import importlib.util, os, pathlib, re, sys
+          sys.dont_write_bytecode = True
+          helper, error_fd = None, None
+          def require(value):
+              if not value:
+                  raise ValueError('encrypted-upload-admission-rejected')
+          def exact(value, expected):
+              require(type(value) is type(expected) and value == expected)
+          def count(value, maximum):
+              require(type(value) is int and 0 <= value <= maximum)
+              return value
+          try:
+              spec = importlib.util.spec_from_file_location('notice_seal_admission', pathlib.Path(os.environ['GITHUB_WORKSPACE']) / 'scripts/seal-link-notices.py')
+              helper = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(helper)
+              run, head, attempt = os.environ['LAB_RUN_ID'], os.environ['GITHUB_SHA'], os.environ['GITHUB_RUN_ATTEMPT']
+              # An unavailable first sink cannot fall back to another location or public errors.
+              _, error_fd = helper.reserve_operation(pathlib.Path('.cache/link-upload-private'), run)
+              for key, value in {'CALLER_CANCELLED': 'false', 'PROOF_OUTCOME': 'success', 'WRITERS_STOPPED': 'true',
+                                 'GITHUB_JOB': 'links', 'GITHUB_REPOSITORY': 'pagrus7/kaferry-lab',
+                                 'GITHUB_REPOSITORY_ID': '1432555755', 'GITHUB_EVENT_NAME': 'push',
+                                 'GITHUB_REF': 'refs/heads/codex/resilience-release-lab'}.items():
+                  exact(os.environ[key], value)
+              require(re.fullmatch(r'[1-9][0-9]{0,19}', os.environ['GITHUB_RUN_ID']) is not None)
+              exact(run, 'links-' + os.environ['GITHUB_RUN_ID'] + '-' + attempt)
+              identity = helper.identities(run, head, helper.CERT_PIN, 'links', attempt, helper.LINKED_LAYOUT)
+              def receipt(path):
+                  body = helper.read_regular(path, 256 << 10, private=True)
+                  require(len(body) > 0)
+                  return helper.parse_json(body), body
+              root = pathlib.Path('.cache/link-quarantine') / run
+              for directory in [pathlib.Path('.cache'), pathlib.Path('.cache/links'), root.parent, root]:
+                  helper.check_private(directory.lstat(), True)
+              require(set(p.name for p in root.iterdir()) == {'notice.cms', 'COMPLETE.json'})
+              metadata, metadata_body = receipt(root / 'COMPLETE.json')
+              cms = helper.read_regular(root / 'notice.cms', helper.MAX_CMS, private=True)
+              require(0 < len(cms) <= helper.MAX_CMS)
+              expected = dict(identity, complete=True, manifest_version=2, release_qualified=False,
+                              publication='DISABLED; explicit encrypted-public-quarantine exception required',
+                              cipher='AES-256-CBC; RSA-OAEP-SHA256; MGF1-SHA256; NOT AEAD',
+                              completion_scope='captured bytes only; no writer-quiescence, cleanup or calibration qualification')
+              require(type(metadata) is dict and set(metadata) == set(expected) | {'cms_bytes', 'cms_sha256', 'files', 'total_bytes', 'components', 'bundle_complete', 'caller_declaration', 'fixture_absence_sha256'})
+              for key, value in expected.items():
+                  exact(metadata[key], value)
+              exact(metadata['cms_bytes'], len(cms))
+              exact(metadata['cms_sha256'], helper.digest(cms))
+              # Keep the sealer's legacy publication label exact. This trusted workflow
+              # supplies the current encrypted-only authorization; the label grants none.
+              declaration = metadata['caller_declaration']
+              require(type(declaration) is dict and set(declaration) == {'notice_writers_stopped_and_reaped', 'observed_proof'})
+              exact(declaration['notice_writers_stopped_and_reaped'], True)
+              exact(declaration['observed_proof'], False)
+              components = metadata['components']
+              require(type(components) is dict and set(components) == {'driver', 'fixture'})
+              for name, component in components.items():
+                  require(type(component) is dict and set(component) == {'availability', 'files', 'total_bytes'})
+                  require(component['availability'] in (('captured',) if name == 'driver' else ('captured', 'absent-ENOENT')))
+                  count(component['files'], helper.MAX_FILES)
+                  count(component['total_bytes'], helper.MAX_PAYLOAD)
+                  if component['availability'] == 'captured':
+                      require(component['files'] > 0 and component['total_bytes'] > 0)
+                  else:
+                      exact(component['files'], 0)
+                      exact(component['total_bytes'], 0)
+              exact(metadata['files'], sum(c['files'] for c in components.values()))
+              count(metadata['files'], helper.MAX_FILES)
+              exact(metadata['total_bytes'], sum(c['total_bytes'] for c in components.values()))
+              count(metadata['total_bytes'], helper.MAX_PAYLOAD)
+              absent = components['fixture']['availability'] == 'absent-ENOENT'
+              exact(metadata['bundle_complete'], not absent)
+              absence = metadata['fixture_absence_sha256']
+              require((type(absence) is str and re.fullmatch(r'[0-9a-f]{64}', absence) is not None) if absent else absence is None)
+              proof, proof_body = receipt(pathlib.Path('.cache/links/caller-proof.json'))
+              fixed = {'namespace': 'calibration/linked-caller', 'run_id': run, 'source_head': head, 'job': 'links', 'attempt': attempt,
+                       'foreground_return_observed': True, 'caller_cancelled_at_admission': False, 'writers_quiescent': True,
+                       'private_capture_complete': True, 'setup_returned': True, 'subreaper_enabled': True,
+                       'actual_ECHILD_observed_by_driver': True, 'release_qualified': False,
+                       'scope': 'Reviewed driver final marker after actual wait/tree closure and primary sink sync/close; no ACK or Kaferry qualification.'}
+              flags = {'cleanup_attempted', 'cleanup_returned', 'resources_cleaned', 'fixture_cleanup_succeeded', 'child_started',
+                       'child_wait_returned', 'child_reaped', 'stream_copies_joined', 'anchor_started', 'anchor_wait_returned', 'anchor_reaped', 'calibration_passed'}
+              require(type(proof) is dict and set(proof) == set(fixed) | flags | {'terminal_adopted_waits', 'foreground_exit_code'})
+              for key, value in fixed.items():
+                  exact(proof[key], value)
+              for key in flags:
+                  require(type(proof[key]) is bool)
+              count(proof['terminal_adopted_waits'], 16)
+              code = count(proof['foreground_exit_code'], 255)
+              exact(helper.read_regular(pathlib.Path('.cache/links/foreground.exit'), 4, private=True), (str(code) + '\n').encode())
+              exact(proof['calibration_passed'], code == 0)
+              exact(proof['cleanup_attempted'], proof['cleanup_returned'])
+              for prefix, suffixes in [('child', ['wait_returned', 'reaped']), ('anchor', ['wait_returned', 'reaped'])]:
+                  for suffix in suffixes:
+                      exact(proof[prefix + '_' + suffix], proof[prefix + '_started'])
+              exact(proof['stream_copies_joined'], proof['child_started'])
+              if proof['calibration_passed']:
+                  require(all(proof[key] for key in ['resources_cleaned', 'fixture_cleanup_succeeded', 'cleanup_attempted']))
+              public = pathlib.Path('.cache/link-calibration') / run
+              require(not (public / 'INCOMPLETE.json').exists() and not (public / 'result.pending.json').exists())
+              marker, _ = receipt(public / 'WRITERS_QUIESCENT.json')
+              exact(marker['RunID'], run)
+              exact(marker['ReviewedHead'], head)
+              for key in ['WritersQuiescent', 'PrivateCaptureComplete', 'SetupReturned']:
+                  exact(marker[key], True)
+              for key in ['Closed', 'NoChildren', 'SubreaperEnabled']:
+                  exact(marker['Tree'][key], True)
+              exact(marker['Tree']['ControlFailed'], False)
+              exact(marker['Status'], 'CALIBRATION_PASSED_NOT_QUALIFICATION' if code == 0 else 'INCOMPLETE')
+              selected = dict(identity, namespace='calibration/encrypted-upload-admission', complete=True, cms_bytes=len(cms),
+                              cms_sha256=helper.digest(cms), seal_complete_sha256=helper.digest(metadata_body),
+                              caller_proof_sha256=helper.digest(proof_body), release_qualified=False)
+              helper.write_private(pathlib.Path('.cache/links/seal-admission.json'), helper.encode(selected))
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+                  stream.write('complete=true\n')
+              owned, error_fd = error_fd, None
+              helper.close_operation(owned)
+          except BaseException as error:
+              if error_fd is not None:
+                  try:
+                      helper.retain_os_error(error_fd, 'admit bounded encrypted diagnostic upload', error)
+                  except BaseException:
+                      pass
+                  owned, error_fd = error_fd, None
+                  try:
+                      helper.close_operation(owned, error)
+                  except BaseException:
+                      pass
+              try:
+                  print('encrypted diagnostic admission rejected; upload disabled', file=sys.stderr, flush=True)
+              except BaseException:
+                  pass
+              sys.exit(1)
           PYSEALED
-      - name: Retain the sealed originals only on the configured private filesystem
-        id: private_store
-        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.seal.outputs.complete == 'true' }}
-        timeout-minutes: 1
-        shell: bash
-        env:
-          LAB_PRIVATE_ROOT: ${{ vars.LAB_PRIVATE_EVIDENCE_ROOT }}
-          LAB_PRIVATE_STORAGE_ID: ${{ vars.LAB_PRIVATE_STORAGE_ID }}
-        run: |
-          set -euo pipefail
-          umask 077
-          python3 scripts/store-link-notices-private.py store --private-root "$LAB_PRIVATE_ROOT" --storage-id "$LAB_PRIVATE_STORAGE_ID" --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job links --attempt "$GITHUB_RUN_ATTEMPT" > .cache/links/private-store.pending.json
-          python3 - <<'PYSTORERESULT'
-          import hashlib, json, os, pathlib, re
-          r = json.loads(pathlib.Path('.cache/links/private-store.pending.json').read_bytes())
-          expected = {'namespace': 'calibration/private-notice-store', 'status': 'stored', 'complete': True, 'run_id': os.environ['LAB_RUN_ID'], 'source_head': os.environ['GITHUB_SHA'], 'job': 'links', 'attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'recipient_sha256': 'ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57', 'layout': 'linked-calibration-v2', 'repository': 'pagrus7/kaferry-lab', 'repository_id': '1432555755', 'stored_payload_files': 3, 'release_qualified': False}
-          hashes = {'storage_binding_sha256', 'cms_sha256', 'seal_complete_sha256', 'caller_proof_sha256', 'storage_receipt_sha256'}
-          assert type(r) is dict and set(r) == set(expected) | hashes | {'cms_bytes', 'stored_payload_bytes'}
-          for key, value in expected.items():
-              assert type(r[key]) is type(value) and r[key] == value
-          for key in hashes:
-              assert type(r[key]) is str and re.fullmatch(r'[0-9a-f]{64}', r[key])
-          assert type(r['cms_bytes']) is int and 0 < r['cms_bytes'] <= 12 << 20
-          assert type(r['stored_payload_bytes']) is int and 0 < r['stored_payload_bytes'] <= (12 << 20) + (256 << 10)
-          before = json.loads(pathlib.Path('.cache/links/private-preflight.json').read_bytes())
-          assert r['storage_binding_sha256'] == before['storage_binding_sha256']
-          sealed = pathlib.Path('.cache/link-quarantine') / os.environ['LAB_RUN_ID']
-          metadata = json.loads((sealed / 'COMPLETE.json').read_bytes())
-          assert r['cms_sha256'] == metadata['cms_sha256'] and r['cms_bytes'] == metadata['cms_bytes']
-          assert r['seal_complete_sha256'] == hashlib.sha256((sealed / 'COMPLETE.json').read_bytes()).hexdigest()
-          assert r['caller_proof_sha256'] == hashlib.sha256(pathlib.Path('.cache/links/caller-proof.json').read_bytes()).hexdigest()
-          # Only this exact projection is public; the capsule and original bodies stay private.
-          pathlib.Path('.cache/links/private-store.json').write_text(json.dumps(r, sort_keys=True) + '\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write('complete=true\n')
-          PYSTORERESULT
+      - name: Upload only the admitted diagnostic ciphertext
+        id: encrypted_upload
+        if: ${{ always() && !cancelled() && env.LAB_LINK_RUNTIME == 'enabled' && steps.proof.outcome == 'success' && steps.proof.outputs.writers_stopped == 'true' && steps.seal.outcome == 'success' && steps.seal.outputs.complete == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 2
+        with:
+          name: encrypted-link-notices-links-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/link-quarantine/${{ env.LAB_RUN_ID }}/notice.cms
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: false
       - name: Keep incomplete or failed calibration nonpassing after retention
         if: ${{ always() && env.LAB_LINK_RUNTIME == 'enabled' }}
         timeout-minutes: 1
@@ -734,15 +810,19 @@ jobs:
         env:
           PROOF_PASSED: ${{ steps.proof.outputs.calibration_passed }}
           SEALED: ${{ steps.seal.outputs.complete }}
-          PRIVATE_STORED: ${{ steps.private_store.outputs.complete }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+          SEAL_OUTCOME: ${{ steps.seal.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.encrypted_upload.outcome }}
           CALLER_CANCELLED: ${{ job.status == 'cancelled' }}
         run: |
           set -euo pipefail
           test "$CALLER_CANCELLED" = false
           test "$PROOF_PASSED" = true
           test "$SEALED" = true
-          test "$PRIVATE_STORED" = true
-      - name: Upload only selected public build, caller and private-store facts
+          test "$PROOF_OUTCOME" = success
+          test "$SEAL_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+      - name: Upload only selected public build, caller and seal-admission facts
         if: ${{ always() && !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         timeout-minutes: 1
@@ -751,7 +831,7 @@ jobs:
           path: |
             .cache/links/build.json
             .cache/links/caller-proof.json
-            .cache/links/private-store.json
+            .cache/links/seal-admission.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

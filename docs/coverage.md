@@ -15,6 +15,12 @@ Every row requires a healthy control, finite independently verified input, recor
 
 `internal/evidence/testdata/` contains literal synthetic histories for byte corruption, missing required output, unsafe saved prefixes, aborted output, wrong routing, missing triggers and truncated evidence; permitted duplicates pass. They test the independent checker rather than repeat a product scenario. `internal/calibration/run_test.go` exercises real owned stand-in children at an independently read saved/output barrier, including death before the barrier, invalid barriers, cancellation and reaping. `cmd/lab/main_test.go` checks command statuses and unchanged offline rechecks. The deliberately faulty stand-in saves before producing; detecting that loss tests orchestration plus checking, not whether a real Kaferry fault window was reached. All these histories remain calibration evidence.
 
+Encrypted hosted-upload controls replace the retired private-filesystem workflow
+caller projection. They challenge stale identities, incomplete writer closure,
+ciphertext substitution and plaintext upload paths using synthetic data and the
+exact workflow admission code. They add no Kaferry fault scenario; successful
+transport or calibration is never release qualification.
+
 ## M2 — Crashes, stalls and timeouts
 
 Use named restart groups, at least three selected partitions, short recorded timeouts and verified finite input. Start PRESERVE; repeat only routing-sensitive faults with KEY.

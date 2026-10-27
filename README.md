@@ -4,7 +4,7 @@ Tool resilience and data integrity testing for **published Kaferry releases**, s
 
 **Status: M0 and M1 accepted. M2 targeted release scenarios and independent observations are in development; required M2–M6 fault evidence and campaigns are incomplete. No Kaferry release is qualified.**
 
-The selected final target is now **native Linux ARM64 under local OrbStack**, with private evidence retained on the Mac and no Tailscale. The current executable paths remain AMD64-only; the [ARM64 transition](docs/local-linux-arm64.md) is incomplete. Historical AMD64 results do not qualify ARM64. Local build and capture stops remain in effect. The command examples below describe implemented interfaces, not authorization to retry stopped local operations.
+Execution uses GitHub-hosted Ubuntu24.04/native Linux AMD64 runners. Bounded diagnostic capsules may be uploaded encrypted; the private decryption key and recovered plaintext stay on the Mac. See [encrypted diagnostics](docs/private-notices.md). The local ARM64 draft is preserved separately and is not the active qualification target.
 
 The purpose is to test how Kaferry handles failures during data copies, preserves records and saved progress, and recovers after faults are removed. Independent observers and combined failure scenarios provide evidence beyond its core suite. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 

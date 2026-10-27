@@ -1,8 +1,12 @@
 # Lab setup and implemented checks
 
-The selected final target is now local native Linux ARM64 under OrbStack; see the [transition and current blockers](local-linux-arm64.md). The interfaces below describe the existing AMD64 implementation. ARM64 support is not implemented, the hosted workflow is disabled, and recorded local build/capture stops remain binding. Do not execute these examples as a workaround.
-
 M0 and M1 are accepted. M2 targeted release scenarios are in development; required M2–M6 fault evidence and campaigns are incomplete. Harness checks and calibration test the lab. They cannot qualify Kaferry, and `lab qualify` explicitly returns `UNSUPPORTED` with `release_qualified:false`.
+
+Selected execution is GitHub-hosted native Linux AMD64. Diagnostic capsules may
+use the explicit [encrypted-artifact exception](private-notices.md); the private
+key stays on the Mac. Local Go/verification/capture stops remain binding.
+Hosted release jobs are temporarily skipped pending original403response retention;
+partial harness CI does not establish M2 or final qualification.
 
 ## Prepare and check the harness
 
