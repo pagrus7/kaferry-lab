@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -437,6 +438,17 @@ func TestExecuteRelativeOutputRetainsUnreachedTrustFailure(t *testing.T) {
 	output := filepath.Join(root, "metadata.json")
 	args := []string{"--run-id", id.RunID, "--source-head", id.SourceHead, "--job", id.Job,
 		"--attempt", id.Attempt, "--output", output}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// The retired diagnostic CLI remains explicitly Linux AMD64-only.
+		// Other hosts must refuse before reserving a sink or invoking HTTP.
+		if code := execute(args); code != 1 {
+			t.Fatalf("unsupported host diagnostic returned %d", code)
+		}
+		if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("unsupported host reserved a diagnostic output")
+		}
+		return
+	}
 	if code := execute(args); code != 2 {
 		t.Fatalf("closed unreached observation returned %d", code)
 	}

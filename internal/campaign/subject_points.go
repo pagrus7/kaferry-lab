@@ -38,7 +38,7 @@ type SubjectFunctionPoint struct {
 }
 type SubjectPointMap struct {
 	Version                                   int
-	Kind, Status                              string
+	Kind, Status, Platform                    string
 	ReleaseTag, ReleaseCommit, ContractSHA256 string
 	ArtifactSHA256                            string
 	ArtifactBytes                             int
@@ -73,17 +73,23 @@ func ReadSubjectPointMap(path string) (report SubjectPointMap, err error) {
 		"Missing, ambiguous or inline-only function identities remain unsupported; name bytes alone never admit a point.",
 		"Pinned executable bytes are checked afresh; archive/provenance/native-version acquisition verification is separate and is not replaced by this map.",
 	}}
-	image, e := readSubjectPointImage(path, maxSubjectPointImage, artifact.BinarySize)
+	image, e := readSubjectPointImage(path, maxSubjectPointImage, 0)
 	if e != nil {
 		return report, e
 	}
 	report.ArtifactSHA256 = pointDigest(image)
 	report.ArtifactBytes = len(image)
-	if report.ArtifactSHA256 != evidence.ReleaseExecutableSHA256 {
+	profile, ok := reviewedSubjectPointIdentity(len(image), report.ArtifactSHA256)
+	if !ok {
 		return report, ErrSubjectPointIdentity
 	}
-	// No parsing occurs on any path before the exact identity gate above.
-	metadata, e := readPublicPointMetadata(image, reviewedSubjectPointSpecs())
+	report.Platform = profile.Platform
+	expectedMachine := elf.EM_X86_64
+	if profile.Platform == "linux/arm64" {
+		expectedMachine = elf.EM_AARCH64
+	}
+	// No parsing occurs on any path before the exact size/digest tuple gate above.
+	metadata, e := readPublicPointMetadata(image, reviewedSubjectPointSpecs(), expectedMachine)
 	report.ELFEntryPC, report.RuntimeTextBase, report.BaseAnchor = metadata.entry, metadata.base, metadata.anchor
 	report.Text, report.GoPCMetadata, report.Points = metadata.text, metadata.pcln, metadata.points
 	report.Status = "UNSUPPORTED"
@@ -92,6 +98,18 @@ func ReadSubjectPointMap(path string) (report SubjectPointMap, err error) {
 	}
 	report.Status = "STATIC_MAP_ONLY"
 	return report, nil
+}
+
+// The release reader has no calibration/image fallback: a size and whole-file
+// digest must match the same one of these two fixed published platform tuples.
+func reviewedSubjectPointIdentity(size int, digest string) (artifact.PlatformIdentity, bool) {
+	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
+		profile, ok := artifact.ReviewedPlatform(platform)
+		if ok && size == profile.BinarySize && digest == profile.BinarySHA256 {
+			return profile, true
+		}
+	}
+	return artifact.PlatformIdentity{}, false
 }
 
 func readSubjectPointImage(path string, maximum, exact int) (image []byte, err error) {
@@ -128,7 +146,7 @@ type publicPointMetadata struct {
 // Both release and visibly separate owned calibration images use the same
 // public Go entry-to-ELF entry proof. No ELF symbols, DWARF or alternative base
 // source is consulted; gosym always receives a nil symtab.
-func readPublicPointMetadata(image []byte, specs []subjectPointSpec) (out publicPointMetadata, err error) {
+func readPublicPointMetadata(image []byte, specs []subjectPointSpec, expectedMachine elf.Machine) (out publicPointMetadata, err error) {
 	defer func() {
 		if recover() != nil {
 			err = fmt.Errorf("%w: public metadata decoder rejected the image", ErrSubjectPointUnsupported)
@@ -137,13 +155,22 @@ func readPublicPointMetadata(image []byte, specs []subjectPointSpec) (out public
 			out.base = 0
 		}
 	}()
+	var entryName string
+	switch expectedMachine {
+	case elf.EM_X86_64:
+		entryName = "_rt0_amd64_linux"
+	case elf.EM_AARCH64:
+		entryName = "_rt0_arm64_linux"
+	default:
+		return out, fmt.Errorf("%w: unreviewed ELF machine", ErrSubjectPointUnsupported)
+	}
 	file, e := elf.NewFile(bytes.NewReader(image))
 	if e != nil {
 		return out, fmt.Errorf("%w: ELF unavailable", ErrSubjectPointUnsupported)
 	}
 	defer file.Close() // bytes.Reader has no owned OS descriptor
-	if file.Class != elf.ELFCLASS64 || file.Data != elf.ELFDATA2LSB || file.Type != elf.ET_EXEC || file.Machine != elf.EM_X86_64 || (file.OSABI != elf.ELFOSABI_NONE && file.OSABI != elf.ELFOSABI_LINUX) {
-		return out, fmt.Errorf("%w: requires Linux AMD64 ELF ET_EXEC", ErrSubjectPointUnsupported)
+	if file.Class != elf.ELFCLASS64 || file.Data != elf.ELFDATA2LSB || file.Type != elf.ET_EXEC || file.Machine != expectedMachine || (file.OSABI != elf.ELFOSABI_NONE && file.OSABI != elf.ELFOSABI_LINUX) {
+		return out, fmt.Errorf("%w: requires the selected Linux AMD64 or ARM64 ELF ET_EXEC", ErrSubjectPointUnsupported)
 	}
 	text, e := uniquePointSection(file, ".text", uint64(len(image)))
 	if e != nil {
@@ -178,11 +205,11 @@ func readPublicPointMetadata(image []byte, specs []subjectPointSpec) (out public
 	// .text.Addr is a proposed runtime.text base, never an assumption. Require
 	// one exact public runtime entry at the independent ELF e_entry before any
 	// requested function can be admitted, including the owned test specimen.
-	anchor, count := uniquePointFunction(table, "_rt0_amd64_linux")
+	anchor, count := uniquePointFunction(table, entryName)
 	if count != 1 || anchor.Entry != file.Entry {
 		return out, fmt.Errorf("%w: ELF entry cannot anchor runtime.text", ErrSubjectPointUnsupported)
 	}
-	out.anchor = "unique public _rt0_amd64_linux entry equals ELF e_entry"
+	out.anchor = "unique public " + entryName + " entry equals ELF e_entry"
 	failed := false
 	for _, spec := range specs {
 		point := readExactSubjectPoint(table, spec, text, textBytes)

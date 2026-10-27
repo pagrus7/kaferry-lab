@@ -154,10 +154,11 @@ func up(ctx context.Context, id string, run Executor, links bool, request linkRe
 		return s, errors.New("random cluster identity collision")
 	}
 	s = State{ClusterIDs: ids, RunID: id, Image: Image, Network: "kaferry-lab-" + id, Containers: []string{"kaferry-lab-" + id + "-source", "kaferry-lab-" + id + "-dest"}, Source: fmt.Sprintf("127.0.0.1:%d", p), Destination: fmt.Sprintf("127.0.0.1:%d", q), DockerPlatform: strings.TrimSpace(string(platform)), Created: time.Now().UTC().Format(time.RFC3339Nano)}
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		return s, err
+	}
 	if links {
-		if s.DockerPlatform != "linux/amd64" && s.DockerPlatform != "linux/x86_64" {
-			return s, errors.New("proxy fixture requires native Linux AMD64 Docker")
-		}
 		if err = planLinks(&s); err != nil {
 			return s, err
 		}
@@ -177,16 +178,25 @@ func up(ctx context.Context, id string, run Executor, links bool, request linkRe
 		if err = linkReceipt(s, "plan", s); err != nil {
 			return s, err
 		}
-		if _, err = run(ctx, "pull", "--quiet", "--platform", "linux/amd64", ProxyImage); err != nil {
+		if _, err = run(ctx, "pull", "--quiet", "--platform", profile.platform, s.Proxy.Image); err != nil {
 			return s, err
 		}
 	}
-	pullArgs := []string{"pull", Image}
+	pullArgs := []string{"pull", "--platform", profile.platform, Image}
 	if links {
-		pullArgs = []string{"pull", "--quiet", Image}
+		pullArgs = []string{"pull", "--quiet", "--platform", profile.platform, Image}
 	}
 	if _, err = run(ctx, pullArgs...); err != nil {
 		return s, err
+	}
+	// Resolve exact config and native platform before creating any resource.
+	if _, err = inspectLinkImage(ctx, run, s, Image); err != nil {
+		return s, err
+	}
+	if links {
+		if _, err = inspectLinkImage(ctx, run, s, s.Proxy.Image); err != nil {
+			return s, err
+		}
 	}
 	cleanupNeeded = !links // linked failures retain unresolved resources; no automatic Docker retry
 	if _, err = run(ctx, "network", "create", "--label", ownerLabel+"="+id, s.Network); err != nil {
@@ -197,7 +207,7 @@ func up(ctx context.Context, id string, run Executor, links bool, request linkRe
 		if i == 1 {
 			port = q
 		}
-		args := []string{"run", "-d", "--name", name, "--label", ownerLabel + "=" + id, "--network", s.Network, "--memory", "768m", "--cpus", "1.5", "-p", fmt.Sprintf("127.0.0.1:%d:19092", port)}
+		args := []string{"run", "-d", "--platform", profile.platform, "--name", name, "--label", ownerLabel + "=" + id, "--network", s.Network, "--memory", "768m", "--cpus", "1.5", "-p", fmt.Sprintf("127.0.0.1:%d:19092", port)}
 		env := []string{"CLUSTER_ID=" + ids[i], "KAFKA_HEAP_OPTS=-Xms128m -Xmx256m", "KAFKA_NODE_ID=1", "KAFKA_PROCESS_ROLES=broker,controller", "KAFKA_CONTROLLER_QUORUM_VOTERS=1@" + name + ":9093", "KAFKA_LISTENERS=INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092", "KAFKA_ADVERTISED_LISTENERS=INTERNAL://" + name + ":9092,EXTERNAL://127.0.0.1:" + fmt.Sprint(port), "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT", "KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL", "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER", "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1", "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1", "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1", "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0", "KAFKA_AUTO_CREATE_TOPICS_ENABLE=false", "KAFKA_LOG_RETENTION_MS=-1", "KAFKA_LOG_RETENTION_BYTES=-1"}
 		if links {
 			args = append(args, "--label", linkRoleLabel+"="+[]string{"source", "destination"}[i], "--pids-limit", "256", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1")

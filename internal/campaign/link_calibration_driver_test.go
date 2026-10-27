@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"testing"
@@ -183,7 +184,11 @@ func TestLinkCalibrationRequiresBothActualTestCompletions(t *testing.T) {
 func TestLinkCalibrationFreshReservationCannotBeReused(t *testing.T) {
 	// Given a real reserved first sink, another attempt must not replace it or
 	// choose another path after refusal, even before any Docker operation.
-	p := LinkCalibrationPlan{Repository: t.TempDir(), RunID: "driver-reservation"}
+	repository, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := LinkCalibrationPlan{Repository: repository, RunID: "driver-reservation"}
 	public, private, sink, err := reserveLinkCalibration(p)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +239,11 @@ func TestLinkCalibrationPrimaryObjectIncompleteUntilFinalization(t *testing.T) {
 	}
 }
 func TestLinkCalibrationPrivateMarkerExactAndHomeExcluded(t *testing.T) {
-	p := LinkCalibrationPlan{Repository: t.TempDir(), RunID: "driver-marker"}
+	repository, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := LinkCalibrationPlan{Repository: repository, RunID: "driver-marker"}
 	_, private, sink, err := reserveLinkCalibration(p)
 	if err != nil {
 		t.Fatal(err)
@@ -340,6 +349,59 @@ func TestLinkCalibrationInitialFailureNoCleanupStillRetainsWriterProof(t *testin
 			}
 			if _, e = sink.Write([]byte("PRIVATE late writer")); e == nil {
 				t.Fatal("primary error writer remained active after finalization")
+			}
+		})
+	}
+}
+
+func TestLinkCalibrationBuildIdentityBindsExactNativeTargetAndCleanHead(t *testing.T) {
+	// Literal lab metadata only: no executable is built, loaded or launched.
+	head := strings.Repeat("a", 40)
+	makeInfo := func(arch string) *debug.BuildInfo {
+		return &debug.BuildInfo{Path: "github.com/pagrus7/kaferry-lab/internal/campaign.test", Main: debug.Module{Path: "github.com/pagrus7/kaferry-lab"}, Settings: []debug.BuildSetting{{Key: "GOOS", Value: "linux"}, {Key: "GOARCH", Value: arch}, {Key: "vcs.revision", Value: head}, {Key: "vcs.modified", Value: "false"}}}
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			if !cleanNativeLinkBuild(makeInfo(arch), head, "linux", arch) {
+				t.Fatal("matching literal native build rejected")
+			}
+			for _, kind := range []string{"other-native-target", "unknown-target", "kernel-alias-is-not-Go-target", "foreign-OS", "dirty", "other-head", "missing-head", "other-path", "other-module", "duplicate-target"} {
+				t.Run(kind, func(t *testing.T) {
+					info := makeInfo(arch)
+					goos, target := "linux", arch
+					switch kind {
+					case "other-native-target":
+						if arch == "arm64" {
+							info.Settings[1].Value = "amd64"
+						} else {
+							info.Settings[1].Value = "arm64"
+						}
+					case "unknown-target":
+						target = "riscv64"
+						info.Settings[1].Value = target
+					case "kernel-alias-is-not-Go-target":
+						target = "aarch64"
+						info.Settings[1].Value = target
+					case "foreign-OS":
+						goos = "darwin"
+						info.Settings[0].Value = goos
+					case "dirty":
+						info.Settings[3].Value = "true"
+					case "other-head":
+						info.Settings[2].Value = strings.Repeat("b", 40)
+					case "missing-head":
+						info.Settings = append(info.Settings[:2], info.Settings[3:]...)
+					case "other-path":
+						info.Path = "github.com/pagrus7/kaferry/cmd/kaferry"
+					case "other-module":
+						info.Main.Path = "github.com/pagrus7/kaferry"
+					case "duplicate-target":
+						info.Settings = append(info.Settings, debug.BuildSetting{Key: "GOARCH", Value: arch})
+					}
+					if cleanNativeLinkBuild(info, head, goos, target) {
+						t.Fatal("substituted build identity admitted")
+					}
+				})
 			}
 		})
 	}

@@ -311,6 +311,14 @@ func retainLinkTopologyFailure(state fixture.State, action []string, notice []by
 }
 
 func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run fixture.Executor) error {
+	_, proxyReference, err := fixture.LinkPlatform(state.DockerPlatform)
+	if err != nil {
+		return err
+	}
+	proxyConfig, err := fixture.LinkProxyImageID(state.DockerPlatform)
+	if err != nil || state.Proxy == nil || state.Proxy.Image != proxyReference {
+		return errors.Join(err, errors.New("proxy does not match the recorded native image profile"))
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	raw, err := run(ctx, "container", "inspect", state.Proxy.ContainerID, "--format", "{{json .}}")
@@ -339,7 +347,7 @@ func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run f
 	if json.Unmarshal(raw, &info) != nil {
 		return errors.New("owned proxy inspect malformed")
 	}
-	if info.ID != state.Proxy.ContainerID || info.Name != "/"+state.Proxy.Container || info.Image != state.Proxy.ImageID || info.Image != "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa" || info.Config.Image != fixture.ProxyImage || info.Config.Labels[brokerOwnerLabel] != state.RunID || info.Config.Labels["io.kaferry-lab.role"] != "proxy" || info.State.Running == nil || info.State.Paused == nil || !*info.State.Running || *info.State.Paused || info.HostConfig.NetworkMode != state.Network || len(info.NetworkSettings.Networks) != 1 || info.NetworkSettings.Networks[state.Network].NetworkID != state.Proxy.NetworkID {
+	if info.ID != state.Proxy.ContainerID || info.Name != "/"+state.Proxy.Container || info.Image != state.Proxy.ImageID || info.Image != proxyConfig || info.Config.Image != proxyReference || info.Config.Labels[brokerOwnerLabel] != state.RunID || info.Config.Labels["io.kaferry-lab.role"] != "proxy" || info.State.Running == nil || info.State.Paused == nil || !*info.State.Running || *info.State.Paused || info.HostConfig.NetworkMode != state.Network || len(info.NetworkSettings.Networks) != 1 || info.NetworkSettings.Networks[state.Network].NetworkID != state.Proxy.NetworkID {
 		return errors.New("proxy ownership/image/network/state mismatch")
 	}
 	expected := map[string]string{"8474/tcp": state.Proxy.API, "8666/tcp": state.WorkerSource, "8667/tcp": state.WorkerDestination}

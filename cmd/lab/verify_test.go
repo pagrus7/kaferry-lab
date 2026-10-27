@@ -78,7 +78,7 @@ func TestVersionObservationRefusesMissingRuntimeEvidence(t *testing.T) {
 	// Given a missing target, a version result must never be fabricated.
 	path := filepath.Join(t.TempDir(), "missing-kaferry")
 	out, _, err := observeVersion(context.Background(), path)
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		if !errors.Is(err, artifact.ErrUnsupported) || len(out) != 0 {
 			t.Fatalf("unsupported host accepted: %q / %v", out, err)
 		}

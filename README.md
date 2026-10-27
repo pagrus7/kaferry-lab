@@ -7,12 +7,13 @@ Tool resilience and data integrity testing for **published Kaferry releases**, s
 Execution is moving to the Mac mini with private local evidence and no active
 encryption or artifact uploads. The current workflow calibrates local retention
 only; it does not run Go or qualify Kaferry. See [local runner setup](docs/local-runners.md).
-The host is ARM64; the native qualification platform is pending clarification.
-Recorded local Go/build/verification/capture stops remain binding.
+The user approved native Linux ARM64 qualification in OrbStack and ordinary Go
+builds/tests using unchanged caches. Packet capture and separately recorded
+verification-cache stops remain; do not route around a renewed denial.
 
 The purpose is to test how Kaferry handles failures during data copies, preserves records and saved progress, and recovers after faults are removed. Independent observers and combined failure scenarios provide evidence beyond its core suite. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 
-The following are reference commands, currently stopped on this Mac after recorded denials. Once the ordinary prerequisites are resolved, build the implemented CLI, then check an authored synthetic history. Checking needs no Docker, Kafka, network access or Kaferry executable:
+Ordinary Go build/test execution is now authorized; the unchanged-cache host retry succeeded. Build the implemented harness CLI, then check an authored synthetic history. Checking needs no Docker, Kafka, network access or Kaferry executable:
 
 ```sh
 mkdir -p .cache/bin
@@ -20,7 +21,7 @@ go build -o .cache/bin/lab ./cmd/lab
 .cache/bin/lab check internal/evidence/testdata/valid
 ```
 
-`lab verify NEW_OUT_DIR` verifies the pinned published v0.6.0 Linux AMD64 artifact and observes its version on native Linux AMD64. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` executes a bounded partial release case against a lab-owned fixture; see [targeted M2 runs](docs/m2.md). `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
+`lab verify NEW_OUT_DIR` selects one exact reviewed published v0.6.0 platform tuple and observes its version only on the matching native Linux kernel/Go architecture. The selected final target is Linux ARM64; the port is still under validation. `lab calibrate NEW_OUT_DIR` kills and restarts healthy and deliberately faulty stand-ins to test the lab's detection. `lab check BUNDLE` checks one recorded history; even `PASS` always has `release_qualified:false`. `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` executes a bounded partial release case against a lab-owned fixture; see [targeted M2 runs](docs/m2.md). `lab qualify` returns `UNSUPPORTED` until the required scenarios and campaigns exist. See [setup and checks](docs/setup.md) for prerequisites, commands, verdicts and evidence retention; [capabilities](docs/observer.md) records observer limits.
 
 ## Implement with Codex
 

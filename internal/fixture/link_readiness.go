@@ -284,7 +284,7 @@ func readyLinkedBroker(ctx context.Context, s State, index int, run Executor, pr
 	if err != nil || !present {
 		return errors.Join(err, errors.New("linked broker network unavailable before readiness"))
 	}
-	image, err := inspectLinkImage(ctx, run, Image)
+	image, err := inspectLinkImage(ctx, run, s, Image)
 	if err != nil {
 		return err
 	}

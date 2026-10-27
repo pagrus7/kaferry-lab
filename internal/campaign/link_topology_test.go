@@ -187,7 +187,7 @@ func TestLinkTopologyProxyInspectionPreservesSafeRetainedFailure(t *testing.T) {
 	// safe receipt-bearing diagnostic rather than discarding the final reference.
 	retained := errors.New("linked Docker action failed; private receipt synthetic-reference; Docker facility stopped")
 	calls := 0
-	state := fixture.State{Proxy: &fixture.ProxyState{ContainerID: "synthetic-owned-proxy-id"}}
+	state := fixture.State{DockerPlatform: "linux/amd64", Image: fixture.Image, Proxy: &fixture.ProxyState{ContainerID: "synthetic-owned-proxy-id", Image: fixture.ProxyImage, ImageID: "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"}}
 	err := checkLiveLinkProxyOwnership(context.Background(), state, func(_ context.Context, args ...string) ([]byte, error) {
 		calls++
 		if len(args) != 5 || args[0] != "container" || args[1] != "inspect" || args[2] != state.Proxy.ContainerID {
@@ -203,7 +203,7 @@ func TestLinkTopologyProxyInspectionPreservesSafeRetainedFailure(t *testing.T) {
 func linkTopologyNoticeState(t *testing.T) fixture.State {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	s := fixture.State{RunID: "test", Image: fixture.Image, Network: "kaferry-lab-test", Containers: []string{"kaferry-lab-test-source", "kaferry-lab-test-dest"}, ClusterIDs: []string{"source-cluster", "dest-cluster"}, Source: "127.0.0.1:20101", Destination: "127.0.0.1:20102", WorkerSource: "127.0.0.1:20201", WorkerDestination: "127.0.0.1:20202", Proxy: &fixture.ProxyState{Image: fixture.ProxyImage, Container: "kaferry-lab-test-links", API: "127.0.0.1:20300", Source: fixture.ProxyMapping{Name: "kaferry-lab-test-source-worker", Listen: "0.0.0.0:8666", Upstream: "kaferry-lab-test-source:29092"}, Destination: fixture.ProxyMapping{Name: "kaferry-lab-test-dest-worker", Listen: "0.0.0.0:8667", Upstream: "kaferry-lab-test-dest:29092"}}}
+	s := fixture.State{RunID: "test", DockerPlatform: "linux/amd64", Image: fixture.Image, Network: "kaferry-lab-test", Containers: []string{"kaferry-lab-test-source", "kaferry-lab-test-dest"}, ClusterIDs: []string{"source-cluster", "dest-cluster"}, Source: "127.0.0.1:20101", Destination: "127.0.0.1:20102", WorkerSource: "127.0.0.1:20201", WorkerDestination: "127.0.0.1:20202", Proxy: &fixture.ProxyState{Image: fixture.ProxyImage, Container: "kaferry-lab-test-links", API: "127.0.0.1:20300", Source: fixture.ProxyMapping{Name: "kaferry-lab-test-source-worker", Listen: "0.0.0.0:8666", Upstream: "kaferry-lab-test-source:29092"}, Destination: fixture.ProxyMapping{Name: "kaferry-lab-test-dest-worker", Listen: "0.0.0.0:8667", Upstream: "kaferry-lab-test-dest:29092"}}}
 	public := filepath.Join(".cache", "fixtures", s.RunID+"-links")
 	private := filepath.Join(".cache", "fixtures-private", s.RunID+"-links")
 	for _, dir := range []string{public, private} {

@@ -22,26 +22,57 @@ import (
 //go:noinline
 func calibrationSubjectPointMarker(value uint64) uint64 { return value*37 + 11 }
 
+func TestSubjectPointReleaseGateBindsExactPlatformTuple(t *testing.T) {
+	// Given the two fixed published identities, when their sizes and digests are
+	// crossed or altered, then neither combination may select a release parser.
+	amd, _ := artifact.ReviewedPlatform("linux/amd64")
+	arm, _ := artifact.ReviewedPlatform("linux/arm64")
+	for _, tc := range []struct {
+		name             string
+		size             int
+		digest, platform string
+	}{
+		{"AMD64", amd.BinarySize, amd.BinarySHA256, "linux/amd64"},
+		{"ARM64", arm.BinarySize, arm.BinarySHA256, "linux/arm64"},
+		{"AMD64-size-ARM64-digest", amd.BinarySize, arm.BinarySHA256, ""},
+		{"ARM64-size-AMD64-digest", arm.BinarySize, amd.BinarySHA256, ""},
+		{"changed-size", arm.BinarySize + 1, arm.BinarySHA256, ""},
+		{"changed-digest", arm.BinarySize, "not the whole-file digest", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile, ok := reviewedSubjectPointIdentity(tc.size, tc.digest)
+			if ok != (tc.platform != "") || profile.Platform != tc.platform {
+				t.Fatal("published size/digest platform tuple not bound", profile.Platform, ok)
+			}
+		})
+	}
+}
+
 func TestSubjectPointReleaseGateRejectsAlteredDigestBeforeELF(t *testing.T) {
-	// Given exact release-sized but non-ELF synthetic bytes, when release admission
-	// checks their altered digest, then no ELF/public-table interpretation occurs.
-	path := filepath.Join(t.TempDir(), "not-a-release")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = file.Write([]byte("CALIBRATION ONLY: not ELF; wrong release digest")); err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Truncate(artifact.BinarySize); err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	report, err := ReadSubjectPointMap(path)
-	if !errors.Is(err, ErrSubjectPointIdentity) || errors.Is(err, ErrSubjectPointUnsupported) || len(report.Points) != 0 || report.Text.Bytes != 0 || report.RuntimeTextBase != 0 || report.ReleaseQualified || report.RuntimeObserved {
-		t.Fatal("altered digest reached metadata admission", err)
+	// Given each exact release size but non-ELF synthetic bytes, when release
+	// admission checks the altered digest, then no ELF interpretation occurs.
+	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
+		t.Run(platform, func(t *testing.T) {
+			profile, _ := artifact.ReviewedPlatform(platform)
+			path := filepath.Join(t.TempDir(), "not-a-release")
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = file.Write([]byte("CALIBRATION ONLY: not ELF; wrong release digest")); err != nil {
+				t.Fatal(err)
+			}
+			if err = file.Truncate(int64(profile.BinarySize)); err != nil {
+				t.Fatal(err)
+			}
+			if err = file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			report, err := ReadSubjectPointMap(path)
+			if !errors.Is(err, ErrSubjectPointIdentity) || errors.Is(err, ErrSubjectPointUnsupported) || report.Platform != "" || len(report.Points) != 0 || report.Text.Bytes != 0 || report.RuntimeTextBase != 0 || report.ReleaseQualified || report.RuntimeObserved {
+				t.Fatal("altered digest reached metadata admission", err)
+			}
+		})
 	}
 }
 
@@ -79,12 +110,17 @@ func TestSubjectPointReleaseGateCannotAdmitLabTestExecutable(t *testing.T) {
 }
 
 func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("CALIBRATION ONLY: requires owned native Linux AMD64 test executable")
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
+		t.Skip("CALIBRATION ONLY: requires owned native Linux AMD64 or ARM64 test executable")
 	}
 	if err := nativeProcessPlatform(); err != nil {
-		t.Fatal("CALIBRATION requires native Linux AMD64 kernel", err)
+		t.Fatal("CALIBRATION requires native Linux AMD64 or ARM64 kernel", err)
 	}
+	expectedMachine := elf.EM_X86_64
+	if runtime.GOARCH == "arm64" {
+		expectedMachine = elf.EM_AARCH64
+	}
+	entryName := "_rt0_" + runtime.GOARCH + "_linux"
 	// Given the current lab-owned native test binary, when the private public-
 	// metadata reader proves the same public runtime-entry/ELF-entry anchor as
 	// release admission (not the pointer),
@@ -104,7 +140,7 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 	}
 	file, line := actual.FileLine(pointer)
 	specs := []subjectPointSpec{{"CALIBRATION ONLY", actual.Name(), "/internal/campaign/subject_points_test.go"}}
-	metadata, err := readPublicPointMetadata(image, specs)
+	metadata, err := readPublicPointMetadata(image, specs, expectedMachine)
 	if err != nil {
 		// Static facts from the already captured owned image help distinguish an
 		// external/C startup entry from the required public runtime entry. Never
@@ -122,7 +158,7 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 		}
 		t.Fatal("owned native calibration public metadata unsupported")
 	}
-	if metadata.anchor != "unique public _rt0_amd64_linux entry equals ELF e_entry" || len(metadata.points) != 1 {
+	if metadata.anchor != "unique public "+entryName+" entry equals ELF e_entry" || len(metadata.points) != 1 {
 		t.Fatal("calibration used a different/unbound base")
 	}
 	point := metadata.points[0]
@@ -135,9 +171,29 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 		// that unsupported format before admitting a base or function point.
 		mutated := append([]byte(nil), image...)
 		binary.LittleEndian.PutUint16(mutated[16:18], uint16(elf.ET_DYN))
-		bad, err := readPublicPointMetadata(mutated, specs)
+		bad, err := readPublicPointMetadata(mutated, specs, expectedMachine)
 		if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != "" || bad.base != 0 || len(bad.points) != 0 {
 			t.Fatal("unsupported ELF type admitted a base or function range")
+		}
+	})
+	t.Run("wrong-or-unreviewed-machine", func(t *testing.T) {
+		// Given the healthy owned image, when its declared machine changes to
+		// the other reviewed machine or an unknown machine, then the selected
+		// profile refuses before public function parsing or base admission.
+		for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64, elf.EM_RISCV} {
+			if machine == expectedMachine {
+				continue
+			}
+			mutated := append([]byte(nil), image...)
+			binary.LittleEndian.PutUint16(mutated[18:20], uint16(machine))
+			bad, err := readPublicPointMetadata(mutated, specs, expectedMachine)
+			if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != "" || bad.base != 0 || len(bad.points) != 0 {
+				t.Fatal("wrong ELF machine admitted")
+			}
+			bad, err = readPublicPointMetadata(image, specs, machine)
+			if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != "" || bad.base != 0 || len(bad.points) != 0 {
+				t.Fatal("wrong expected machine admitted")
+			}
 		}
 	})
 	for _, control := range []struct {
@@ -151,7 +207,7 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 			// Given the independently checked healthy marker image, when a
 			// reviewed source suffix is wrong or a valid spec is followed by
 			// a missing function, then partial metadata cannot become success.
-			bad, err := readPublicPointMetadata(image, control.specs)
+			bad, err := readPublicPointMetadata(image, control.specs, expectedMachine)
 			if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != metadata.anchor || bad.base != metadata.base || len(bad.points) != len(control.specs) {
 				t.Fatal("failed requested point did not propagate aggregate Unsupported")
 			}
@@ -181,7 +237,7 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := []byte("_rt0_amd64_linux\x00")
+	name := []byte(entryName + "\x00")
 	if bytes.Count(pclnBytes, name) != 1 {
 		t.Fatal("literal runtime entry name not uniquely located for negative control")
 	}
@@ -195,7 +251,7 @@ func TestCalibrationPublicSubjectMetadataMatchesIndependentFunctionPC(t *testing
 			} else {
 				mutated[nameOffset] = 'x'
 			}
-			bad, err := readPublicPointMetadata(mutated, specs)
+			bad, err := readPublicPointMetadata(mutated, specs, expectedMachine)
 			if !errors.Is(err, ErrSubjectPointUnsupported) || bad.anchor != "" || bad.base != 0 || len(bad.points) != 0 {
 				t.Fatal("unproved entry anchor admitted a function range")
 			}

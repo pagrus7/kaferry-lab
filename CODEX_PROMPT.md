@@ -21,20 +21,27 @@ Required work
 Complete every required M0–M6 roadmap acceptance criterion, starting with the first unfinished requirement. Test verified, digest-pinned published Kaferry v0.6.0 artifacts against the reviewed tagged contract. Keep the sibling Kaferry repository read-only. No source-build fallback, Kaferry imports/internal codecs as oracles, prior-syntax rejection, broad migration coverage or redundant core regression matrices. Preserve the scope and individual acceptance criteria in ROADMAP.md.
 
 The user selected Mac mini runners and local evidence retention on2026-10-27,
-superseding the hosted encryption direction. Remove active encryption and
-artifact/cache uploads; preserve all historical originals, encrypted evidence,
-keys and isolated proposals. Use the owned repository-scoped Mac runner and
-private host-root directories independent of workspace reuse. The current
-workflow calibrates fixed local custody only, with trusted pre/post-job hooks
-and no Go or release execution. The host is Darwin/arm64; the existing native
-Linux AMD64 qualification requirement remains until the user clarifies a change.
-No emulation may silently qualify. Local Go/build/test/attestation-cache and
-packet-capture stops remain binding, including service/VM/cache routes around
-them. The earlier artifact-transfer quota failure remains retained and does not
-justify retrying it through this runner. Normal control-plane work for the newly
-requested runner setup is separate; retain and stop on any actual new refusal.
+superseding hosted encryption. The user subsequently explicitly approved ordinary
+Go builds/tests with unchanged caches and safeguards, and native Linux ARM64
+qualification in OrbStack. The original host Go retry succeeded with default
+GOCACHE/GOPATH/GOMODCACHE; no cache redirect or safeguard change was needed.
+Keep all evidence private locally and remove active encryption/artifact/cache
+uploads. Preserve old originals/ciphertext/keys/proposals and the incomplete
+historical transfers. Normal dependency, source and runner control operations
+remain authorized; they do not clear old failures or authorize fallback after a
+new denial. Packet capture, global process enumeration and previously denied
+attestation-cache operations retain their separate stops; no alternative cache,
+verifier, UID, service, VM, capture or safeguard route may hide a refusal.
+The owned Mac runner currently runs only the reviewed fixed custody calibration.
+Port and measure the native ARM64 harness/campaign deliberately; never run a
+Linux release as a macOS process or call emulation native. Preserve historical
+AMD64 offline-checking support and results, with no ARM64 runtime claims from
+those records. The shared OrbStack backend is currently unresponsive; normal
+lab-machine start/stop and backend queries timed out. Global OrbStack restart
+would affect unrelated resources and requires the separately requested user
+approval. Continue independent source/checker work while that answer is pending.
 
-Use independent observations and offline checking for record fidelity, membership, routing, saved progress and recovery. Missing observations, unreached conditions, incomplete scans and product violations never become passing results. Separate calibration histories and faulty stand-ins from release evidence. Local AMD64 emulation is development evidence; final required qualification runs natively on Linux AMD64, such as GitHub Actions ubuntu-24.04.
+Use independent observations and offline checking for record fidelity, membership, routing, saved progress and recovery. Missing observations, unreached conditions, incomplete scans and product violations never become passing results. Separate calibration histories and faulty stand-ins from release evidence. Local AMD64 emulation is development evidence; final required qualification runs natively on Linux ARM64 in the approved OrbStack environment.
 
 Use GPT-6.1 Sol/high native sub-agents for bounded research, disjoint implementation and independent docs/test-oracle/simplicity reviews. Assign explicit file ownership and preserve others' changes. The coordinator owns integration, PROGRESS.md and git operations. Freeze reviewed increments, resolve findings, push the feature branch and inspect final-commit CI. Do not push during source reviews. Continue routine work within this authorization without asking whether to proceed.
 

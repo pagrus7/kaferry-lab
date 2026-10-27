@@ -20,10 +20,11 @@ The sole workflow job is **local retention calibration**, not harness CI or a
 released Kaferry campaign. It runs on the existing repository-scoped Mac runner's
 unique `kaferry-lab-mac-custody-20261025` label. It does not select hosted runners,
 Go, a product executable, Docker faults, packet capture or metadata diagnostics.
-The local Go/build/test/attestation-cache and capture stops remain binding.
-This ARM64 Mac does not satisfy the existing native Linux AMD64 gate; the user's
-qualification-architecture decision is pending. No emulated run may silently
-replace native qualification. M2–M6 remain unfinished.
+Ordinary Go builds/tests with unchanged caches are now user-authorized and the
+original host retry succeeded. Separate attestation-cache/capture stops remain.
+The selected qualification target is native Linux ARM64 in OrbStack; this Darwin
+host and the fixed custody workflow cannot provide that runtime evidence. No
+emulated run may silently replace native qualification. M2–M6 remain unfinished.
 
 The calibration writes fixed synthetic binary/JSON bytes directly into the
 private attempt and checks their lengths, hashes and exact bytes. Raw errors

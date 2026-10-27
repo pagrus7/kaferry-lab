@@ -17,8 +17,17 @@ import (
 
 func driverLatencyCleanupFixture(t *testing.T, withID bool) (fixture.State, linkCalibrationLatencyPlan, string, []byte, string) {
 	t.Helper()
+	return driverLatencyCleanupFixtureForPlatform(t, withID, "linux/amd64")
+}
+func driverLatencyCleanupFixtureForPlatform(t *testing.T, withID bool, platform string) (fixture.State, linkCalibrationLatencyPlan, string, []byte, string) {
+	t.Helper()
 	s := latencyNoticeState(t)
-	s.Proxy.ImageID = "sha256:" + strings.Repeat("7", 64)
+	s.DockerPlatform = platform
+	s.Proxy.ImageID = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
+	if platform == "linux/arm64" {
+		s.Proxy.Image = "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"
+		s.Proxy.ImageID = "sha256:b0e75e62fcf0abd5c8aea482fd4aa00ff5052fd24d8d0b4103c94668a95b8c99"
+	}
 	s.Proxy.ContainerID = strings.Repeat("8", 64)
 	s.Proxy.NetworkID = strings.Repeat("9", 64)
 	s.Proxy.BrokerIDs = []string{strings.Repeat("1", 64), strings.Repeat("2", 64)}
@@ -32,7 +41,7 @@ func driverLatencyCleanupFixture(t *testing.T, withID bool) (fixture.State, link
 	if e != nil {
 		t.Fatal(e)
 	}
-	p := linkCalibrationLatencyPlan{RunID: s.RunID, Name: name, Role: "latency-calibration", Image: fixture.ProxyImage, ExpectedImageID: s.Proxy.ImageID, Network: "host", API: "127.0.0.1:18475", Endpoint: "127.0.0.1:18476", Upstream: "127.0.0.1:18477", ConfigPath: config, Command: []string{"-host=127.0.0.1", "-port=18475", "-config=/calibration.json"}, MemoryBytes: 128 << 20, NanoCPUs: 500000000, PIDs: 64, LogBytes: 1 << 20}
+	p := linkCalibrationLatencyPlan{RunID: s.RunID, Name: name, Role: "latency-calibration", Image: s.Proxy.Image, ExpectedImageID: s.Proxy.ImageID, Network: "host", API: "127.0.0.1:18475", Endpoint: "127.0.0.1:18476", Upstream: "127.0.0.1:18477", ConfigPath: config, Command: []string{"-host=127.0.0.1", "-port=18475", "-config=/calibration.json"}, MemoryBytes: 128 << 20, NanoCPUs: 500000000, PIDs: 64, LogBytes: 1 << 20}
 	id := strings.Repeat("4", 64)
 	var rows []byte
 	appendRow := func(kind string, fact any) {
@@ -59,7 +68,7 @@ func driverLatencyCleanupFixture(t *testing.T, withID bool) (fixture.State, link
 	}
 	facts := map[string]any{
 		"ID": id, "Name": "/" + name, "Image": s.Proxy.ImageID,
-		"Config":     map[string]any{"Image": fixture.ProxyImage, "Labels": map[string]string{brokerOwnerLabel: s.RunID, "io.kaferry-lab.role": "latency-calibration"}, "Cmd": p.Command, "Entrypoint": []string{"/toxiproxy"}},
+		"Config":     map[string]any{"Image": s.Proxy.Image, "Labels": map[string]string{brokerOwnerLabel: s.RunID, "io.kaferry-lab.role": "latency-calibration"}, "Cmd": p.Command, "Entrypoint": []string{"/toxiproxy"}},
 		"State":      map[string]bool{"Running": true, "Paused": false},
 		"HostConfig": map[string]any{"NetworkMode": "host", "Memory": 128 << 20, "NanoCPUs": 500000000, "PidsLimit": 64, "Privileged": false, "ReadonlyRootfs": true, "PortBindings": map[string]any{}, "LogConfig": map[string]any{"Type": "json-file", "Config": map[string]string{"max-size": "1m", "max-file": "1"}}},
 		"Mounts":     []map[string]any{{"Type": "bind", "Source": config, "Destination": "/calibration.json", "RW": false}},
@@ -71,37 +80,41 @@ func driverLatencyCleanupFixture(t *testing.T, withID bool) (fixture.State, link
 	return s, p, id, raw, path
 }
 func TestLinkCalibrationRestoresExactLatencyContainerAfterLostTestCleanup(t *testing.T) {
-	for _, withID := range []bool{false, true} {
-		t.Run(map[bool]string{false: "partial-create-no-ID", true: "toxic-active-known-ID"}[withID], func(t *testing.T) {
-			s, p, id, raw, _ := driverLatencyCleanupFixture(t, withID)
-			var calls [][]string
-			run := func(_ context.Context, args ...string) ([]byte, error) {
-				calls = append(calls, append([]string(nil), args...))
-				if args[1] == "inspect" {
-					target := p.Name
-					if withID {
-						target = id
+	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
+		t.Run(platform, func(t *testing.T) {
+			for _, withID := range []bool{false, true} {
+				t.Run(map[bool]string{false: "partial-create-no-ID", true: "toxic-active-known-ID"}[withID], func(t *testing.T) {
+					s, p, id, raw, _ := driverLatencyCleanupFixtureForPlatform(t, withID, platform)
+					var calls [][]string
+					run := func(_ context.Context, args ...string) ([]byte, error) {
+						calls = append(calls, append([]string(nil), args...))
+						if args[1] == "inspect" {
+							target := p.Name
+							if withID {
+								target = id
+							}
+							if args[2] != target {
+								t.Fatal("cleanup searched a different resource")
+							}
+							return raw, nil
+						}
+						if len(args) != 4 || args[0] != "container" || args[1] != "rm" || args[2] != "-f" || args[3] != id {
+							t.Fatal("cleanup removed by name/label or changed route")
+						}
+						// The exact immutable ownership evidence must exist BEFORE destruction.
+						b, e := os.ReadFile(filepath.Join(".cache", "fixtures-private", s.RunID+"-links", "latency-cleanup-owner.json"))
+						if e != nil || !bytes.Contains(b, []byte(id)) {
+							t.Fatal("resource removed before ownership evidence")
+						}
+						return nil, nil
 					}
-					if args[2] != target {
-						t.Fatal("cleanup searched a different resource")
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					got, err := cleanupLinkCalibrationLatency(ctx, s, run)
+					if err != nil || !got.Resolved || !got.Removed || !got.JournalComplete || got.ContainerID != id || len(calls) != 2 {
+						t.Fatal("available exact cleanup did not restore killed-test resource", err)
 					}
-					return raw, nil
-				}
-				if len(args) != 4 || args[0] != "container" || args[1] != "rm" || args[2] != "-f" || args[3] != id {
-					t.Fatal("cleanup removed by name/label or changed route")
-				}
-				// The exact immutable ownership evidence must exist BEFORE destruction.
-				b, e := os.ReadFile(filepath.Join(".cache", "fixtures-private", s.RunID+"-links", "latency-cleanup-owner.json"))
-				if e != nil || !bytes.Contains(b, []byte(id)) {
-					t.Fatal("resource removed before ownership evidence")
-				}
-				return nil, nil
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			got, err := cleanupLinkCalibrationLatency(ctx, s, run)
-			if err != nil || !got.Resolved || !got.Removed || !got.JournalComplete || got.ContainerID != id || len(calls) != 2 {
-				t.Fatal("available exact cleanup did not restore killed-test resource", err)
+				})
 			}
 		})
 	}
@@ -294,5 +307,72 @@ func TestLinkCalibrationLatencyOwnerReceiptFailureStopsBeforeRemoval(t *testing.
 	got, err := cleanupLinkCalibrationLatency(context.Background(), s, run)
 	if err == nil || got.Resolved || calls != 1 {
 		t.Fatal("ownership evidence failure admitted removal")
+	}
+}
+
+func TestLinkCalibrationCleanupRejectsCrossPlatformProxyAuthority(t *testing.T) {
+	// Given an ARM64 fixture, When state, journal or inspected proxy identity is
+	// borrowed from AMD64, Then no removal can be authorized by that evidence.
+	for _, kind := range []string{"engine", "state-reference", "state-config", "journal-reference", "container-reference"} {
+		t.Run(kind, func(t *testing.T) {
+			s, _, _, raw, path := driverLatencyCleanupFixtureForPlatform(t, true, "linux/arm64")
+			expectedCalls := 0
+			switch kind {
+			case "engine":
+				s.DockerPlatform = "linux/arm64/v8"
+			case "state-reference":
+				s.Proxy.Image = fixture.ProxyImage
+			case "state-config":
+				s.Proxy.ImageID = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
+			case "journal-reference":
+				body, e := os.ReadFile(path)
+				if e != nil {
+					t.Fatal(e)
+				}
+				body = bytes.ReplaceAll(body, []byte(s.Proxy.Image), []byte(fixture.ProxyImage))
+				if e = os.WriteFile(path, body, 0600); e != nil {
+					t.Fatal(e)
+				}
+			case "container-reference":
+				var f map[string]any
+				if e := json.Unmarshal(raw, &f); e != nil {
+					t.Fatal(e)
+				}
+				f["Config"].(map[string]any)["Image"] = fixture.ProxyImage
+				var e error
+				raw, e = json.Marshal(f)
+				if e != nil {
+					t.Fatal(e)
+				}
+				expectedCalls = 1
+			}
+			original, e := os.ReadFile(path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			calls := 0
+			got, err := cleanupLinkCalibrationLatency(context.Background(), s, func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				if args[0] != "container" || args[1] != "inspect" {
+					t.Fatal("cross-platform cleanup mutation", args)
+				}
+				return raw, nil
+			})
+			if err == nil || got.Removed || got.Resolved || calls != expectedCalls {
+				t.Fatalf("cross-platform authority admitted: calls=%d result=%+v err=%v", calls, got, err)
+			}
+			retained, ok := err.(*linkCalibrationCleanupError)
+			// Invalid engine/reference state cannot authorize even the fixture's private
+			// retention route. Keep it explicitly incomplete; never normalize authority
+			// or switch sinks to turn this refusal into evidence of a completed notice.
+			complete := kind != "engine" && kind != "state-reference"
+			if !ok || retained.retentionComplete != complete {
+				t.Fatal("invalid authority or incomplete notice became complete", err)
+			}
+			after, e := os.ReadFile(path)
+			if e != nil || !bytes.Equal(original, after) {
+				t.Fatal("original journal changed after refusal", e)
+			}
+		})
 	}
 }

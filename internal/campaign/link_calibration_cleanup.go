@@ -36,6 +36,23 @@ func (e *linkCalibrationCleanupError) Error() string {
 	return "latency cleanup incomplete; private reference " + e.reference
 }
 
+// Cleanup can inspect an owned native fixture from another orchestrator host.
+// This checks fixed recorded identity only; it does not authorize execution.
+func selectedLinkCalibrationProxy(s fixture.State) (platform, image, imageID string, err error) {
+	platform, image, err = fixture.LinkPlatform(s.DockerPlatform)
+	if err != nil {
+		return
+	}
+	imageID, err = fixture.LinkProxyImageID(s.DockerPlatform)
+	if err != nil {
+		return
+	}
+	if s.Image != fixture.Image || s.Proxy == nil || s.Proxy.Image != image || s.Proxy.ImageID != imageID {
+		err = errors.New("linked calibration requires the selected native proxy reference and exact config")
+	}
+	return
+}
+
 // The only discovery is a bounded read of this run's existing public directory.
 // No Docker resource inventory or unrelated filesystem traversal is performed.
 func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDocker fixture.Executor) (r LinkCalibrationCleanup, err error) {
@@ -51,8 +68,8 @@ func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDock
 			}
 		}
 	}()
-	if s.Proxy == nil {
-		return r, errors.New("genuine linked fixture required")
+	if _, _, _, e := selectedLinkCalibrationProxy(s); e != nil {
+		return r, e
 	}
 	root := filepath.Join(".cache", "fixtures", s.RunID+"-links")
 	action = append(action, root)
@@ -166,7 +183,7 @@ func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDock
 		RunID, Name, ID, ImageID, Image, Role, Network, ConfigPath string
 		Command                                                    []string
 		JournalSHA256                                              string
-	}{s.RunID, plan.Name, actual, s.Proxy.ImageID, fixture.ProxyImage, "latency-calibration", "host", plan.ConfigPath, plan.Command, processDigest(body)}); e != nil {
+	}{s.RunID, plan.Name, actual, s.Proxy.ImageID, s.Proxy.Image, "latency-calibration", "host", plan.ConfigPath, plan.Command, processDigest(body)}); e != nil {
 		return r, e
 	}
 	action = []string{"latency_owner_cleanup", "container", "rm", "-f", actual}
@@ -220,6 +237,10 @@ func readLinkCalibrationJournal(path string) ([]byte, error) {
 	return body, nil
 }
 func readLinkCalibrationLatencyPlan(body []byte, s fixture.State, name string) (plan linkCalibrationLatencyPlan, id string, tail []byte, err error) {
+	_, image, imageID, err := selectedLinkCalibrationProxy(s)
+	if err != nil {
+		return plan, id, nil, err
+	}
 	lines := bytes.Split(body, []byte{'\n'})
 	if len(lines) > 129 {
 		return plan, id, nil, errors.New("latency journal record count exceeds bound")
@@ -270,12 +291,19 @@ func readLinkCalibrationLatencyPlan(body []byte, s fixture.State, name string) (
 	}
 	host, port, e := net.SplitHostPort(plan.API)
 	imageBound := len(plan.ExpectedImageID) == 71 && strings.HasPrefix(plan.ExpectedImageID, "sha256:") && calibrationHex(strings.TrimPrefix(plan.ExpectedImageID, "sha256:"))
-	if plans != 1 || !imageBound || e != nil || host != "127.0.0.1" || port == "" || plan.RunID != s.RunID || plan.Name != name || plan.Role != "latency-calibration" || plan.Image != fixture.ProxyImage || plan.ExpectedImageID != s.Proxy.ImageID || plan.Network != "host" || plan.ConfigPath != configPath || !reflect.DeepEqual(plan.Command, []string{"-host=127.0.0.1", "-port=" + port, "-config=/calibration.json"}) || plan.MemoryBytes != 128<<20 || plan.NanoCPUs != 500000000 || plan.PIDs != 64 || plan.LogBytes != 1<<20 {
+	if plans != 1 || !imageBound || e != nil || host != "127.0.0.1" || port == "" || plan.RunID != s.RunID || plan.Name != name || plan.Role != "latency-calibration" || plan.Image != image || plan.ExpectedImageID != imageID || plan.Network != "host" || plan.ConfigPath != configPath || !reflect.DeepEqual(plan.Command, []string{"-host=127.0.0.1", "-port=" + port, "-config=/calibration.json"}) || plan.MemoryBytes != 128<<20 || plan.NanoCPUs != 500000000 || plan.PIDs != 64 || plan.LogBytes != 1<<20 {
 		return plan, id, tail, errors.Join(e, errors.New("latency plan differs from this run's fixed ownership contract"))
 	}
 	return
 }
 func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p linkCalibrationLatencyPlan, retained string) (string, error) {
+	_, image, imageID, err := selectedLinkCalibrationProxy(s)
+	if err != nil {
+		return "", err
+	}
+	if p.Image != image || p.ExpectedImageID != imageID {
+		return "", errors.New("latency cleanup plan image differs from native fixture")
+	}
 	var f struct {
 		ID, Name, Image string
 		Config          struct {
@@ -305,7 +333,7 @@ func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p link
 	if decodeErr := json.Unmarshal(raw, &f); decodeErr != nil {
 		return "", decodeErr
 	}
-	if len(f.ID) != 64 || !calibrationHex(f.ID) || retained != "" && f.ID != retained || f.Name != "/"+p.Name || f.Image != s.Proxy.ImageID || f.Config.Image != fixture.ProxyImage || f.Config.Labels[brokerOwnerLabel] != s.RunID || f.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
+	if len(f.ID) != 64 || !calibrationHex(f.ID) || retained != "" && f.ID != retained || f.Name != "/"+p.Name || f.Image != imageID || f.Config.Image != image || f.Config.Labels[brokerOwnerLabel] != s.RunID || f.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
 		return "", errors.New("latency cleanup immutable ownership mismatch")
 	}
 	if !reflect.DeepEqual(f.Config.Cmd, p.Command) || !reflect.DeepEqual(f.Config.Entrypoint, []string{"/toxiproxy"}) || f.State.Running == nil || f.State.Paused == nil || *f.State.Paused || f.HostConfig.NetworkMode != "host" || f.HostConfig.Memory != 128<<20 || f.HostConfig.NanoCPUs != 500000000 || f.HostConfig.PidsLimit != 64 || f.HostConfig.Privileged || !f.HostConfig.ReadonlyRootfs || len(f.HostConfig.PortBindings) != 0 {

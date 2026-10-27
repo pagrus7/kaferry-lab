@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,8 +23,6 @@ import (
 
 	"github.com/pagrus7/kaferry-lab/internal/fixture"
 )
-
-const linkLatencyImageID = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
 
 // These are one-host monotonic offsets, never comparisons of serialized UTC
 // timestamps. First-byte observations also catch an early partial delivery.
@@ -217,6 +216,13 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	if err := nativeProcessPlatform(); err != nil {
 		t.Fatal(err)
 	}
+	platform, proxyImage, proxyImageID, err := selectedLinkCalibrationProxy(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = validateScenarioFixturePlatform(platform, runtime.GOOS+"/"+runtime.GOARCH, state); err != nil {
+		t.Fatal(err)
+	}
 	run, err := fixture.LinkExecutor(state, fixture.Docker)
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +331,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		BudgetSeconds, WorkSeconds, MemoryBytes, NanoCPUs, PIDs, LogBytes, Connections, Requests, NonceBytes int64
 		LatencyMS, GranularityMS, DelayedMinimumMS, PromptMaximumMS, RequestBoundMS                          int
 		LongLatencyMS, LongMinimumMS, LongRequestBoundMS, PendingTriggerMaximumMS                            int
-	}{state.RunID, name, "latency-calibration", fixture.ProxyImage, linkLatencyImageID, "host", api, endpoint, upstream, configPath, command, 90, 70, 128 << 20, 500000000, 64, 1 << 20, 10, 19, 32, 400, 100, 300, 200, 4000, 20000, 19900, 25000, 1000})
+	}{state.RunID, name, "latency-calibration", proxyImage, proxyImageID, "host", api, endpoint, upstream, configPath, command, 90, 70, 128 << 20, 500000000, 64, 1 << 20, 10, 19, 32, 400, 100, 300, 200, 4000, 20000, 19900, 25000, 1000})
 	t.Log("STOCK PROXY ECHO CALIBRATION ONLY; selected synthetic facts: " + filepath.Join(directory, "observations.jsonl"))
 
 	serverEvents := make(chan linkLatencyServerReceipt, 16)
@@ -397,7 +403,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if len(raw) > 64<<10 || json.Unmarshal(raw, &facts) != nil {
 			return errors.New("calibration ownership inspection malformed or oversized")
 		}
-		if !linkLatencyContainerID(facts.ID) || facts.Name != "/"+name || containerID != "" && facts.ID != containerID || facts.Image != linkLatencyImageID || facts.Config.Image != fixture.ProxyImage || facts.Config.Labels[brokerOwnerLabel] != state.RunID || facts.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
+		if !linkLatencyContainerID(facts.ID) || facts.Name != "/"+name || containerID != "" && facts.ID != containerID || facts.Image != proxyImageID || facts.Config.Image != proxyImage || facts.Config.Labels[brokerOwnerLabel] != state.RunID || facts.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
 			return errors.New("calibration immutable ownership/image mismatch")
 		}
 		if !reflect.DeepEqual(facts.Config.Cmd, command) || !reflect.DeepEqual(facts.Config.Entrypoint, []string{"/toxiproxy"}) || facts.State.Running == nil || facts.State.Paused == nil || *facts.State.Paused || running && !*facts.State.Running {
@@ -471,7 +477,7 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		}
 	})
 	mustRetain("create_intent", struct{ Name string }{name})
-	raw, err := docker(ctx, "container", "create", "--name", name, "--network", "host", "--platform", "linux/amd64", "--pull=never", "--memory", "128m", "--cpus", "0.5", "--pids-limit", "64", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1", "--label", brokerOwnerLabel+"="+state.RunID, "--label", "io.kaferry-lab.role=latency-calibration", "--mount", "type=bind,src="+configPath+",dst=/calibration.json,readonly", fixture.ProxyImage, command[0], command[1], command[2])
+	raw, err := docker(ctx, "container", "create", "--name", name, "--network", "host", "--platform", platform, "--pull=never", "--memory", "128m", "--cpus", "0.5", "--pids-limit", "64", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1", "--label", brokerOwnerLabel+"="+state.RunID, "--label", "io.kaferry-lab.role=latency-calibration", "--mount", "type=bind,src="+configPath+",dst=/calibration.json,readonly", proxyImage, command[0], command[1], command[2])
 	created = true // even a failed create may have left its planned owned resource
 	if err != nil {
 		t.Fatal(err) // LinkExecutor returns only a safe private-receipt reference.

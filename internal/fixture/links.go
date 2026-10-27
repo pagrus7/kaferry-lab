@@ -25,6 +25,43 @@ const ProxyImage = "ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59
 const proxyConfigID = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
 const linkRoleLabel = "io.kaferry-lab.role"
 
+// The legacy exported constant remains the AMD64 subject. New callers must select
+// the fixed native subject from the actual Docker engine platform.
+const arm64ProxyImage = "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"
+const arm64ProxyConfigID = "sha256:b0e75e62fcf0abd5c8aea482fd4aa00ff5052fd24d8d0b4103c94668a95b8c99"
+const amd64BrokerConfigID = "sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1"
+const arm64BrokerConfigID = "sha256:5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f"
+
+type imageProfile struct {
+	platform, architecture, proxyImage, proxyConfig, brokerConfig string
+}
+
+func fixedImageProfile(dockerPlatform string) (imageProfile, error) {
+	switch dockerPlatform {
+	case "linux/amd64", "linux/x86_64":
+		return imageProfile{"linux/amd64", "amd64", ProxyImage, proxyConfigID, amd64BrokerConfigID}, nil
+	case "linux/arm64", "linux/aarch64":
+		return imageProfile{"linux/arm64", "arm64", arm64ProxyImage, arm64ProxyConfigID, arm64BrokerConfigID}, nil
+	default:
+		return imageProfile{}, errors.New("fixture requires a reviewed native Linux Docker platform")
+	}
+}
+
+// LinkPlatform selects only the two pinned stock image profiles. The input is
+// the actual recorded Docker engine platform, not a requested emulation target.
+// Returning metadata does not establish native execution or qualify a fixture.
+func LinkPlatform(dockerPlatform string) (platform, proxyImage string, err error) {
+	p, err := fixedImageProfile(dockerPlatform)
+	return p.platform, p.proxyImage, err
+}
+
+// LinkProxyImageID supplies the exact pinned config for a separate ownership
+// observer. It does not substitute for an actual Docker image inspection.
+func LinkProxyImageID(dockerPlatform string) (string, error) {
+	p, err := fixedImageProfile(dockerPlatform)
+	return p.proxyConfig, err
+}
+
 // ProxyState records intended resources before creation. Immutable identities
 // come from a separate exclusive identity receipt after successful inspection.
 // The two broker containers and direct observer endpoints stay in State.
@@ -125,6 +162,10 @@ func loopbackPort(endpoint string) (string, error) {
 	return port, nil
 }
 func planLinks(s *State) error {
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		return err
+	}
 	ports := make([]int, 3)
 	used := map[string]bool{s.Source: true, s.Destination: true}
 	for i := range ports {
@@ -142,10 +183,14 @@ func planLinks(s *State) error {
 	s.WorkerSource = fmt.Sprintf("127.0.0.1:%d", ports[0])
 	s.WorkerDestination = fmt.Sprintf("127.0.0.1:%d", ports[1])
 	prefix := "kaferry-lab-" + s.RunID
-	s.Proxy = &ProxyState{Image: ProxyImage, Container: prefix + "-links", API: fmt.Sprintf("127.0.0.1:%d", ports[2]), Source: ProxyMapping{prefix + "-source-worker", "0.0.0.0:8666", prefix + "-source:29092"}, Destination: ProxyMapping{prefix + "-dest-worker", "0.0.0.0:8667", prefix + "-dest:29092"}}
+	s.Proxy = &ProxyState{Image: profile.proxyImage, Container: prefix + "-links", API: fmt.Sprintf("127.0.0.1:%d", ports[2]), Source: ProxyMapping{prefix + "-source-worker", "0.0.0.0:8666", prefix + "-source:29092"}, Destination: ProxyMapping{prefix + "-dest-worker", "0.0.0.0:8667", prefix + "-dest:29092"}}
 	return validateLinkPlan(*s)
 }
 func validateLinkPlan(s State) error {
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		return err
+	}
 	if _, e := StatePath(s.RunID); e != nil {
 		return e
 	}
@@ -157,7 +202,7 @@ func validateLinkPlan(s State) error {
 		return errors.New("linked fixture requires two distinct cluster identities")
 	}
 	p := s.Proxy
-	if p.Image != ProxyImage || p.Container != prefix+"-links" || p.Source != (ProxyMapping{prefix + "-source-worker", "0.0.0.0:8666", prefix + "-source:29092"}) || p.Destination != (ProxyMapping{prefix + "-dest-worker", "0.0.0.0:8667", prefix + "-dest:29092"}) {
+	if p.Image != profile.proxyImage || p.Container != prefix+"-links" || p.Source != (ProxyMapping{prefix + "-source-worker", "0.0.0.0:8666", prefix + "-source:29092"}) || p.Destination != (ProxyMapping{prefix + "-dest-worker", "0.0.0.0:8667", prefix + "-dest:29092"}) {
 		return errors.New("invalid fixed proxy topology")
 	}
 	seen := map[string]bool{}
@@ -292,11 +337,15 @@ func saveLinkIdentity(s *State, r linkResources) error {
 }
 
 func setupLinks(ctx context.Context, s *State, run Executor, request linkRequest) error {
+	if err := validateLinkPlan(*s); err != nil {
+		return err
+	}
+	profile, _ := fixedImageProfile(s.DockerPlatform)
 	p := s.Proxy
 	api, _ := loopbackPort(p.API)
 	source, _ := loopbackPort(s.WorkerSource)
 	dest, _ := loopbackPort(s.WorkerDestination)
-	args := []string{"run", "-d", "--platform", "linux/amd64", "--name", p.Container, "--label", ownerLabel + "=" + s.RunID, "--label", linkRoleLabel + "=proxy", "--network", s.Network, "--memory", "128m", "--cpus", "1", "--pids-limit", "128", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1", "-p", "127.0.0.1:" + api + ":8474", "-p", "127.0.0.1:" + source + ":8666", "-p", "127.0.0.1:" + dest + ":8667", ProxyImage, "-host=0.0.0.0", "-proxy-metrics"}
+	args := []string{"run", "-d", "--platform", profile.platform, "--name", p.Container, "--label", ownerLabel + "=" + s.RunID, "--label", linkRoleLabel + "=proxy", "--network", s.Network, "--memory", "128m", "--cpus", "1", "--pids-limit", "128", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1", "-p", "127.0.0.1:" + api + ":8474", "-p", "127.0.0.1:" + source + ":8666", "-p", "127.0.0.1:" + dest + ":8667", p.Image, "-host=0.0.0.0", "-proxy-metrics"}
 	if _, e := run(ctx, args...); e != nil {
 		return e
 	}
@@ -590,19 +639,33 @@ func inspectLinkNetwork(ctx context.Context, s State, run Executor) (linkNetwork
 	}
 	return n, true, nil
 }
-func inspectLinkImage(ctx context.Context, run Executor, reference string) (string, error) {
-	raw, e := run(ctx, "image", "inspect", reference, "--format", "{{.Id}}")
-	id := strings.TrimSpace(string(raw))
-	if e != nil {
-		return "", e
+func inspectLinkImage(ctx context.Context, run Executor, s State, reference string) (string, error) {
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		return "", err
 	}
-	if !linkImageID(id) || (reference == ProxyImage && id != proxyConfigID) {
-		return "", errors.New("pinned link image identity unavailable")
+	expected := profile.brokerConfig
+	if reference == profile.proxyImage {
+		expected = profile.proxyConfig
+	} else if reference != Image {
+		return "", errors.New("unreviewed fixture image reference")
 	}
-	return id, nil
+	raw, err := run(ctx, "image", "inspect", reference, "--format", "{{json .}}")
+	if err != nil {
+		return "", err
+	}
+	var image struct {
+		ID           string `json:"Id"`
+		OS           string `json:"Os"`
+		Architecture string
+	}
+	if len(raw) > 64<<10 || json.Unmarshal(raw, &image) != nil || image.ID != expected || image.OS != "linux" || image.Architecture != profile.architecture {
+		return "", errors.New("pinned fixture image config or native platform mismatch")
+	}
+	return image.ID, nil
 }
 func inspectLinkContainer(ctx context.Context, s State, run Executor, index int, networkID, imageID string, setup bool) (linkFacts, bool, error) {
-	name, role, reference, target := s.Proxy.Container, "proxy", ProxyImage, s.Proxy.ContainerID
+	name, role, reference, target := s.Proxy.Container, "proxy", s.Proxy.Image, s.Proxy.ContainerID
 	if index < 2 {
 		name = s.Containers[index]
 		role = []string{"source", "destination"}[index]
@@ -692,11 +755,11 @@ func inspectLinkResources(ctx context.Context, s State, run Executor) (linkResou
 		return resources, errors.Join(e, errors.New("owned link network unavailable"))
 	}
 	resources.NetworkID = n.ID
-	resources.BrokerImageID, e = inspectLinkImage(ctx, run, Image)
+	resources.BrokerImageID, e = inspectLinkImage(ctx, run, s, Image)
 	if e != nil {
 		return resources, e
 	}
-	resources.ProxyImageID, e = inspectLinkImage(ctx, run, ProxyImage)
+	resources.ProxyImageID, e = inspectLinkImage(ctx, run, s, s.Proxy.Image)
 	if e != nil {
 		return resources, e
 	}
@@ -766,9 +829,9 @@ func downLinks(ctx context.Context, s State, run Executor) (err error) {
 		}
 		image := Image
 		if index == 2 {
-			image = ProxyImage
+			image = s.Proxy.Image
 		}
-		imageID, e := inspectLinkImage(ctx, run, image)
+		imageID, e := inspectLinkImage(ctx, run, s, image)
 		if e != nil {
 			return e
 		}

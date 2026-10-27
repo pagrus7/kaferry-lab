@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -151,6 +152,13 @@ func RunLinkCalibration(ctx context.Context, p LinkCalibrationPlan) (r LinkCalib
 	done()
 	r.SetupReturned = true
 	retain([]string{"fixture.UpLinks", p.RunID}, upErr)
+	if upErr == nil {
+		upErr = validateScenarioFixturePlatform(runtime.GOOS+"/"+runtime.GOARCH, runtime.GOOS+"/"+runtime.GOARCH, state)
+		if upErr == nil {
+			_, _, _, upErr = selectedLinkCalibrationProxy(state)
+		}
+		retain([]string{"admit_native_fixture_backend", p.RunID}, upErr)
+	}
 	var cleanupDeadline time.Time
 	if upErr == nil && ctx.Err() == nil && capture {
 		testCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
@@ -386,15 +394,27 @@ func validateLinkCalibration(p LinkCalibrationPlan) (f *os.File, err error) {
 	if e != nil {
 		return f, e
 	}
-	settings := map[string]string{}
-	for _, v := range bi.Settings {
-		settings[v.Key] = v.Value
-	}
-	if bi.Path != "github.com/pagrus7/kaferry-lab/internal/campaign.test" || settings["GOOS"] != "linux" || settings["GOARCH"] != "amd64" || settings["vcs.revision"] != p.ReviewedHead || settings["vcs.modified"] != "false" || bi.Main.Path != "github.com/pagrus7/kaferry-lab" {
+	if !cleanNativeLinkBuild(bi, p.ReviewedHead, runtime.GOOS, runtime.GOARCH) {
 		return f, errors.New("clean reviewed native lab build metadata required")
 	}
 	_, err = f.Seek(0, io.SeekStart)
 	return
+}
+
+// The actual caller checks nativeProcessPlatform first. This metadata check
+// then binds the immutable test specimen to that exact native Go target and head.
+func cleanNativeLinkBuild(bi *debug.BuildInfo, head, goos, goarch string) bool {
+	if bi == nil || goos != "linux" || (goarch != "amd64" && goarch != "arm64") {
+		return false
+	}
+	settings := map[string]string{}
+	for _, v := range bi.Settings {
+		if _, exists := settings[v.Key]; exists {
+			return false
+		}
+		settings[v.Key] = v.Value
+	}
+	return bi.Path == "github.com/pagrus7/kaferry-lab/internal/campaign.test" && settings["GOOS"] == goos && settings["GOARCH"] == goarch && settings["vcs.revision"] == head && settings["vcs.modified"] == "false" && bi.Main.Path == "github.com/pagrus7/kaferry-lab"
 }
 
 // These nonblocking memory sinks keep bounded exact prefixes. Cmd.Wait joins

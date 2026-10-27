@@ -10,10 +10,11 @@ stopped; it is not selected by this calibration.
 The active workflow is `Mac local retention calibration`. Its fixed Python
 calibration is distinct from Go harness CI, release execution and M0–M6
 acceptance. No uploaded artifact, cache, ciphertext or private network transfer
-is part of the new path. Only source and fixed status text reach GitHub. Local
-Go/build/test/attestation-cache and packet-capture stops remain in force. The
-existing native Linux AMD64 qualification gate is unchanged pending the user's
-architecture choice; the preserved ARM64 proposal is not automatically accepted.
+is part of the new path. Only source and fixed status text reach GitHub. The user approved ordinary Go builds/tests with unchanged caches and native
+Linux ARM64 qualification in OrbStack. The original host build succeeded without
+a workaround. The current workflow remains custody-only until native execution
+and retention are integrated. Separate capture/verification-cache stops remain;
+the ARM64 source port still needs native evidence.
 
 ## Provisioning contract
 
@@ -61,7 +62,7 @@ are installed. Surface any actual launchctl, network, filesystem or runner
 refusal unchanged and stop that selected operation; no sudo, alternate user,
 service domain, runner or cache route may conceal it.
 
-No Go commands in other documents are an instruction to retry the recorded
-local denials. Full qualification still requires the complete roadmap, a
+The user-approved original Go retry succeeded; a renewed denial must still stop
+its operation, and other recorded refusals cannot be bypassed. Full qualification still requires the complete roadmap, a
 matching pinned published release, independently reached faults/recovery,
 complete membership/bytes/routing/saved-prefix audits and offline rechecks.

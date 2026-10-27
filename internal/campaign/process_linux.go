@@ -28,11 +28,16 @@ func nativeProcessPlatform() error {
 		}
 		machine.WriteByte(byte(c))
 	}
-	// An AMD64 Go executable on an ARM64 Linux kernel is emulated, not native.
-	if runtime.GOARCH != "amd64" || machine.String() != "x86_64" {
-		return errors.New("release campaign requires native Linux AMD64 execution")
+	return nativeProcessArchitecture(runtime.GOARCH, machine.String())
+}
+
+// Native means the reviewed Go target and Linux kernel architecture agree.
+// In particular an AMD64 executable on an ARM64 kernel is translated.
+func nativeProcessArchitecture(goarch, machine string) error {
+	if (goarch == "amd64" && machine == "x86_64") || (goarch == "arm64" && machine == "aarch64") {
+		return nil
 	}
-	return nil
+	return errors.New("release campaign requires matching reviewed native Linux Go and kernel architectures")
 }
 
 func readProcessState(pid int) (byte, string, error) {

@@ -39,7 +39,7 @@ func execute(args []string) int {
 	switch args[0] {
 	case "verify":
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: lab verify NEW_OUT_DIR (reviewed v0.6.0 linux-amd64 only)")
+			fmt.Fprintln(os.Stderr, "usage: lab verify NEW_OUT_DIR (reviewed v0.6.0 native Linux amd64/arm64 only)")
 			return 2
 		}
 		result, e := verify(ctx, args[1])

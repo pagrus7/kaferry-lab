@@ -332,8 +332,8 @@ func TestLinkCalibrationTreeControllerSpecimen(t *testing.T) {
 	}
 }
 func TestLinkCalibrationOwnedOrphanTreeLifecycle(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("owned lifecycle control requires native Linux AMD64")
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skip("owned lifecycle control requires a reviewed Linux architecture")
 	}
 	exe, e := os.Executable()
 	if e != nil {

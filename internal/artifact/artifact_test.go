@@ -38,14 +38,25 @@ const releasePath = prefix + "/releases/tags/v0.6.0"
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	platform, _ := ReviewedPlatform("linux/amd64")
+	return newPlatformFixture(t, platform)
+}
+
+func newPlatformFixture(t *testing.T, platform PlatformIdentity) *fixture {
+	t.Helper()
+	archiveName, provenanceName := platform.ArchiveName, platform.ProvenanceName
 	f := &fixture{bodies: map[string][]byte{}}
 	f.bodies[prefix+"/git/ref/tags/"+Tag] = []byte(`{"ref":"refs/tags/v0.6.0","object":{"sha":"689234eefe461435a89338322a001c2ea5240ad5","type":"tag"}}`)
 	f.bodies[prefix+"/git/tags/"+tagObject] = []byte(`{"sha":"689234eefe461435a89338322a001c2ea5240ad5","tag":"v0.6.0","object":{"sha":"d7d485b96a52b711cb10d76dca09aa9b155dec5e","type":"commit"},"verification":{"verified":false,"reason":"unsigned"}}`)
-	archive := makeArchive(t, []member{{"kaferry", tar.TypeReg, 0755, []byte("literal test executable; never run")}, {"LICENSE", tar.TypeReg, 0644, []byte("literal license")}, {"THIRD_PARTY_NOTICES.txt", tar.TypeReg, 0644, []byte("literal notices")}})
-	statement := fmt.Sprintf(`{"_type":"https://in-toto.io/Statement/v1","subject":[{"name":"kaferry-v0.6.0-linux-amd64.tar.gz","digest":{"sha256":"%s"}}],"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"buildType":"https://actions.github.io/buildtypes/workflow/v1","externalParameters":{"workflow":{"ref":"refs/tags/v0.6.0","repository":"https://github.com/pagrus7/kaferry","path":".github/workflows/release.yml"}},"resolvedDependencies":[{"uri":"git+https://github.com/pagrus7/kaferry@refs/tags/v0.6.0","digest":{"gitCommit":"d7d485b96a52b711cb10d76dca09aa9b155dec5e"}}]},"runDetails":{"builder":{"id":"https://github.com/pagrus7/kaferry/.github/workflows/release.yml@refs/tags/v0.6.0"}}}}`, digest(archive))
+	binary := []byte("literal test executable; never run")
+	if platform.Platform == "linux/arm64" {
+		binary = []byte("literal ARM64 test specimen; never run")
+	}
+	archive := makeArchive(t, []member{{"kaferry", tar.TypeReg, 0755, binary}, {"LICENSE", tar.TypeReg, 0644, []byte("literal license")}, {"THIRD_PARTY_NOTICES.txt", tar.TypeReg, 0644, []byte("literal notices")}})
+	statement := fmt.Sprintf(`{"_type":"https://in-toto.io/Statement/v1","subject":[{"name":"%s","digest":{"sha256":"%s"}}],"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"buildType":"https://actions.github.io/buildtypes/workflow/v1","externalParameters":{"workflow":{"ref":"refs/tags/v0.6.0","repository":"https://github.com/pagrus7/kaferry","path":".github/workflows/release.yml"}},"resolvedDependencies":[{"uri":"git+https://github.com/pagrus7/kaferry@refs/tags/v0.6.0","digest":{"gitCommit":"d7d485b96a52b711cb10d76dca09aa9b155dec5e"}}]},"runDetails":{"builder":{"id":"https://github.com/pagrus7/kaferry/.github/workflows/release.yml@refs/tags/v0.6.0"}}}}`, archiveName, digest(archive))
 	bundle := fmt.Sprintf(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{"certificate":{"rawBytes":"TEST ONLY: not a certificate"},"tlogEntries":[{}]},"dsseEnvelope":{"payloadType":"application/vnd.in-toto+json","payload":"%s","signatures":[{"sig":"TEST ONLY: not a signature"}]}}`, base64.StdEncoding.EncodeToString([]byte(statement)))
 	f.rel = release{ID: 422917545, Tag: Tag, Immutable: false}
-	f.pins = releasePins{422917545, digest(archive), digest([]byte("literal test executable; never run")), len([]byte("literal test executable; never run"))}
+	f.pins = releasePins{422917545, digest(archive), digest(binary), len(binary)}
 	f.addAsset(archiveName, archive)
 	f.addAsset(provenanceName, []byte(bundle))
 	f.sums = []byte(fmt.Sprintf("%s  %s\n%s  %s\n", digest(archive), archiveName, digest([]byte(bundle)), provenanceName))

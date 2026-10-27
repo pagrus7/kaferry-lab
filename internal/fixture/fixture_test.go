@@ -88,8 +88,16 @@ func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
 		if args[0] == "info" {
 			return []byte("linux/amd64"), nil
 		}
+		if args[0] == "image" && args[1] == "inspect" {
+			return []byte(`{"Id":"sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1","Os":"linux","Architecture":"amd64"}`), nil
+		}
 		if strings.Contains(strings.Join(args, " "), "WORKER") || strings.Contains(strings.Join(args, " "), ProxyImage) {
 			t.Fatal("legacy Up added proxy behavior", args)
+		}
+		if args[0] == "pull" || args[0] == "run" {
+			if !strings.Contains(strings.Join(args, " "), "--platform linux/amd64") {
+				t.Fatal("legacy broker missing native platform", args)
+			}
 		}
 		if args[0] == "run" {
 			for _, arg := range args {
@@ -124,6 +132,9 @@ func TestFailedSecondStartCleansFirstEvenAfterCancellation(t *testing.T) {
 			cancel()
 			return []byte("injected start failure"), errors.New("start failed")
 		}
+		if args[0] == "image" && args[1] == "inspect" {
+			return []byte(`{"Id":"sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1","Os":"linux","Architecture":"amd64"}`), nil
+		}
 		if len(args) > 1 && args[1] == "inspect" {
 			if c.Err() != nil {
 				t.Fatal("cleanup inherited canceled context")
@@ -143,5 +154,59 @@ func TestFailedSecondStartCleansFirstEvenAfterCancellation(t *testing.T) {
 	}
 	if len(removed) != 2 || removed[0] != "container rm -f kaferry-lab-test-source" || removed[1] != "network rm kaferry-lab-test" {
 		t.Fatalf("owned partial start leaked: %v", removed)
+	}
+}
+
+func TestFixtureRefusesUnsupportedEngineBeforePullOrCreation(t *testing.T) {
+	// Given an unreviewed engine platform, When fixture setup starts, Then it
+	// refuses before any pull, network or container mutation is requested.
+	for _, platform := range []string{"linux/386", "darwin/arm64", "linux/ARM64", "linux/arm64/v8", "linux/riscv64", ""} {
+		t.Run(platform, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			calls := 0
+			_, err := Up(context.Background(), "test", func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				if args[0] != "info" {
+					t.Fatal("unsupported engine mutation", args)
+				}
+				return []byte(platform), nil
+			})
+			if err == nil || calls != 1 {
+				t.Fatalf("unsupported engine admitted: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestLinkedFixtureRejectsBackendMismatchBeforeResourceCreation(t *testing.T) {
+	// Given an ARM64 engine reporting an AMD64 broker image, When setup admits
+	// pulled images, Then it retains a failed attempt and creates no resource.
+	t.Chdir(t.TempDir())
+	calls := 0
+	s, err := up(context.Background(), "test", func(_ context.Context, args ...string) ([]byte, error) {
+		calls++
+		switch args[0] {
+		case "info":
+			return []byte("linux/aarch64"), nil
+		case "pull":
+			return nil, nil
+		case "image":
+			return []byte(`{"Id":"sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1","Os":"linux","Architecture":"amd64"}`), nil
+		default:
+			t.Fatal("resource mutation after backend mismatch", args)
+			return nil, nil
+		}
+	}, true, func(context.Context, string, string, string, []byte) (int, []byte, error) {
+		t.Fatal("proxy API after backend mismatch")
+		return 0, nil, nil
+	}, func(context.Context, string) (linkBrokerProbeResult, error) {
+		t.Fatal("broker probe after backend mismatch")
+		return linkBrokerProbeResult{}, nil
+	})
+	if err == nil || calls != 4 || s.DockerPlatform != "linux/aarch64" || s.Proxy == nil || s.Proxy.Image != "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87" {
+		t.Fatalf("backend admission: calls=%d state=%+v err=%v", calls, s, err)
+	}
+	if _, err = Load("test"); err != nil {
+		t.Fatal("failed plan not retained", err)
 	}
 }

@@ -9,11 +9,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/pagrus7/kaferry-lab/internal/artifact"
 	"github.com/pagrus7/kaferry-lab/internal/evidence"
 	"github.com/pagrus7/kaferry-lab/internal/fixture"
 )
@@ -105,10 +107,33 @@ func normalizeScenarioPlan(p ScenarioPlan) (ScenarioPlan, error) {
 		return p, errors.New("scenario work budget must be 1..7.5 minutes, plus 150 seconds for cleanup")
 	}
 	s := p.Subject
-	if s.Kind != "published-release" || s.Tag != evidence.ReleaseTag || s.Commit != evidence.ReleaseCommit || s.ExecutableSHA256 != evidence.ReleaseExecutableSHA256 || s.ContractSHA256 != evidence.ContractSHA256 || s.Platform != "linux/amd64" || !strings.Contains(s.VersionOutput, evidence.ReleaseTag) || p.Artifact.Subject != s || p.Artifact.ProvenanceStatus != "verified" || p.Artifact.ArchiveSHA256 != evidence.ReleaseArchiveSHA256 {
+	platform, ok := artifact.ReviewedPlatform(s.Platform)
+	if !ok || s.Kind != "published-release" || s.Tag != evidence.ReleaseTag || s.Commit != evidence.ReleaseCommit || s.ExecutableSHA256 != platform.BinarySHA256 || s.ContractSHA256 != evidence.ContractSHA256 || !strings.Contains(s.VersionOutput, evidence.ReleaseTag) || p.Artifact.Subject != s || p.Artifact.ProvenanceStatus != "verified" || p.Artifact.ArchiveSHA256 != platform.ArchiveSHA256 {
 		return p, errors.New("scenario requires freshly verified pinned release identity and provenance")
 	}
 	return p, nil
+}
+
+// This data-only boundary runs before native probes, reservations or fixture
+// operations. The real kernel/Go agreement is checked separately before launch.
+func validateScenarioFixturePlatform(subjectPlatform, nativePlatform string, state fixture.State) error {
+	if subjectPlatform != nativePlatform {
+		return errors.New("scenario subject must match the native Go execution platform")
+	}
+	if _, ok := artifact.ReviewedPlatform(nativePlatform); !ok {
+		return errors.New("scenario requires a reviewed native Linux Go platform")
+	}
+	backend, proxyImage, err := fixture.LinkPlatform(state.DockerPlatform)
+	if err != nil {
+		return err
+	}
+	if backend != subjectPlatform {
+		return errors.New("fixture Docker backend must match the native scenario platform")
+	}
+	if state.Image != fixture.Image || state.Proxy != nil && state.Proxy.Image != proxyImage {
+		return errors.New("fixture image reference differs from its reviewed native backend")
+	}
+	return nil
 }
 
 // RunM2Scenario retains failed/unreached attempts and always restores owned
@@ -118,6 +143,9 @@ func normalizeScenarioPlan(p ScenarioPlan) (ScenarioPlan, error) {
 func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, run fixture.Executor) (report ScenarioReport, err error) {
 	plan, err = normalizeScenarioPlan(plan)
 	if err != nil {
+		return report, err
+	}
+	if err = validateScenarioFixturePlatform(plan.Subject.Platform, runtime.GOOS+"/"+runtime.GOARCH, state); err != nil {
 		return report, err
 	}
 	if err = nativeProcessPlatform(); err != nil {

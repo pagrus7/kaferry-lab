@@ -76,6 +76,10 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 	if err != nil {
 		return result, err
 	}
+	profile, supported := artifact.ReviewedPlatform(runtime.GOOS + "/" + runtime.GOARCH)
+	if !supported {
+		return result, fmt.Errorf("%w: verification requires a reviewed native Linux platform", artifact.ErrUnsupported)
+	}
 	if err = os.MkdirAll(filepath.Dir(directory), 0755); err != nil {
 		return result, err
 	}
@@ -97,7 +101,7 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 		if e := newFile(filepath.Join(directory, id.Subject), archive, 0644); e != nil {
 			return receipt, e
 		}
-		bundlePath := filepath.Join(directory, "provenance-linux-amd64.json")
+		bundlePath := filepath.Join(directory, profile.ProvenanceName)
 		if e := newFile(bundlePath, bundle, 0644); e != nil {
 			return receipt, e
 		}
@@ -129,7 +133,7 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 		receipt.Output = raw
 		return receipt, nil
 	}}
-	v, err := verifier.Verify(ctx, artifact.Request{Tag: artifact.Tag, Platform: "linux-amd64"})
+	v, err := verifier.Verify(ctx, artifact.Request{Tag: artifact.Tag, Platform: profile.RequestPlatform})
 	if err != nil {
 		return result, err
 	}
@@ -169,8 +173,11 @@ func verify(ctx context.Context, directory string) (result verifiedMetadata, err
 	if e != nil || sha(after) != v.BinarySHA256 {
 		return result, fmt.Errorf("verified executable changed during version observation")
 	}
-	result = verifiedMetadata{Tag: v.Tag, Commit: v.Commit, Platform: "linux/amd64", ReleaseID: v.ReleaseID, ReleaseImmutable: v.ReleaseImmutable, ArchiveSHA256: v.ArchiveSHA256, BinarySHA256: v.BinarySHA256, ContractSHA256: v.ContractSHA256, Contracts: v.Contracts, VersionOutput: strings.TrimSpace(string(out)), VersionRuntime: runtimeBoundary, ProvenanceVerifier: v.Provenance.Verifier, ProvenanceVerifierVersion: v.Provenance.Version, ReceiptSHA256: sha(v.Provenance.Output), Directory: directory}
-	result.artifactEvidence = scenarioArtifact(v, result.VersionOutput)
+	result = verifiedMetadata{Tag: v.Tag, Commit: v.Commit, Platform: profile.Platform, ReleaseID: v.ReleaseID, ReleaseImmutable: v.ReleaseImmutable, ArchiveSHA256: v.ArchiveSHA256, BinarySHA256: v.BinarySHA256, ContractSHA256: v.ContractSHA256, Contracts: v.Contracts, VersionOutput: strings.TrimSpace(string(out)), VersionRuntime: runtimeBoundary, ProvenanceVerifier: v.Provenance.Verifier, ProvenanceVerifierVersion: v.Provenance.Version, ReceiptSHA256: sha(v.Provenance.Output), Directory: directory}
+	result.artifactEvidence, e = scenarioArtifact(v, result.VersionOutput)
+	if e != nil {
+		return result, e
+	}
 	raw, e := json.MarshalIndent(result, "", "  ")
 	if e != nil {
 		return result, e
@@ -196,8 +203,9 @@ func (b *boundedOutput) Write(raw []byte) (int, error) {
 	return b.buffer.Write(raw)
 }
 func observeVersion(ctx context.Context, path string) (out []byte, boundary string, err error) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return nil, "", fmt.Errorf("%w: version observation requires native Linux AMD64", artifact.ErrUnsupported)
+	profile, supported := artifact.ReviewedPlatform(runtime.GOOS + "/" + runtime.GOARCH)
+	if !supported {
+		return nil, "", fmt.Errorf("%w: version observation requires a reviewed native Linux platform", artifact.ErrUnsupported)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -205,8 +213,8 @@ func observeVersion(ctx context.Context, path string) (out []byte, boundary stri
 	if e != nil {
 		return nil, "", fmt.Errorf("observe native kernel architecture: %w", e)
 	}
-	if strings.TrimSpace(string(machine)) != "x86_64" {
-		return nil, "", fmt.Errorf("%w: version observation requires an AMD64 kernel", artifact.ErrUnsupported)
+	if !nativeVersionKernel(runtime.GOARCH, strings.TrimSpace(string(machine))) {
+		return nil, "", fmt.Errorf("%w: version Go and Linux kernel architectures do not match", artifact.ErrUnsupported)
 	}
 	command := exec.CommandContext(ctx, path, "--version")
 	var buffer boundedOutput
@@ -217,18 +225,28 @@ func observeVersion(ctx context.Context, path string) (out []byte, boundary stri
 	if err != nil {
 		err = fmt.Errorf("verified version observation failed: %w: %s", err, out)
 	}
-	return out, "native linux/amd64 host", err
+	return out, "native " + profile.Platform + " host", err
+}
+
+// nativeVersionKernel rejects translated executables and unreviewed aliases.
+func nativeVersionKernel(goarch, machine string) bool {
+	return (goarch == "amd64" && machine == "x86_64") ||
+		(goarch == "arm64" && machine == "aarch64")
 }
 
 // scenarioArtifact is called only with the fresh verifier result. Scenario
 // execution never treats an arbitrary persisted verified.json as authorization.
-func scenarioArtifact(v *artifact.Verified, version string) evidence.ArtifactMetadata {
+func scenarioArtifact(v *artifact.Verified, version string) (evidence.ArtifactMetadata, error) {
+	profile, supported := artifact.ReviewedPlatform(strings.Replace(v.Platform, "-", "/", 1))
+	if !supported || v.Platform != profile.RequestPlatform || v.ArchiveSHA256 != profile.ArchiveSHA256 || v.BinarySHA256 != profile.BinarySHA256 {
+		return evidence.ArtifactMetadata{}, fmt.Errorf("%w: verified platform and artifact identity do not match", artifact.ErrIdentity)
+	}
 	subject := evidence.Subject{Kind: "published-release", Tag: v.Tag, Commit: v.Commit,
 		ExecutableSHA256: v.BinarySHA256, ContractSHA256: v.ContractSHA256,
-		Platform: "linux/amd64", VersionOutput: version}
+		Platform: profile.Platform, VersionOutput: version}
 	a := evidence.ArtifactMetadata{SchemaVersion: evidence.SchemaVersion, Subject: subject,
-		ArchiveName: evidence.ReleaseArchiveName, ArchiveSHA256: v.ArchiveSHA256,
-		PublishedAssetURL:  "https://github.com/pagrus7/kaferry/releases/download/" + v.Tag + "/" + evidence.ReleaseArchiveName,
+		ArchiveName: profile.ArchiveName, ArchiveSHA256: v.ArchiveSHA256,
+		PublishedAssetURL:  "https://github.com/pagrus7/kaferry/releases/download/" + v.Tag + "/" + profile.ArchiveName,
 		ProvenanceStatus:   "verified",
 		VerificationDetail: v.Provenance.Verifier + "; " + v.Provenance.Version + "; receipt sha256=" + sha(v.Provenance.Output)}
 	for _, doc := range v.Contracts {
@@ -239,5 +257,5 @@ func scenarioArtifact(v *artifact.Verified, version string) evidence.ArtifactMet
 			a.ChecksumsText = string(doc.Bytes)
 		}
 	}
-	return a
+	return a, nil
 }

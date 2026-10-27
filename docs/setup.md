@@ -4,11 +4,12 @@ M0 and M1 are accepted. M2 targeted release scenarios are in development; requir
 
 Selected execution is the owned Mac mini runner with [private local evidence](private-notices.md).
 The active workflow performs fixed local retention calibration only; hosted jobs,
-encryption and artifact/cache uploads are removed. No Go/build/test/verification,
-product or capture step is active. The Mac is ARM64; the existing native Linux
-AMD64 gate cannot pass here, and an architecture choice is pending. See
-[local runner setup](local-runners.md). The commands below remain implemented
-reference interfaces, not permission to retry the recorded local denials.
+encryption and artifact/cache uploads are removed. No Go, verification, product or capture step is active in that workflow.
+The user approved ordinary default-cache Go builds/tests and native Linux ARM64
+qualification in OrbStack. The host build retry succeeded; native execution is
+still under preparation. See
+[local runner setup](local-runners.md). The commands below are implemented reference interfaces; record and stop on a
+renewed denial without cache, verifier or safeguard workarounds.
 
 ## Prepare and check the harness
 
@@ -28,11 +29,12 @@ The check script runs formatting, vet and race-enabled unit controls without Doc
 .cache/bin/lab verify .cache/releases/verify-001
 ```
 
-Choose a new output directory for each attempt. Verification accepts only the reviewed v0.6.0 Linux AMD64 release at commit `d7d485b96a52b711cb10d76dca09aa9b155dec5e`. It checks the annotated tag, release and asset identities, published checksums, pinned archive/executable bytes, tagged contract document hashes, and cryptographic provenance through `gh attestation verify`. It then runs the verified executable with `--version` and checks its digest again. There is no main/latest selection or source-build fallback. Unknown identities or missing required verification evidence fail closed.
+Choose a new output directory for each attempt. The source port admits only the two exact reviewed v0.6.0 Linux AMD64/ARM64 tuples at commit `d7d485b96a52b711cb10d76dca09aa9b155dec5e`. It checks the annotated tag, release and asset identities, published checksums, pinned archive/executable bytes, tagged contract document hashes, and cryptographic provenance through `gh attestation verify`. It then runs the verified executable with `--version` and checks its digest again. There is no main/latest selection or source-build fallback. Unknown identities or missing required verification evidence fail closed.
 
 The command has a three-minute overall budget. `verified.json` records the release, hashes, provenance verifier and version runtime; downloaded documents, the archive, executable, verification receipt and version output stay alongside it. A failed attempt retains available files and `FAILED.json`; preserve that directory and use a new one after resolving the failure. These files establish artifact verification, not a fault campaign or qualification.
 
-Version observation requires native Linux AMD64. The command checks the Go and kernel architectures before launching its 20-second version subprocess. Other hosts cannot complete verification; the new custody-only workflow does not launch it from macOS. Docker remains a prerequisite for live Kafka fixtures.
+Version observation requires a matching reviewed native Linux Go/kernel pair
+(AMD64/x86_64 or ARM64/aarch64). The command checks the Go and kernel architectures before launching its 20-second version subprocess. Other hosts cannot complete verification; the new custody-only workflow does not launch it from macOS. Docker remains a prerequisite for live Kafka fixtures.
 
 ## Check a bundle offline
 
@@ -101,8 +103,8 @@ partial artifacts with new native acceptance. The metadata diagnostic and old
 ciphertext recovery are historical, not active workflow modes. Earlier
 source-startup403 remains unexplained; later200 does not resolve its cause.
 
-Before product work, select a reviewed matching native Linux platform and
-resolve the existing Go/verification execution prerequisites. The four narrow
+Before product work, measure the approved native Linux ARM64 platform and
+resolve its ordinary verification/runtime prerequisites. The four narrow
 historical release cases do not fulfill the M2 timeout/threshold/source-save
 requirements; M3–M6 remain required. No PR or release qualification follows from
 this local-retention switch.

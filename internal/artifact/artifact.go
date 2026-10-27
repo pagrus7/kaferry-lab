@@ -111,16 +111,20 @@ var contractPins = []Contract{
 	{"design/decisions.md", "93ce1a40c36b1884c59e9619bb9d85d29ea4348562afa5444aab322bcd801d01"},
 }
 
-// Verify supports only the initial reviewed Linux AMD64 release. A failed check
+// Verify supports the two explicitly pinned Linux platforms for the reviewed release. A failed check
 // returns nil: unavailable evidence, unsigned metadata or a parsed payload cannot
 // become Verified. Mutable release metadata cannot replace the reviewed archive
 // or executable bytes, even if new checksums and attestations agree. Cancellation and a two-minute upper bound cover all requests.
 func (v Verifier) Verify(ctx context.Context, request Request) (*Verified, error) {
-	return v.verify(ctx, request, releasePins{ReleaseID, ArchiveSHA256, BinarySHA256, BinarySize})
+	platform, ok := reviewedRequestPlatform(request.Platform)
+	if request.Tag != Tag || !ok {
+		return nil, ErrUnsupported
+	}
+	return v.verify(ctx, request, releasePins{ReleaseID, platform.ArchiveSHA256, platform.BinarySHA256, platform.BinarySize})
 }
 
 // releasePins is package-private so network-free tests can use visibly synthetic
-// bytes. Public Verify always uses the reviewed release constants above.
+// bytes. Public Verify always uses the fixed platform identity pins.
 type releasePins struct {
 	releaseID                   int64
 	archiveSHA256, binarySHA256 string
@@ -128,9 +132,11 @@ type releasePins struct {
 }
 
 func (v Verifier) verify(ctx context.Context, request Request, pins releasePins) (*Verified, error) {
-	if request.Tag != Tag || request.Platform != "linux-amd64" {
+	platform, ok := reviewedRequestPlatform(request.Platform)
+	if request.Tag != Tag || !ok {
 		return nil, ErrUnsupported
 	}
+	archiveName, provenanceName := platform.ArchiveName, platform.ProvenanceName
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	out := &Verified{Tag: Tag, Commit: Commit, Platform: request.Platform}

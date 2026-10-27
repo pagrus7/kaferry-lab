@@ -86,7 +86,11 @@ type ownedProcess struct {
 // version verification are campaign prerequisites; this boundary independently
 // checks the exact reviewed executable bytes and actual execution platform.
 func startReleaseProcess(ctx context.Context, plan processPlan) (*ownedProcess, error) {
-	return startOwnedProcess(ctx, plan, artifact.BinarySHA256, false)
+	profile, supported := artifact.ReviewedPlatform(runtime.GOOS + "/" + runtime.GOARCH)
+	if !supported {
+		return nil, errors.New("release campaign requires a reviewed native Linux platform")
+	}
+	return startOwnedProcess(ctx, plan, profile.BinarySHA256, false)
 }
 
 // startOwnedProcess admits a different digest only for visibly synthetic helper
@@ -95,8 +99,11 @@ func startOwnedProcess(ctx context.Context, plan processPlan, expectedDigest str
 	if err := nativeProcessPlatform(); err != nil {
 		return nil, err
 	}
-	if !calibration && expectedDigest != artifact.BinarySHA256 {
-		return nil, errors.New("unreviewed release executable digest")
+	if !calibration {
+		profile, supported := artifact.ReviewedPlatform(runtime.GOOS + "/" + runtime.GOARCH)
+		if !supported || expectedDigest != profile.BinarySHA256 {
+			return nil, errors.New("unreviewed release executable digest")
+		}
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

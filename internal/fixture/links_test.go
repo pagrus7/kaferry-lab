@@ -21,25 +21,33 @@ func linkTestState(retained bool) State {
 		p.ContainerID = strings.Repeat("c", 64)
 		p.NetworkID = strings.Repeat("d", 64)
 		p.ImageID = proxyConfigID
-		p.BrokerImageID = "sha256:" + strings.Repeat("e", 64)
+		p.BrokerImageID = amd64BrokerConfigID
 		p.BrokerIDs = []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}
 	}
 	return State{RunID: "test", Image: Image, Network: "kaferry-lab-test", Containers: []string{"kaferry-lab-test-source", "kaferry-lab-test-dest"}, ClusterIDs: []string{"source-cluster", "dest-cluster"}, Source: "127.0.0.1:20101", Destination: "127.0.0.1:20102", WorkerSource: "127.0.0.1:20201", WorkerDestination: "127.0.0.1:20202", Proxy: p, DockerPlatform: "linux/amd64"}
 }
 func linkTestDocker(t *testing.T, s State, change func(string, map[string]any)) Executor {
 	t.Helper()
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return func(_ context.Context, args ...string) ([]byte, error) {
 		if len(args) < 3 {
 			t.Fatalf("unexpected Docker command: %v", args)
 		}
 		if args[0] == "image" && args[1] == "inspect" {
-			if args[2] == ProxyImage {
-				return []byte(proxyConfigID), nil
+			id := profile.brokerConfig
+			if args[2] == profile.proxyImage {
+				id = profile.proxyConfig
+			} else if args[2] != Image {
+				t.Fatalf("foreign image: %v", args)
 			}
-			if args[2] == Image {
-				return []byte("sha256:" + strings.Repeat("e", 64)), nil
+			object := map[string]any{"Id": id, "Os": "linux", "Architecture": profile.architecture}
+			if change != nil {
+				change(args[2], object)
 			}
-			t.Fatalf("foreign image: %v", args)
+			return json.Marshal(object)
 		}
 		var object map[string]any
 		if args[0] == "network" && args[1] == "inspect" {
@@ -55,12 +63,12 @@ func linkTestDocker(t *testing.T, s State, change func(string, map[string]any)) 
 			if index < 0 {
 				return []byte("No such container"), errors.New("absent")
 			}
-			name, role, reference, image := names[index], "proxy", ProxyImage, proxyConfigID
+			name, role, reference, image := names[index], "proxy", s.Proxy.Image, profile.proxyConfig
 			bindings := map[string][]linkBinding{}
 			if index < 2 {
 				role = []string{"source", "destination"}[index]
 				reference = Image
-				image = "sha256:" + strings.Repeat("e", 64)
+				image = profile.brokerConfig
 				port, _ := loopbackPort([]string{s.Source, s.Destination}[index])
 				bindings["19092/tcp"] = []linkBinding{{"127.0.0.1", port}}
 			} else {
@@ -458,83 +466,113 @@ func TestLinkedCleanupTargetsIDsAfterEvidenceAndKeepsForeignResources(t *testing
 func TestUpLinksKeepsDirectObserversAndAllWorkerAdvertisementsProxied(t *testing.T) {
 	// Given the optional fixture mode, when setup creates its three containers,
 	// then only workers use the two proxy mappings; old direct endpoints survive.
-	t.Chdir(t.TempDir())
-	var starts [][]string
-	run := func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == "info" {
-			return []byte("linux/amd64"), nil
-		}
-		if args[0] == "run" {
-			starts = append(starts, append([]string{}, args...))
-			return nil, nil
-		}
-		if args[0] == "exec" {
-			t.Fatal("linked readiness used Docker exec", args)
-		}
-		if args[0] == "pull" || args[0] == "network" && args[1] == "create" {
-			return nil, nil
-		}
-		path, _ := StatePath("test")
-		raw, e := os.ReadFile(path)
-		if e != nil {
-			t.Fatal(e)
-		}
-		var state State
-		if e = json.Unmarshal(raw, &state); e != nil {
-			t.Fatal(e)
-		}
-		return linkTestDocker(t, state, nil)(ctx, args...)
-	}
-	proxies := map[string]any{}
-	request := func(_ context.Context, _ string, method, path string, body []byte) (int, []byte, error) {
-		if path == "/version" {
-			return 200, []byte(`{"version":"2.12.0"}`), nil
-		}
-		if method == "POST" {
-			var p map[string]any
-			if e := json.Unmarshal(body, &p); e != nil {
+	for _, tc := range []struct{ engine, platform, proxy string }{
+		{"linux/amd64", "linux/amd64", "ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8"},
+		{"linux/x86_64", "linux/amd64", "ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8"},
+		{"linux/arm64", "linux/arm64", "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"},
+		{"linux/aarch64", "linux/arm64", "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			var starts, pulls [][]string
+			run := func(ctx context.Context, args ...string) ([]byte, error) {
+				if args[0] == "info" {
+					return []byte(tc.engine), nil
+				}
+				if args[0] == "run" {
+					starts = append(starts, append([]string{}, args...))
+					return nil, nil
+				}
+				if args[0] == "exec" {
+					t.Fatal("linked readiness used Docker exec", args)
+				}
+				if args[0] == "pull" {
+					pulls = append(pulls, append([]string{}, args...))
+					return nil, nil
+				}
+				if args[0] == "network" && args[1] == "create" {
+					return nil, nil
+				}
+				path, _ := StatePath("test")
+				raw, e := os.ReadFile(path)
+				if e != nil {
+					t.Fatal(e)
+				}
+				var state State
+				if e = json.Unmarshal(raw, &state); e != nil {
+					t.Fatal(e)
+				}
+				return linkTestDocker(t, state, nil)(ctx, args...)
+			}
+			proxies := map[string]any{}
+			request := func(_ context.Context, _ string, method, path string, body []byte) (int, []byte, error) {
+				if path == "/version" {
+					return 200, []byte(`{"version":"2.12.0"}`), nil
+				}
+				if method == "POST" {
+					var p map[string]any
+					if e := json.Unmarshal(body, &p); e != nil {
+						t.Fatal(e)
+					}
+					if len(p) != 4 || p["enabled"] != true || p["name"] == nil || p["listen"] == nil || p["upstream"] == nil {
+						t.Fatalf("unexpected stock API payload: %s", body)
+					}
+					p["toxics"] = []any{}
+					proxies[p["name"].(string)] = p
+					b, e := json.Marshal(p)
+					return 200, b, e
+				}
+				b, e := json.Marshal(proxies)
+				return 200, b, e
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			s, e := up(ctx, "test", run, true, request, func(context.Context, string) (linkBrokerProbeResult, error) {
+				return linkBrokerProbeResult{Opened: true, Closed: true, APIKeys: 1}, nil
+			})
+			if e != nil {
 				t.Fatal(e)
 			}
-			if len(p) != 4 || p["enabled"] != true || p["name"] == nil || p["listen"] == nil || p["upstream"] == nil {
-				t.Fatalf("unexpected stock API payload: %s", body)
+			if s.DockerPlatform != tc.engine || s.Proxy.Image != tc.proxy {
+				t.Fatalf("selected state: %+v", s)
 			}
-			p["toxics"] = []any{}
-			proxies[p["name"].(string)] = p
-			b, e := json.Marshal(p)
-			return 200, b, e
-		}
-		b, e := json.Marshal(proxies)
-		return 200, b, e
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	s, e := up(ctx, "test", run, true, request, func(context.Context, string) (linkBrokerProbeResult, error) {
-		return linkBrokerProbeResult{Opened: true, Closed: true, APIKeys: 1}, nil
-	})
-	if e != nil {
-		t.Fatal(e)
-	}
-	if len(starts) != 3 || len(s.Containers) != 2 || s.Source == s.WorkerSource || s.Destination == s.WorkerDestination || s.Proxy.ContainerID == "" || len(proxies) != 2 {
-		t.Fatalf("fixture lost isolation: %+v starts=%d", s, len(starts))
-	}
-	for i := 0; i < 2; i++ {
-		args := strings.Join(starts[i], " ")
-		direct := []string{s.Source, s.Destination}[i]
-		worker := []string{s.WorkerSource, s.WorkerDestination}[i]
-		if !strings.Contains(args, ",EXTERNAL://"+direct+",WORKER://"+worker) || !strings.Contains(args, "WORKER://:29092") || !strings.Contains(args, "WORKER:PLAINTEXT") {
-			t.Fatalf("metadata route escapes proxy: %s", args)
-		}
-	}
-	proxy := strings.Join(starts[2], " ")
-	for _, required := range []string{ProxyImage, "--memory 128m", "--cpus 1", "--pids-limit 128", "--read-only", "--cap-drop ALL", "--log-opt max-size=1m", "-proxy-metrics"} {
-		if !strings.Contains(proxy, required) {
-			t.Fatalf("missing bounded stock-proxy setting %q", required)
-		}
-	}
-	for i, arg := range starts[2] {
-		if arg == "-p" && !strings.HasPrefix(starts[2][i+1], "127.0.0.1:") {
-			t.Fatal("public port binding", starts[2])
-		}
+			for _, args := range append(append([][]string{}, starts...), pulls...) {
+				found := false
+				for i, arg := range args {
+					if arg == "--platform" && i+1 < len(args) && args[i+1] == tc.platform {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("missing native platform: %v", args)
+				}
+			}
+			if len(pulls) != 2 || pulls[0][len(pulls[0])-1] != tc.proxy || pulls[1][len(pulls[1])-1] != Image {
+				t.Fatalf("unpinned pull: %v", pulls)
+			}
+			if len(starts) != 3 || len(s.Containers) != 2 || s.Source == s.WorkerSource || s.Destination == s.WorkerDestination || s.Proxy.ContainerID == "" || len(proxies) != 2 {
+				t.Fatalf("fixture lost isolation: %+v starts=%d", s, len(starts))
+			}
+			for i := 0; i < 2; i++ {
+				args := strings.Join(starts[i], " ")
+				direct := []string{s.Source, s.Destination}[i]
+				worker := []string{s.WorkerSource, s.WorkerDestination}[i]
+				if !strings.Contains(args, ",EXTERNAL://"+direct+",WORKER://"+worker) || !strings.Contains(args, "WORKER://:29092") || !strings.Contains(args, "WORKER:PLAINTEXT") {
+					t.Fatalf("metadata route escapes proxy: %s", args)
+				}
+			}
+			proxy := strings.Join(starts[2], " ")
+			for _, required := range []string{tc.proxy, "--memory 128m", "--cpus 1", "--pids-limit 128", "--read-only", "--cap-drop ALL", "--log-opt max-size=1m", "-proxy-metrics"} {
+				if !strings.Contains(proxy, required) {
+					t.Fatalf("missing bounded stock-proxy setting %q", required)
+				}
+			}
+			for i, arg := range starts[2] {
+				if arg == "-p" && !strings.HasPrefix(starts[2][i+1], "127.0.0.1:") {
+					t.Fatal("public port binding", starts[2])
+				}
+			}
+		})
 	}
 }
 func TestLegacyManifestLoadsWithoutProxyFields(t *testing.T) {
@@ -625,5 +663,76 @@ func TestIncompleteIdentityTemporaryFileDoesNotBlockRestartableLoad(t *testing.T
 	loaded, err := Load(s.RunID)
 	if err != nil || loaded.Proxy.ContainerID != "" || len(loaded.Proxy.BrokerIDs) != 0 {
 		t.Fatalf("interrupted identity blocked intended cleanup: %+v %v", loaded.Proxy, err)
+	}
+}
+
+func TestLinkedImageProfilesRejectSubstitutedBackendMetadata(t *testing.T) {
+	// Given the recorded ARM64 engine and fixed published subject, When an image
+	// claims another config or OS/architecture, Then no proxy request is issued.
+	for _, reference := range []string{Image, "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"} {
+		for _, tc := range []struct {
+			name   string
+			mutate func(map[string]any)
+		}{
+			{"amd64 architecture", func(o map[string]any) { o["Architecture"] = "amd64" }},
+			{"foreign OS", func(o map[string]any) { o["Os"] = "darwin" }},
+			{"missing architecture", func(o map[string]any) { delete(o, "Architecture") }},
+			{"missing OS", func(o map[string]any) { delete(o, "Os") }},
+			{"missing config", func(o map[string]any) { delete(o, "Id") }},
+			{"arbitrary config", func(o map[string]any) { o["Id"] = "sha256:" + strings.Repeat("e", 64) }},
+			{"amd64 config with arm64 label", func(o map[string]any) {
+				if reference == Image {
+					o["Id"] = "sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1"
+				} else {
+					o["Id"] = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
+				}
+			}},
+		} {
+			t.Run(reference+"/"+tc.name, func(t *testing.T) {
+				t.Chdir(t.TempDir())
+				s := linkTestState(false)
+				s.DockerPlatform = "linux/aarch64"
+				s.Proxy.Image = "ghcr.io/shopify/toxiproxy@sha256:5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87"
+				linkTestDirectory(t, s)
+				inspect := linkTestDocker(t, s, func(target string, o map[string]any) {
+					if target == reference {
+						tc.mutate(o)
+					}
+				})
+				requests := 0
+				err := linkAPICall(context.Background(), s, inspect, func(context.Context, string, string, string, []byte) (int, []byte, error) {
+					requests++
+					return 200, nil, nil
+				}, "POST", "/proxies", &s.Proxy.Source, 0)
+				if err == nil || requests != 0 {
+					t.Fatalf("foreign image admitted: requests=%d err=%v", requests, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLinkedPlanRejectsCrossPlatformProxyBeforeDocker(t *testing.T) {
+	// Given ARM64 state carrying the AMD64 subject, When inspecting resources,
+	// Then no Docker action can turn that cross-platform tuple into ownership.
+	s := linkTestState(false)
+	s.DockerPlatform = "linux/arm64"
+	_, err := inspectLinkResources(context.Background(), s, func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("Docker called for mixed tuple")
+		return nil, nil
+	})
+	if err == nil {
+		t.Fatal("cross-platform proxy reference admitted")
+	}
+}
+
+func TestLinkedImageInspectionPreservesJoinedFailure(t *testing.T) {
+	// Given an actual executor error with joined causes, When checking the image,
+	// Then its classification survives and no retry or alternative action occurs.
+	cause := errors.Join(syscall.EACCES, errors.New("TEST ONLY image inspection cause"))
+	calls := 0
+	_, err := inspectLinkImage(context.Background(), func(context.Context, ...string) ([]byte, error) { calls++; return nil, cause }, linkTestState(false), Image)
+	if calls != 1 || !errors.Is(err, syscall.EACCES) || err != cause {
+		t.Fatalf("failure changed: calls=%d err=%v", calls, err)
 	}
 }

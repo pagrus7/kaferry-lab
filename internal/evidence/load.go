@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/pagrus7/kaferry-lab/internal/artifact"
 )
 
 const maxEventsBytes = 64 << 20
@@ -397,11 +399,12 @@ func validateArtifact(m Manifest, a ArtifactMetadata) (Verdict, string, error) {
 		if s.Kind != "published-release" || s.Tag != ReleaseTag || s.Commit != ReleaseCommit {
 			return bad("release_identity", "release namespace requires exact pinned published tag and commit")
 		}
-		if s.ExecutableSHA256 != ReleaseExecutableSHA256 {
-			return bad("release_binary_identity", "release metadata must identify the exact executable digest measured from the pinned archive")
+		platform, ok := artifact.ReviewedPlatform(s.Platform)
+		if !ok {
+			return Unsupported, "release_platform", fmt.Errorf("release evidence requires an exact reviewed Linux platform")
 		}
-		if s.Platform != "linux/amd64" {
-			return Unsupported, "release_platform", fmt.Errorf("v1 release evidence supports linux/amd64 only")
+		if s.ExecutableSHA256 != platform.BinarySHA256 {
+			return bad("release_binary_identity", "release metadata must identify the exact executable digest measured from the selected platform's pinned archive")
 		}
 		if !strings.Contains(s.VersionOutput, ReleaseTag) {
 			return bad("release_version", "version output does not identify the pinned release")
@@ -423,8 +426,8 @@ func validateArtifact(m Manifest, a ArtifactMetadata) (Verdict, string, error) {
 		if digest([]byte(contract.String())) != ContractSHA256 {
 			return bad("contract_documents", "tagged document hashes do not produce the pinned contract root")
 		}
-		if a.ArchiveName != ReleaseArchiveName || a.ArchiveSHA256 != ReleaseArchiveSHA256 {
-			return bad("archive_identity", "release evidence must identify the exact pinned Linux AMD64 published archive")
+		if a.ArchiveName != platform.ArchiveName || a.ArchiveSHA256 != platform.ArchiveSHA256 {
+			return bad("archive_identity", "release evidence must identify the exact pinned published archive for its platform")
 		}
 		if a.PublishedAssetURL != "https://github.com/pagrus7/kaferry/releases/download/"+ReleaseTag+"/"+a.ArchiveName {
 			return bad("artifact_url", "asset URL does not bind pinned release and archive name")
