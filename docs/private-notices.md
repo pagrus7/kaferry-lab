@@ -11,14 +11,15 @@ On 2026-10-26, the user selected local native Linux ARM64 execution under OrbSta
 On 2026-10-25, the user selected direct private-network transfer and explicitly
 rejected temporary encrypted copies in a private GitHub repository too. Raw
 originals and unknown-notice capsules must not be retained in GitHub artifacts,
-repositories, caches, releases or logs. Native hosted Linux execution still has
-a transient private producer workspace; direct transfer must move the selected
-evidence to the Mac without using GitHub as its retention destination.
+repositories, caches, releases or logs. At that time, the hosted-worker design
+would have used a transient private producer workspace and direct transfer to
+the Mac. That transfer requirement is superseded by local-only execution; the
+prohibition on GitHub retention remains in force.
 
 The retention destination is the user's Mac mini. Earlier preparation aimed
 to copy completed sealed originals there from hosted workers. The actual runner-visible private
-mount and its backing/lifecycle mapping are **unverified**. Current workflow
-jobs still select `ubuntu-24.04`. The read-only preflight found no registered
+mount and its backing/lifecycle mapping are **unverified**. The retained
+workflow source selects `ubuntu-24.04`; the workflow is now disabled. The read-only preflight found no registered
 lab runner; on 2026-10-25, the user authorized preparing a dedicated Mac runner.
 The official ARM64 runner is now installed and registered to `kaferry-lab` as
 `kaferry-lab-mac-mini-20261025`, runner ID 21, with one custom label and no default
@@ -32,7 +33,7 @@ The four existing Mac services remain registered to
 evidence directory passed a 171-byte synthetic write/sync/close and separate
 process readback. This measures local filesystem access only: no native-worker
 transport, runner lifecycle, reboot, backup or private recovery was verified.
-Mac registration supplies no storage path to the current Ubuntu jobs. Native
+Mac registration supplies no storage path to the retained Ubuntu workflow.
 The existing CLI still supports Linux AMD64 only; the selected local Linux
 ARM64 target requires a port and new runtime evidence.
 
@@ -49,7 +50,7 @@ The measured boundary excludes host filesystem mounts; it does not exclude
 all host network access or other processes running as the Mac owner. Lima
 2.2.1 permits guest access to host loopback, and the Mac owner controls its VM
 disk and management key. No recipient decryption key entered the guest.
-The shared Mac Tailscale client remains stopped and reports no current tailnet.
+The shared Mac Tailscale client was last observed stopped with no current tailnet.
 The earlier network design required tailnet/account enrollment, effective
 network grants, receiver authentication, transfer receipts and recovery. Those
 network prerequisites are superseded by the local-only decision; local trusted
