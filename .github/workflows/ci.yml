@@ -222,19 +222,9 @@ jobs:
           python3 scripts/calibrate-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --attempt "$GITHUB_RUN_ATTEMPT" > ".cache/metadata-foreground-private/$LAB_RUN_ID/calibration.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/calibration.stderr"
           test -s .cache/metadata-public/native-controls.json
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
-      - name: Create and seal the reviewed fixed calibration transport sample
-        id: metadata-sample
-        if: ${{ inputs.mode == 'metadata-calibration' && steps.metadata-controls.outcome == 'success' && steps.metadata-controls.outputs.complete == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          set -C
-          umask 077
-          python3 scripts/create-notice-transport-sample.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job metadata --attempt "$GITHUB_RUN_ATTEMPT" --reviewed-synthetic-transport-only > ".cache/metadata-foreground-private/$LAB_RUN_ID/sample.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/sample.stderr"
-          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
-      - name: Perform the single original metadata observation in the foreground
+      - name: Run the sole metadata caller in the foreground
         id: metadata-foreground
-        if: ${{ inputs.mode == 'metadata-diagnostic' }}
+        if: ${{ inputs.mode == 'metadata-diagnostic' || (inputs.mode == 'metadata-calibration' && steps.metadata-controls.outcome == 'success' && steps.metadata-controls.outputs.complete == 'true') }}
         timeout-minutes: 2
         shell: bash
         env:
@@ -244,13 +234,23 @@ jobs:
           set -C
           umask 077
           status=0
-          python3 scripts/capture-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job metadata --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" > ".cache/metadata-foreground-private/$LAB_RUN_ID/stdout.json" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/stderr.bin" || status=$?
+          if [ "$METADATA_MODE" = metadata-calibration ]; then
+            # Exercise the actual producer CLI and complete transport path with
+            # a setup ENOENT before client.Do; never query the provider here.
+            trust_file="$PWD/.cache/metadata-build/$LAB_RUN_ID/calibration-trust-file-must-be-absent.pem"
+            test ! -e "$trust_file"
+            test ! -L "$trust_file"
+            SSL_CERT_FILE="$trust_file" python3 scripts/capture-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job metadata --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" > ".cache/metadata-foreground-private/$LAB_RUN_ID/stdout.json" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/stderr.bin" || status=$?
+          else
+            test "$METADATA_MODE" = metadata-diagnostic
+            python3 scripts/capture-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --job metadata --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" > ".cache/metadata-foreground-private/$LAB_RUN_ID/stdout.json" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/stderr.bin" || status=$?
+          fi
           printf '%s\n' "$status" > ".cache/metadata-foreground-private/$LAB_RUN_ID/foreground.exit"
           test "$status" -eq 0 -o "$status" -eq 2
           printf 'foreground_exit=%s\n' "$status" >> "$GITHUB_OUTPUT"
       - name: Independently admit actual foreground and finite writer closure
         id: metadata-proof
-        if: ${{ inputs.mode == 'metadata-diagnostic' && steps.metadata-foreground.outcome == 'success' }}
+        if: ${{ steps.metadata-foreground.outcome == 'success' }}
         shell: bash
         env:
           BINARY_SHA256: ${{ steps.metadata-build.outputs.binary_sha256 }}
@@ -259,10 +259,14 @@ jobs:
           set -euo pipefail
           set -C
           umask 077
-          python3 scripts/admit-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" --foreground-exit "$FOREGROUND_EXIT" > ".cache/metadata-foreground-private/$LAB_RUN_ID/admit.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/admit.stderr"
+          calibration_args=()
+          if [ "$METADATA_MODE" = metadata-calibration ]; then
+            calibration_args+=(--calibration)
+          fi
+          python3 scripts/admit-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" --foreground-exit "$FOREGROUND_EXIT" "${calibration_args[@]}" > ".cache/metadata-foreground-private/$LAB_RUN_ID/admit.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/admit.stderr"
       - name: Seal only the independently admitted closed fixture-v1 snapshot
         id: metadata-seal
-        if: ${{ inputs.mode == 'metadata-diagnostic' && steps.metadata-proof.outcome == 'success' && steps.metadata-proof.outputs.complete == 'true' && steps.metadata-proof.outputs.snapshot_admissible == 'true' }}
+        if: ${{ steps.metadata-proof.outcome == 'success' && steps.metadata-proof.outputs.complete == 'true' && steps.metadata-proof.outputs.snapshot_admissible == 'true' }}
         shell: bash
         env:
           BINARY_SHA256: ${{ steps.metadata-build.outputs.binary_sha256 }}
@@ -271,11 +275,15 @@ jobs:
           set -euo pipefail
           set -C
           umask 077
+          calibration_args=()
+          if [ "$METADATA_MODE" = metadata-calibration ]; then
+            calibration_args+=(--calibration)
+          fi
           python3 scripts/seal-link-notices.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --recipient-sha256 ce023413c3cb69ca45f71d23a4fb6e6a5cabcea1b2feb4ae54f1e5452c74af57 --job metadata --attempt "$GITHUB_RUN_ATTEMPT" > ".cache/metadata-foreground-private/$LAB_RUN_ID/seal.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/seal.stderr"
-          python3 scripts/admit-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" --foreground-exit "$FOREGROUND_EXIT" --sealed > ".cache/metadata-foreground-private/$LAB_RUN_ID/sealed-admit.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/sealed-admit.stderr"
+          python3 scripts/admit-metadata.py --run-id "$LAB_RUN_ID" --source-head "$GITHUB_SHA" --attempt "$GITHUB_RUN_ATTEMPT" --binary-sha256 "$BINARY_SHA256" --foreground-exit "$FOREGROUND_EXIT" --sealed "${calibration_args[@]}" > ".cache/metadata-foreground-private/$LAB_RUN_ID/sealed-admit.stdout" 2> ".cache/metadata-foreground-private/$LAB_RUN_ID/sealed-admit.stderr"
       - name: Upload only the sole admitted metadata ciphertext
         id: metadata-upload
-        if: ${{ (inputs.mode == 'metadata-calibration' && steps.metadata-controls.outcome == 'success' && steps.metadata-controls.outputs.complete == 'true' && steps.metadata-sample.outcome == 'success' && steps.metadata-sample.outputs.complete == 'true') || (inputs.mode == 'metadata-diagnostic' && steps.metadata-foreground.outcome == 'success' && steps.metadata-proof.outcome == 'success' && steps.metadata-proof.outputs.complete == 'true' && steps.metadata-proof.outputs.snapshot_admissible == 'true' && steps.metadata-seal.outcome == 'success' && steps.metadata-seal.outputs.complete == 'true' && steps.metadata-seal.outputs.snapshot_admissible == 'true') }}
+        if: ${{ steps.metadata-foreground.outcome == 'success' && steps.metadata-proof.outcome == 'success' && steps.metadata-proof.outputs.complete == 'true' && steps.metadata-proof.outputs.snapshot_admissible == 'true' && steps.metadata-seal.outcome == 'success' && steps.metadata-seal.outputs.complete == 'true' && steps.metadata-seal.outputs.snapshot_admissible == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         timeout-minutes: 2
         with:
@@ -309,9 +317,8 @@ jobs:
           BUILD_OUTCOME: ${{ steps.metadata-build.outcome }}
           CONTROLS_OUTCOME: ${{ steps.metadata-controls.outcome }}
           CONTROLS_COMPLETE: ${{ steps.metadata-controls.outputs.complete }}
-          SAMPLE_OUTCOME: ${{ steps.metadata-sample.outcome }}
-          SAMPLE_COMPLETE: ${{ steps.metadata-sample.outputs.complete }}
           FOREGROUND_OUTCOME: ${{ steps.metadata-foreground.outcome }}
+          FOREGROUND_EXIT: ${{ steps.metadata-foreground.outputs.foreground_exit }}
           PROOF_OUTCOME: ${{ steps.metadata-proof.outcome }}
           PROOF_COMPLETE: ${{ steps.metadata-proof.outputs.complete }}
           CAPTURE_COMPLETE: ${{ steps.metadata-proof.outputs.capture_complete }}
@@ -321,21 +328,22 @@ jobs:
         run: |
           set -euo pipefail
           test "$BUILD_OUTCOME" = success
+          test "$FOREGROUND_OUTCOME" = success
+          test "$PROOF_OUTCOME" = success
+          test "$PROOF_COMPLETE" = true
+          test "$SEAL_OUTCOME" = success
+          test "$SEALED" = true
           test "$UPLOAD_OUTCOME" = success
           if [ "$METADATA_MODE" = metadata-calibration ]; then
             test "$CONTROLS_OUTCOME" = success
             test "$CONTROLS_COMPLETE" = true
-            test "$SAMPLE_OUTCOME" = success
-            test "$SAMPLE_COMPLETE" = true
+            test "$FOREGROUND_EXIT" = 2
+            test "$CAPTURE_COMPLETE" = false
             test -s .cache/metadata-public/native-controls.json
           else
             test "$METADATA_MODE" = metadata-diagnostic
-            test "$FOREGROUND_OUTCOME" = success
-            test "$PROOF_OUTCOME" = success
-            test "$PROOF_COMPLETE" = true
+            test "$FOREGROUND_EXIT" = 0
             test "$CAPTURE_COMPLETE" = true
-            test "$SEAL_OUTCOME" = success
-            test "$SEALED" = true
           fi
   m1:
     # Original product tag GET returned 403; bounded private response capture is required before another attempt.

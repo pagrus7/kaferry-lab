@@ -57,25 +57,33 @@ retention first. Do not retry with alternate credentials, endpoints, source or
 cache. Existing source verification and capsule runtime are not proved by this
 policy change.
 
-## Planned metadata-only modes
+## Metadata-only modes awaiting native validation
 
-The next narrow increment proposes `workflow_dispatch` modes `normal`,
-`calibration` and `diagnostic` in the existing workflow, restricted to the
-reviewed `codex/resilience-release-lab` branch and exact reviewed head. The
-planned default is `normal`, preserving the partial harness path. Dispatch
-availability and these mode gates are not established by this document; their
-implementation, frozen-source review and native evidence remain required.
+The source implements `workflow_dispatch` modes `normal`,
+`metadata-calibration` and `metadata-diagnostic` in the existing workflow, restricted
+to `codex/resilience-release-lab`. The default is `normal`, preserving the partial
+harness path. Dispatch availability and native behavior remain unmeasured.
+Frozen-source review, exact-head native evidence and private Mac recovery must
+precede selection of the diagnostic mode.
 The `m1` and `m2-release` jobs stay disabled in every mode.
 
-`calibration` is planned to exercise the metadata producer/caller and existing
+`metadata-calibration` exercises the metadata producer/caller and existing
 encrypted transport using fixed synthetic observations and controlled child,
-stream and sink failures. It must not contact the original metadata endpoint.
-Before selecting `diagnostic`, independently review the exact native calibration
+stream and sink failures. It must not contact the original metadata endpoint. The final
+calibration also runs the freshly built Go executable through the same foreground,
+admission, sealing and upload steps as the diagnostic. Only that synthetic invocation
+selects a fixed, confirmed-absent trust file; ordinary trust setup must fail before any
+HTTP client invocation. Admission requires the exact ENOENT cause, attempt_count0, no
+response and closed incomplete return2. This is a negative fixture, never a TLS bypass
+or an alternate trust route for the real request. Its recovered capsule contains
+PRIVATE.json, metadata.json and capture-closure.json; verify those originals and actual
+closure on the Mac before selecting the diagnostic.
+Before selecting `metadata-diagnostic`, independently review the exact native calibration
 result and authenticate, retrieve, decrypt and compare its known synthetic bytes
 on the Mac. An earlier transport sample or successful upload alone cannot meet
 that prerequisite for the newly selected path.
 
-`diagnostic` must be explicitly selected after those prerequisites. It is one
+`metadata-diagnostic` must be explicitly selected after those prerequisites. It is one
 unauthenticated GET of
 `https://api.github.com/repos/pagrus7/kaferry/git/ref/tags/v0.6.0`, with Accept
 `application/vnd.github+json` and User-Agent `kaferry-lab-artifact`. It has no
@@ -93,12 +101,11 @@ payload protocol. Their receipts use the calibration namespace and
 `release_qualified:false`. Source-only proposals do not establish that these
 paths have executed or that any new capsule has survived recovery.
 
-The planned caller reserves its private error/stream sinks before launch and
+The caller source reserves its private error/stream sinks before launch and
 actually waits/reaps its sole producer, observes pipe EOF, closes its readers and
-syncs/closes its private writers. Private caller errors stored outside the
-fixture may be copied as bounded JSON receipts into the fixed fixture tree only
-after that actual closure; the copier must also finish its writes, sync and
-close before the foreground caller returns. The workflow must observe that
+syncs/closes its private writers. The final closure JSON includes the bounded original caller-error graph and
+base64 stream prefixes after those writers close; its own write, sync and close
+must finish before the foreground caller returns. The workflow must observe that
 return and validate the matching typed closure before sealing. A file, stable
 inventory or closure declaration alone cannot establish that any writer stopped.
 Missing or uncertain closure suppresses sealing/upload. A closed, explicitly
@@ -121,7 +128,7 @@ Two inventories check consistency, not quiescence; actual caller closure proof
 remains mandatory. Missing fixture roots use only the existing narrowly
 admitted v2 absence receipt; other missing, malformed or denied inputs fail.
 
-For the planned metadata path, the outer caller bounds each stdout/stderr pipe
+For the metadata path, the outer caller bounds each stdout/stderr pipe
 prefix to64KiB. The producer's private stderr error envelope, including JSON,
 base64 and newline, must be strictly smaller than48KiB; its underlying framed
 error graph is capped at32KiB. Base64 preserves bytes and supplies no redaction

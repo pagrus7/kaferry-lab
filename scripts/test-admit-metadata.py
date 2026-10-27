@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic data-only controls; no process, request, crypto or upload."""
 import copy
+import base64
 import importlib.util
 from pathlib import Path
 import sys
@@ -38,7 +39,7 @@ def fixture(code=0):
     return value, proof, payloads, public
 
 
-def run(value, payloads, public, code=0, exit_body=None, stderr=b"", sealed=False, complete_change=None):
+def run(value, payloads, public, code=0, exit_body=None, stderr=b"", sealed=False, complete_change=None, calibration=False):
     cms = b"SYNTHETIC CMS BYTES; NO CRYPTO"
     complete = dict(value, complete=True, cms_bytes=len(cms), cms_sha256=a.s.digest(cms),
                     files=len(payloads), total_bytes=sum(map(len, payloads.values())),
@@ -54,7 +55,7 @@ def run(value, payloads, public, code=0, exit_body=None, stderr=b"", sealed=Fals
             patch.object(Path, "lstat"), \
             patch.object(Path, "iterdir", return_value=iter([Path("notice.cms"), Path("COMPLETE.json")])), \
             patch.object(a.s, "read_regular", side_effect=lambda path, *_args, **_kw: contents[path.name]):
-        return a.validate(Path("/SYNTHETIC"), value, "b" * 64, code, sealed)
+        return a.validate(Path("/SYNTHETIC"), value, "b" * 64, code, sealed, calibration)
 
 
 def publication_policy(workflow):
@@ -62,8 +63,7 @@ def publication_policy(workflow):
     # supplements data admission controls; it is not GitHub runtime evidence.
     job = workflow.split("  metadata:\n", 1)[1].split("  m1:\n", 1)[0]
     upload = job.split("      - name: Upload only the sole admitted metadata ciphertext\n", 1)[1].split("      - name:", 1)[0]
-    for required in ["steps.metadata-controls.outcome == 'success'", "steps.metadata-sample.outcome == 'success'",
-                     "steps.metadata-foreground.outcome == 'success'", "steps.metadata-proof.outcome == 'success'",
+    for required in ["steps.metadata-foreground.outcome == 'success'", "steps.metadata-proof.outcome == 'success'",
                      "steps.metadata-seal.outcome == 'success'", "steps.metadata-seal.outputs.complete == 'true'",
                      "steps.metadata-proof.outputs.snapshot_admissible == 'true'",
                      "path: .cache/link-quarantine/${{ env.LAB_RUN_ID }}/notice.cms\n",
@@ -80,6 +80,26 @@ def publication_policy(workflow):
 
 
 class Controls(unittest.TestCase):
+    def test_calibration_requires_closed_exact_unreached_setup_error(self):
+        value, _, payloads, public = fixture(2)
+        metadata = a.s.parse_json(payloads["metadata.json"])
+        missing = b"/SYNTHETIC/.cache/metadata-build/metadata-123-1/calibration-trust-file-must-be-absent.pem"
+        fields = [b"0", b"*fs.PathError", b"open " + missing + b": no such file or directory",
+                  b"0/0", b"syscall.Errno", b"no such file or directory"]
+        raw = b"".join(len(v).to_bytes(8, "big") + v for v in fields)
+        metadata["attempt_count"] = 0
+        metadata["errors"].update(prefix_base64=base64.b64encode(raw).decode(), observed_bytes_lower_bound=len(raw))
+        payloads["metadata.json"] = a.s.encode(metadata)
+        self.assertFalse(run(value, payloads, public, code=2, calibration=True))
+        for key, replacement in [("attempt_count", 1), ("response_available", True)]:
+            bad = copy.deepcopy(metadata);bad[key] = replacement
+            with self.subTest(key=key), self.assertRaises(Exception):
+                run(value, dict(payloads, **{"metadata.json": a.s.encode(bad)}), public, code=2, calibration=True)
+        bad = copy.deepcopy(metadata)
+        bad["errors"]["prefix_base64"] = base64.b64encode(raw.replace(b"no such file", b"wrong cause!")).decode()
+        with self.assertRaises(Exception):
+            run(value, dict(payloads, **{"metadata.json": a.s.encode(bad)}), public, code=2, calibration=True)
+
     def test_workflow_publication_guard_mutations_are_detected(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
         publication_policy(workflow)

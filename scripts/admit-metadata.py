@@ -5,6 +5,7 @@ The workflow separately observes the caller and sealer foreground returns.
 Receipt contents cannot prove their own writer's successful terminal close.
 """
 import argparse
+import base64
 import importlib.util
 import os
 from pathlib import Path
@@ -31,7 +32,7 @@ def exact(actual, expected):
         c.require(actual == expected)
 
 
-def validate(base, value, binary_sha, foreground_exit, sealed=False):
+def validate(base, value, binary_sha, foreground_exit, sealed=False, calibration=False):
     """Data-only admission, after the workflow's actual foreground command."""
     c.require(type(foreground_exit) is int and foreground_exit in (0, 2))
     c.binary(base, value, binary_sha)
@@ -73,6 +74,19 @@ def validate(base, value, binary_sha, foreground_exit, sealed=False):
     exact(proof["streams"]["stderr"]["prefix"], "")
     metadata = c.producer_receipt(payloads["metadata.json"], value, wait)
     exact(metadata["capture_complete"], foreground_exit == 0)
+    if calibration:
+        # The actual Go executable traverses the same foreground/admission/seal
+        # path using a deliberately absent synthetic trust file. Ordinary trust
+        # setup must fail before client.Do; no provider request is a control.
+        exact(foreground_exit, 2)
+        exact(metadata["attempt_count"], 0)
+        exact(metadata["response_available"], False)
+        exact(metadata["errors"]["complete"], True)
+        missing = str(base / ".cache/metadata-build" / value["run_id"] /
+                      "calibration-trust-file-must-be-absent.pem").encode()
+        fields = c.decode_frames(base64.b64decode(metadata["errors"]["prefix_base64"], validate=True))
+        exact(fields, [b"0", b"*fs.PathError", b"open " + missing + b": no such file or directory",
+                       b"0/0", b"syscall.Errno", b"no such file or directory"])
     if sealed:
         quarantine = base / ".cache/link-quarantine" / value["run_id"]
         s.check_chain(quarantine)
@@ -97,6 +111,7 @@ def main():
     for name in ("run-id", "source-head", "attempt", "binary-sha256", "foreground-exit"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--sealed", action="store_true")
+    p.add_argument("--calibration", action="store_true")
     args = p.parse_args()
     value = c.identity(args.run_id, args.source_head, "metadata", args.attempt, os.environ)
     # The one primary private admission sink precedes reads of unknown receipts.
@@ -104,7 +119,9 @@ def main():
                                 args.run_id + ("-sealed" if args.sealed else "-open"))
     try:
         c.require(args.foreground_exit in ("0", "2"))
-        complete = validate(Path.cwd(), value, args.binary_sha256, int(args.foreground_exit), args.sealed)
+        c.require(os.environ.get("METADATA_MODE") in ("metadata-calibration", "metadata-diagnostic"))
+        exact(args.calibration, os.environ["METADATA_MODE"] == "metadata-calibration")
+        complete = validate(Path.cwd(), value, args.binary_sha256, int(args.foreground_exit), args.sealed, args.calibration)
         owned, fd = fd, None
         s.close_operation(owned)
         # Outcome=success is separately mandatory: a partial GITHUB_OUTPUT write
