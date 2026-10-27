@@ -60,6 +60,146 @@ type linkLatencyProxy struct {
 	Toxics   []linkLatencyToxic `json:"toxics"`
 }
 
+type linkLatencyMappingReadback struct {
+	PrivateRecordKind   string
+	Matched             bool
+	ObservationComplete bool
+	Expected            linkLatencyProxy
+	ResponseBytes       []byte
+	DecodedMappings     map[string]json.RawMessage
+	DecodedMatch        *linkLatencyProxy
+	ToxicsFieldPresent  bool
+	Components          map[string]bool
+	DecodeCause         []byte
+}
+
+// The selected zero-active-toxic predicate concerns collection membership:
+// explicitly present null and [] both contain no entries. Missing is unknown.
+// Nonempty entries must still contain every reviewed field and exact value.
+func validateLinkLatencyMapping(raw []byte, mapping linkLatencyProxy, want []linkLatencyToxic) linkLatencyMappingReadback {
+	mapping.Toxics = want
+	r := linkLatencyMappingReadback{PrivateRecordKind: "latency-mapping-readback", Expected: mapping, ResponseBytes: bytes.Clone(raw), Components: map[string]bool{}}
+	for _, field := range []string{"bounded_response", "json_object", "unique_mapping", "mapping_fields", "name", "listen", "upstream", "enabled", "toxics_present", "toxics_fields", "toxics_values"} {
+		r.Components[field] = false
+	}
+	r.Components["bounded_response"] = len(raw) > 0 && len(raw) <= 8<<10
+	r.ObservationComplete = r.Components["bounded_response"] // returned body only; actual HTTP path owns read/close
+	if !r.Components["bounded_response"] {
+		return r
+	}
+	if err := json.Unmarshal(raw, &r.DecodedMappings); err != nil {
+		r.DecodeCause = []byte(err.Error())
+		return r
+	}
+	r.Components["json_object"] = r.DecodedMappings != nil
+	match, ok := r.DecodedMappings[mapping.Name]
+	r.Components["unique_mapping"] = len(r.DecodedMappings) == 1 && ok
+	if !ok {
+		return r
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(match, &fields); err != nil {
+		r.DecodeCause = []byte(err.Error())
+		return r
+	}
+	r.Components["mapping_fields"] = exactLatencyFields(fields, "name", "listen", "upstream", "enabled", "toxics")
+	toxics, present := fields["toxics"]
+	r.ToxicsFieldPresent, r.Components["toxics_present"] = present, present
+	var got linkLatencyProxy
+	if err := json.Unmarshal(match, &got); err != nil {
+		r.DecodeCause = []byte(err.Error())
+		return r
+	}
+	r.DecodedMatch = &got
+	r.Components["name"] = got.Name == mapping.Name
+	r.Components["listen"] = got.Listen == mapping.Listen
+	r.Components["upstream"] = got.Upstream == mapping.Upstream
+	r.Components["enabled"] = got.Enabled && mapping.Enabled
+	if !present {
+		return r
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(toxics, &entries); err != nil {
+		r.DecodeCause = []byte(err.Error())
+		return r
+	}
+	fieldsExact := true
+	for _, entry := range entries {
+		var toxic, attributes map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &toxic); err != nil {
+			r.DecodeCause = []byte(err.Error())
+			return r
+		}
+		if err := json.Unmarshal(toxic["attributes"], &attributes); err != nil {
+			r.DecodeCause = []byte(err.Error())
+			return r
+		}
+		fieldsExact = fieldsExact && exactLatencyFields(toxic, "name", "type", "stream", "toxicity", "attributes") && exactLatencyFields(attributes, "latency", "jitter") && nonNullLatencyFields(toxic) && nonNullLatencyFields(attributes)
+	}
+	r.Components["toxics_fields"] = fieldsExact
+	equal := len(got.Toxics) == len(want)
+	for index := range got.Toxics {
+		if index >= len(want) || got.Toxics[index] != want[index] {
+			equal = false
+		}
+	}
+	r.Components["toxics_values"] = equal
+	return r
+}
+
+func exactLatencyFields(fields map[string]json.RawMessage, names ...string) bool {
+	if len(fields) != len(names) {
+		return false
+	}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func nonNullLatencyFields(fields map[string]json.RawMessage) bool {
+	for _, value := range fields {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return false
+		}
+	}
+	return true
+}
+
+// The actual bounded HTTP layer has already finished read/close. Persist this
+// private readback before either semantic acceptance or rejection. The existing
+// helper creates only a safe public reference; raw bytes/decoded values stay in
+// its fixed private fixture JSON, including successful response observations.
+func checkLinkLatencyMapping(state fixture.State, raw []byte, mapping linkLatencyProxy, want []linkLatencyToxic) (linkLatencyProxy, error) {
+	r := validateLinkLatencyMapping(raw, mapping, want)
+	matched := true
+	for _, exact := range r.Components {
+		matched = matched && exact
+	}
+	r.Matched = matched
+	var cause error
+	if !matched {
+		cause = errors.New("calibration unique mapping/toxic readback mismatch")
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return linkLatencyProxy{}, linkLatencyRetainFailure(state, []string{"latency_mapping_readback", "Encode"}, raw, err, false)
+	}
+	if len(body) > 64<<10 {
+		return linkLatencyProxy{}, linkLatencyRetainFailure(state, []string{"latency_mapping_readback", "SerializedNoticeOverflow"}, body, errors.New("mapping readback serialized notice exceeds 64KiB; evidence incomplete"), false)
+	}
+	reference, err := fixture.RetainLinkNetworkFailure(state, []string{"latency_mapping_readback", "GET", "/proxies"}, body, cause)
+	if err != nil {
+		return linkLatencyProxy{}, err
+	}
+	if cause != nil {
+		return linkLatencyProxy{}, &linkLatencyRetainedFailure{Reference: reference}
+	}
+	return *r.DecodedMatch, nil
+}
+
 func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	if os.Getenv("LAB_LINKS") == "" {
 		t.Skip("LAB_LINKS=1 owned proxy calibration opt-in absent")
@@ -354,7 +494,9 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var mappingResponse []byte // serial successful GET/proxies only; cleared before every call
 	apiCall := func(method, path string, body any, out any) error {
+		mappingResponse = nil
 		if dockerStopped {
 			return errors.New("Docker facility stopped; calibration API action prohibited")
 		}
@@ -369,10 +511,13 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			StartNS, EndNS int64
 			Successful     bool
 		}{method, path, status, start.Sub(origin).Nanoseconds(), time.Since(origin).Nanoseconds(), err == nil}); e != nil {
-			return linkLatencyRetainFailure(state, []string{"latency_http", "PublicReceipt", method, api, path}, nil, e, false)
+			return linkLatencyRetainFailure(state, []string{"latency_http", "PublicReceipt", method, api, path}, data, e, false)
 		}
 		if err != nil {
 			return err
+		}
+		if method == "GET" && path == "/proxies" {
+			mappingResponse = bytes.Clone(data)
 		}
 		if out != nil {
 			if cause := json.Unmarshal(data, out); cause != nil {
@@ -394,13 +539,12 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if err := inspect(ctx, true); err != nil {
 			return err
 		}
-		var proxies map[string]linkLatencyProxy
-		if err := apiCall("GET", "/proxies", nil, &proxies); err != nil {
+		if err := apiCall("GET", "/proxies", nil, nil); err != nil {
 			return err
 		}
-		got, ok := proxies[mapping.Name]
-		if len(proxies) != 1 || !ok || got.Name != mapping.Name || got.Listen != mapping.Listen || got.Upstream != mapping.Upstream || !got.Enabled || !reflect.DeepEqual(got.Toxics, want) {
-			return errors.New("calibration unique mapping/toxic readback mismatch")
+		got, err := checkLinkLatencyMapping(state, mappingResponse, mapping, want)
+		if err != nil {
+			return err
 		}
 		if cause := retain("mapping", got); cause != nil {
 			return linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", "mapping", journal.Name()}, nil, cause, false)

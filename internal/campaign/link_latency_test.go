@@ -75,6 +75,176 @@ func checkLatencyPrivate(t *testing.T, state fixture.State, failure error, actio
 	}
 }
 
+const literalLatencyEmptyMapping = `{"echo-fixed":{"name":"echo-fixed","listen":"127.0.0.1:18001","upstream":"127.0.0.1:18002","enabled":true,"toxics":[]}}`
+
+func latencyExpectedMapping() linkLatencyProxy {
+	return linkLatencyProxy{Name: "echo-fixed", Listen: "127.0.0.1:18001", Upstream: "127.0.0.1:18002", Enabled: true}
+}
+
+func readLatencyMappingObservation(t *testing.T, state fixture.State) (linkLatencyMappingReadback, []byte) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(".cache", "fixtures-private", state.RunID+"-links", "docker-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatal("single private mapping readback missing")
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal("private mapping readback unavailable")
+	}
+	info, err := os.Stat(paths[0])
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || len(body) > 256<<10 {
+		t.Fatal("mapping readback file not private or bounded")
+	}
+	var envelope struct {
+		Notice, CauseText             []byte
+		NoticeComplete, CauseComplete bool
+	}
+	var observation linkLatencyMappingReadback
+	if json.Unmarshal(body, &envelope) != nil || !envelope.NoticeComplete || !envelope.CauseComplete || len(envelope.Notice) > 64<<10 || json.Unmarshal(envelope.Notice, &observation) != nil {
+		t.Fatal("private mapping readback incomplete or malformed")
+	}
+	return observation, envelope.CauseText
+}
+
+func TestLatencyMappingExplicitEmptyCollectionsAndMissingFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, mismatch string
+		accepted            bool
+	}{
+		{"empty array", literalLatencyEmptyMapping, "", true},
+		{"explicit null", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"toxics":null`, 1), "", true},
+		{"missing toxics", strings.Replace(literalLatencyEmptyMapping, `,"toxics":[]`, ``, 1), "toxics_present", false},
+		{"false enabled", strings.Replace(literalLatencyEmptyMapping, `"enabled":true`, `"enabled":false`, 1), "enabled", false},
+		{"wrong upstream", strings.Replace(literalLatencyEmptyMapping, `127.0.0.1:18002`, `PRIVATE_UPSTREAM=wrong`, 1), "upstream", false},
+		{"wrong name", strings.Replace(literalLatencyEmptyMapping, `"name":"echo-fixed"`, `"name":"other"`, 1), "name", false},
+		{"different mapping", strings.Replace(literalLatencyEmptyMapping, `{"echo-fixed":`, `{"other":`, 1), "unique_mapping", false},
+		{"extra mapping", strings.TrimSuffix(literalLatencyEmptyMapping, `}`) + `,"other":{}}`, "unique_mapping", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given independent literal JSON, When checking an expected empty
+			// active list, Then explicit null/[] pass and absent/different facts
+			// fail only after exact private readback and component retention.
+			state := latencyNoticeState(t)
+			_, err := checkLinkLatencyMapping(state, []byte(tc.raw), latencyExpectedMapping(), []linkLatencyToxic{})
+			if (err == nil) != tc.accepted {
+				t.Fatal("mapping result disagrees with independent literal expectation")
+			}
+			readback, cause := readLatencyMappingObservation(t, state)
+			if readback.PrivateRecordKind != "latency-mapping-readback" || readback.Matched != tc.accepted || !readback.ObservationComplete || !bytes.Equal(readback.ResponseBytes, []byte(tc.raw)) || readback.Expected.Name != "echo-fixed" || readback.Expected.Upstream != "127.0.0.1:18002" || (len(cause) == 0) != tc.accepted {
+				t.Fatal("raw mapping, expected values or explicit observation classification changed")
+			}
+			if !tc.accepted && readback.Components[tc.mismatch] {
+				t.Fatal("required component mismatch was hidden")
+			}
+			if tc.accepted && !readback.ToxicsFieldPresent {
+				t.Fatal("accepted empty list lacked explicit toxics presence")
+			}
+			public, _ := filepath.Glob(filepath.Join(".cache", "fixtures", state.RunID+"-links", "*.json"))
+			for _, path := range public {
+				body, e := os.ReadFile(path)
+				if e != nil || bytes.Contains(body, []byte("PRIVATE_UPSTREAM=")) || bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString([]byte(tc.raw)))) {
+					t.Fatal("raw mapping readback entered public facts")
+				}
+			}
+		})
+	}
+}
+
+func TestLatencyMappingNonemptyToxicsKeepFullFieldsAndValuesStrict(t *testing.T) {
+	const toxic = `[{"name":"latency","type":"latency","stream":"downstream","toxicity":1,"attributes":{"latency":400,"jitter":0}}]`
+	want := linkLatencyToxic{Name: "latency", Type: "latency", Stream: "downstream", Toxicity: 1}
+	want.Attributes.Latency = 400
+	for _, tc := range []struct {
+		name, raw string
+		accepted  bool
+	}{
+		{"exact", toxic, true},
+		{"unknown type", strings.Replace(toxic, `"type":"latency"`, `"type":"other"`, 1), false},
+		{"wrong direction", strings.Replace(toxic, `downstream`, `upstream`, 1), false},
+		{"changed latency", strings.Replace(toxic, `400`, `401`, 1), false},
+		{"changed toxicity", strings.Replace(toxic, `"toxicity":1`, `"toxicity":0.5`, 1), false},
+		{"unknown toxic field", strings.Replace(toxic, `"name":"latency"`, `"unexpected":"PRIVATE_TOXIC=extra","name":"latency"`, 1), false},
+		{"missing zero jitter", strings.Replace(toxic, `,"jitter":0`, ``, 1), false},
+		{"null zero jitter", strings.Replace(toxic, `"jitter":0`, `"jitter":null`, 1), false},
+		{"unknown attribute", strings.Replace(toxic, `"jitter":0`, `"jitter":0,"unexpected":0`, 1), false},
+		{"null loses required toxic", `null`, false},
+		{"array loses required toxic", `[]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a nonempty exact toxic expectation, When any field/value or
+			// membership differs, Then null/empty normalization cannot admit it.
+			state := latencyNoticeState(t)
+			raw := []byte(strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"toxics":`+tc.raw, 1))
+			_, err := checkLinkLatencyMapping(state, raw, latencyExpectedMapping(), []linkLatencyToxic{want})
+			if (err == nil) != tc.accepted {
+				t.Fatal("nonempty toxic comparison weakened field or value requirements")
+			}
+			readback, _ := readLatencyMappingObservation(t, state)
+			if !bytes.Equal(readback.ResponseBytes, raw) || readback.Matched != tc.accepted || !readback.ToxicsFieldPresent {
+				t.Fatal("nonempty raw readback or mismatch evidence lost")
+			}
+		})
+	}
+}
+
+func TestLatencyMappingPrivatePersistenceFailureCannotAdmitMatchingResponse(t *testing.T) {
+	// Given a semantically matching response and an occupied private root,
+	// When exact readback cannot persist, Then the matching mapping is not
+	// admitted; no fallback sink or second checker invocation is attempted.
+	state := latencyNoticeState(t)
+	root := filepath.Join(".cache", "fixtures-private", state.RunID+"-links")
+	if err := os.Rename(root, root+".retained"); err != nil {
+		t.Fatal("synthetic persistence-failure setup unavailable")
+	}
+	if err := os.WriteFile(root, []byte("synthetic occupied private root"), 0600); err != nil {
+		t.Fatal("synthetic occupied private root unavailable")
+	}
+	_, err := checkLinkLatencyMapping(state, []byte(literalLatencyEmptyMapping), latencyExpectedMapping(), nil)
+	if err == nil || strings.Contains(err.Error(), "echo-fixed") {
+		t.Fatal("missing private readback admitted matching response or leaked it publicly")
+	}
+}
+
+func TestLatencyMappingSerializedReadbackBounds(t *testing.T) {
+	t.Run("full bounded response preserved", func(t *testing.T) {
+		// Given a complete response at the existing HTTP body bound, When its
+		// raw bytes and decoded/expected values are serialized, Then the entire
+		// private notice fits the courier cap and preserves trailing whitespace.
+		state := latencyNoticeState(t)
+		raw := append([]byte(literalLatencyEmptyMapping), bytes.Repeat([]byte{' '}, (8<<10)-len(literalLatencyEmptyMapping))...)
+		if _, err := checkLinkLatencyMapping(state, raw, latencyExpectedMapping(), nil); err != nil {
+			t.Fatal("bounded complete response could not be retained")
+		}
+		readback, _ := readLatencyMappingObservation(t, state)
+		if !readback.Matched || !bytes.Equal(readback.ResponseBytes, raw) {
+			t.Fatal("bounded raw response prefix or trailing bytes changed")
+		}
+	})
+	t.Run("serialized expected overflow stops", func(t *testing.T) {
+		// Given future expected-value drift beyond the courier budget, When the
+		// serialized notice overflows despite a small raw body, Then a bounded
+		// incomplete prefix remains private and cannot admit a mapping.
+		state := latencyNoticeState(t)
+		mapping := latencyExpectedMapping()
+		mapping.Name = strings.Repeat("synthetic expected identity ", 4096)
+		if _, err := checkLinkLatencyMapping(state, []byte(literalLatencyEmptyMapping), mapping, nil); err == nil {
+			t.Fatal("serialized notice overflow was admitted")
+		}
+		paths, _ := filepath.Glob(filepath.Join(".cache", "fixtures-private", state.RunID+"-links", "docker-*.json"))
+		if len(paths) != 1 {
+			t.Fatal("single overflow prefix receipt missing")
+		}
+		body, e := os.ReadFile(paths[0])
+		var envelope struct {
+			Notice         []byte
+			NoticeComplete bool
+		}
+		if e != nil || json.Unmarshal(body, &envelope) != nil || envelope.NoticeComplete || len(envelope.Notice) != 64<<10 {
+			t.Fatal("serialized overflow lost its bounded incomplete private prefix")
+		}
+	})
+}
+
 func TestLatencyActualHTTPRequestRetainsWholeFailureBeforeRetry(t *testing.T) {
 	private := errors.New("PRIVATE_LATENCY=unreviewed request reason")
 	for _, tc := range []struct {

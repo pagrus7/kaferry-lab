@@ -107,7 +107,7 @@ func TestLinkCalibrationRestoresExactLatencyContainerAfterLostTestCleanup(t *tes
 	}
 }
 func TestLinkCalibrationLatencyCleanupHonorsStopAndExactAbsence(t *testing.T) {
-	for _, kind := range []string{"STOPPED", "exact-absence", "permission-mixed-absence"} {
+	for _, kind := range []string{"STOPPED", "exact-absence", "exact-leading-LF-absence", "permission-mixed-absence", "leading-LF-permission-mixed-absence"} {
 		t.Run(kind, func(t *testing.T) {
 			s, p, _, _, _ := driverLatencyCleanupFixture(t, false)
 			if kind == "STOPPED" {
@@ -119,7 +119,10 @@ func TestLinkCalibrationLatencyCleanupHonorsStopAndExactAbsence(t *testing.T) {
 			run := func(_ context.Context, args ...string) ([]byte, error) {
 				calls++
 				raw := []byte("Error response from daemon: No such object: " + p.Name + "\n")
-				if kind == "permission-mixed-absence" {
+				if kind == "exact-leading-LF-absence" || kind == "leading-LF-permission-mixed-absence" {
+					raw = []byte("\nError response from daemon: No such container: " + p.Name + "\n")
+				}
+				if kind == "permission-mixed-absence" || kind == "leading-LF-permission-mixed-absence" {
 					return raw, errors.Join(syscall.EPERM, errors.New("unknown-PRIVATE-refusal"))
 				}
 				return raw, errors.New("exit1")
@@ -127,7 +130,7 @@ func TestLinkCalibrationLatencyCleanupHonorsStopAndExactAbsence(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			got, err := cleanupLinkCalibrationLatency(ctx, s, run)
-			if kind == "exact-absence" {
+			if kind == "exact-absence" || kind == "exact-leading-LF-absence" {
 				if err != nil || !got.Resolved || !got.Absent || calls != 1 {
 					t.Fatal("exact retained absence lost idempotence")
 				}
@@ -135,7 +138,7 @@ func TestLinkCalibrationLatencyCleanupHonorsStopAndExactAbsence(t *testing.T) {
 				if err == nil || got.Resolved || got.Removed || (kind == "STOPPED" && calls != 0) || (kind != "STOPPED" && calls != 1) || strings.Contains(err.Error(), "PRIVATE") {
 					t.Fatal("denial bypassed or exact reason leaked")
 				}
-				if kind == "permission-mixed-absence" {
+				if kind == "permission-mixed-absence" || kind == "leading-LF-permission-mixed-absence" {
 					want := errors.Join(syscall.EPERM, errors.New("unknown-PRIVATE-refusal")).Error()
 					found, files := false, 0
 					root := filepath.Join(".cache", "fixtures-private", s.RunID+"-links")

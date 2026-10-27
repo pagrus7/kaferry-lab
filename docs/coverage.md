@@ -235,7 +235,7 @@ Reuse reviewed M2–M5 components and their exact core comparisons. A seed recor
 
 ## Recording completed coverage
 
-Readiness controls are harness calibration. The first enabled linked setup at
+Readiness controls and mapping/cleanup-format controls are harness calibration. The first enabled linked setup at
 `bfc99057` retained an EOF before any valid broker readiness response. New
 owned-peer controls distinguish zero-byte EOF from header-only/partial/invalid
 responses and observe close errors that the pinned client can otherwise discard.
@@ -254,3 +254,11 @@ fulfills any M2 fault, recovery or saved-progress requirement.
 Bind each planned ID to executable test/command, exact variants, reviewed source identity and durable evidence URL/path when implemented. Keep this a coverage map; histories belong in bundles and milestone status in PROGRESS.md. Missing mandatory observations block their scenarios. At audits stop/reap workers, restore services, state stabilization assumptions and fully scan to fixed ends; unchanged ends alone do not exclude pending output. Retain INCONCLUSIVE if late output can change verdict. Compare only promised per-session order and permit at-least-once duplicates.
 
 No required scenario is removed. Combined faults, independent release checking and observed output/progress boundaries add evidence; parser/obsolete syntax, standalone routing/ACL/codec matrices and broad migration remain outside scope.
+
+The `cefef523` linked attempt reached and passed topology, but failed initial
+latency mapping readback before applying a delay. Its old response bytes are
+unavailable. New source retains exact bounded raw readback and comparison facts,
+requires explicit mapping/toxic fields, and treats only an explicit expected
+zero collection's null/empty encodings alike. Exact one-leading-LF container
+absence framing is covered separately from permission/unknown-prefix failures;
+these are authored measurement controls, not new Kaferry qualification cases.

@@ -330,6 +330,12 @@ func exactLinkAbsence(args []string, raw []byte) bool {
 	if len(args) != 5 || args[1] != "inspect" || args[3] != "--format" || args[4] != "{{json .}}" {
 		return false
 	}
+	// docker container inspect --format emits an empty stdout line before this
+	// exact daemon stderr in the retained native failure. Admit that one framing
+	// only; do not trim arbitrary warnings, policy text or additional lines.
+	if args[0] == "container" && string(raw) == "\nError response from daemon: No such container: "+args[2]+"\n" {
+		return true
+	}
 	for _, expected := range linkAbsenceMessages(args[0], args[2]) {
 		if string(raw) == expected || string(raw) == expected+"\n" {
 			return true

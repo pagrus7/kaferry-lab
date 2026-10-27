@@ -327,6 +327,81 @@ func TestLinkedAbsenceNeverGuessesFromControlNoticeOrTypedPermission(t *testing.
 	}
 }
 
+func TestLinkedExactLeadingLFContainerAbsenceRetainsOriginalFraming(t *testing.T) {
+	// Given the exact combined stdout/stderr observed from an already removed
+	// owned container, when inspected, then absence is retained without a retry,
+	// another target or discarded formatting bytes.
+	s := linkRetentionState(t)
+	raw := []byte("\nError response from daemon: No such container: " + s.Proxy.Container + "\n")
+	calls := 0
+	run, err := LinkExecutor(s, func(_ context.Context, args ...string) ([]byte, error) {
+		calls++
+		if !reflect.DeepEqual(args, []string{"container", "inspect", s.Proxy.Container, "--format", "{{json .}}"}) {
+			t.Fatal("unexpected absence route")
+		}
+		return raw, errors.New("exit 1")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := run(context.Background(), "container", "inspect", s.Proxy.Container, "--format", "{{json .}}")
+	var absent *linkDockerFailure
+	if !errors.As(err, &absent) || !absent.ExactAbsence || absent.PersistenceFailed || calls != 1 || !bytes.Equal(got, raw) {
+		t.Fatal("exact retained leading-LF absence was not admitted")
+	}
+	_, body := readLinkPrivateFailure(t, err)
+	var receipt struct {
+		Combined     []byte
+		ExactAbsence bool
+	}
+	if e := json.Unmarshal(body, &receipt); e != nil || !receipt.ExactAbsence || !bytes.Equal(receipt.Combined, raw) {
+		t.Fatal("original absence framing lost")
+	}
+	if _, e := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "STOPPED.json")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("complete exact absence retained a stop")
+	}
+}
+
+func TestLinkedLeadingLFAbsenceDoesNotStripWarningsOrBypassDenial(t *testing.T) {
+	for _, kind := range []string{"extra-leading-LF", "warning-prefix", "warning-suffix", "other-target", "permission", "context"} {
+		t.Run(kind, func(t *testing.T) {
+			s := linkRetentionState(t)
+			raw := "\nError response from daemon: No such container: " + s.Proxy.Container + "\n"
+			cause := error(errors.New("exit 1"))
+			switch kind {
+			case "extra-leading-LF":
+				raw = "\n" + raw
+			case "warning-prefix":
+				raw = "approval refused\n" + raw
+			case "warning-suffix":
+				raw += "unreviewed control notice\n"
+			case "other-target":
+				raw = "\nError response from daemon: No such container: another-target\n"
+			case "permission":
+				cause = syscall.EPERM
+			case "context":
+				cause = context.Canceled
+			}
+			calls := 0
+			run, e := LinkExecutor(s, func(context.Context, ...string) ([]byte, error) { calls++; return []byte(raw), cause })
+			if e != nil {
+				t.Fatal(e)
+			}
+			_, e = run(context.Background(), "container", "inspect", s.Proxy.Container, "--format", "{{json .}}")
+			var failure *linkDockerFailure
+			if !errors.As(e, &failure) || failure.ExactAbsence || calls != 1 {
+				t.Fatal("unknown notice or denial became absence")
+			}
+			if _, e = LinkExecutor(s, func(context.Context, ...string) ([]byte, error) {
+				t.Fatal("new executor bypassed the retained stop")
+				return nil, nil
+			}); e == nil {
+				t.Fatal("retained failure did not stop the facility")
+			}
+		})
+	}
+}
+
 func TestLinkedCaptureLimitCancelsAndMarksNoticeIncomplete(t *testing.T) {
 	// Given more output than the hard bound, when copied into the linked capture,
 	// then memory stays bounded, the child cancellation is requested and the

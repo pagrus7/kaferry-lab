@@ -317,6 +317,11 @@ func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p link
 	return f.ID, nil
 }
 func exactCalibrationContainerAbsence(raw []byte, target string) bool {
+	// Same exact combined stdout/stderr framing admitted by LinkExecutor. Its
+	// permission/context/persistence gates must succeed before raw reaches here.
+	if string(raw) == "\nError response from daemon: No such container: "+target+"\n" {
+		return true
+	}
 	for _, prefix := range []string{"Error: No such object: ", "Error response from daemon: No such object: ", "Error: No such container: ", "Error response from daemon: No such container: "} {
 		expected := prefix + target
 		if string(raw) == expected || string(raw) == expected+"\n" {

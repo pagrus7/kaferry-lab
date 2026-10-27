@@ -197,3 +197,12 @@ The reviewed single diagnostic at
 returned200 and the pinned annotated tag reference; all three receipts were
 privately recovered after API whole-ZIP authentication. That observation does
 not explain the historical403 or verify the complete release.
+
+The `cefef523` EOF-repair attempt passed the native unit job and reached linked
+calibration; topology passed and latency stopped at initial mapping readback.
+New raw-readback retention and exact absence-format repairs await native
+validation. An external network quota currently prevents completing artifact
+retention. Keep the failed transfer and partial collection; inspect only
+already-authenticated local evidence until ordinary network access is restored.
+No complete-head acceptance follows from the currently unavailable unit and
+healthy-PRESERVE artifact bytes.

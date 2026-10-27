@@ -178,3 +178,17 @@ API tuple rejection. Native run40227817066 at source525bb5ea produced a reviewed
 fixed sample, followed by seven authenticated requests and exact private local
 recovery of two literal files. That historical calibration is not evidence for
 the new linked runtime. No Kaferry release is qualified.
+
+
+## Partial transfer and existing offline evidence
+
+A network quota stopped collection of the `cefef523` attempt after seven artifact
+ZIPs. Preserve its failed command/notice and incomplete collection; do not retry
+through another endpoint, credential, runner, log transfer or packaging route.
+The existing offline unsealer can still process an already-local ZIP only when
+its expected API tuple and whole-ZIP digest were independently authenticated
+before the stop. That exact precondition was met for the linked capsule: its
+run/attempt/job/list/detail metadata and ZIP bytes were present, and private
+offline recovery succeeded without a new transfer. The failed canonical
+retriever retains its error and no COMPLETE marker; missing CI artifacts remain
+missing. A hash invented locally or adjacent to ciphertext is never sufficient.
