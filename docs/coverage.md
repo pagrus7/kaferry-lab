@@ -235,6 +235,13 @@ Reuse reviewed M2–M5 components and their exact core comparisons. A seed recor
 
 ## Recording completed coverage
 
+Readiness controls are harness calibration. The first enabled linked setup at
+`bfc99057` retained an EOF before any valid broker readiness response. New
+owned-peer controls distinguish zero-byte EOF from header-only/partial/invalid
+responses and observe close errors that the pinned client can otherwise discard.
+They cannot establish Kaferry accepted work, drain, progress saving or ACK receipt.
+
+
 The metadata diagnostic is harness calibration, not another Kaferry scenario.
 The prior tag-metadata HTTP403 occurred before the executable or fault started;
 the discarded response cannot establish its cause. The narrow capture retains

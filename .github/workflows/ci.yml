@@ -651,6 +651,8 @@ jobs:
           if-no-files-found: error
 
   links:
+    # Native probe failure controls must pass before the stock fixture runs.
+    needs: unit
     if: ${{ github.repository == 'pagrus7/kaferry-lab' && github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'normal') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20

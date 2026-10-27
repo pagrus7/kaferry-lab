@@ -2,6 +2,7 @@ package fixture
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -58,6 +59,9 @@ func TestLinkedReadinessRetryRequiresOnlyLiteralRequestAvailability(t *testing.T
 		{"incomplete", linkReadySocket(sarama.ErrIncompleteResponse), false},
 		{"insufficient", linkReadySocket(sarama.ErrInsufficientData), false},
 		{"EOF not reviewed", linkReadySocket(io.EOF), false},
+		{"bare EOF", io.EOF, false},
+		{"EOF text", errors.New("EOF"), false},
+		{"partial EOF", linkReadySocket(io.ErrUnexpectedEOF), false},
 		{"pipe not reviewed", linkReadySocket(syscall.EPIPE), false},
 		{"receipt beside socket", errors.Join(refused, errors.New("receipt persistence failed")), false},
 		{"close beside socket", errors.Join(refused, errors.New("client close failed")), false},
@@ -68,6 +72,318 @@ func TestLinkedReadinessRetryRequiresOnlyLiteralRequestAvailability(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			if got := linkBrokerRetryable(tc.err); got != tc.retry {
 				t.Fatalf("retry=%v want=%v", got, tc.retry)
+			}
+		})
+	}
+}
+
+type linkReadyPeerResult struct {
+	RequestBytes, ResponseBytes int
+	RequestComplete, Closed     bool
+	err                         error
+}
+
+func retainLinkReadyControlError(t *testing.T, s State, operation string, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if _, e := RetainLinkNetworkFailure(s, []string{"synthetic_readiness_control", operation}, nil, err); e != nil {
+		t.Fatal("synthetic readiness control private evidence unavailable")
+	}
+}
+
+// One owned loopback peer reads one bounded ApiVersions-v0 handshake, sends a
+// fixed synthetic reply prefix, and closes. It never forwards or handles data.
+func runLinkReadyPeer(t *testing.T, s State, parent context.Context, mode string, wrap func(net.Conn) net.Conn) (linkBrokerProbeResult, error, linkReadyPeerResult) {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		retainLinkReadyControlError(t, s, "listen", err)
+		t.Fatal("synthetic readiness listener unavailable; private cause retained")
+	}
+	defer func() {
+		if e := listener.Close(); e != nil {
+			retainLinkReadyControlError(t, s, "listener close", e)
+			t.Error("synthetic readiness listener close failed; private cause retained")
+		}
+	}()
+	if err = listener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		retainLinkReadyControlError(t, s, "accept deadline", err)
+		t.Fatal("synthetic readiness accept deadline failed; private cause retained")
+	}
+	done := make(chan linkReadyPeerResult, 1)
+	go func() {
+		var result linkReadyPeerResult
+		conn, e := listener.AcceptTCP()
+		if e != nil {
+			result.err = e
+			done <- result
+			return
+		}
+		defer func() {
+			e := conn.Close()
+			result.Closed = e == nil
+			result.err = errors.Join(result.err, e)
+			done <- result
+		}()
+		if result.err = conn.SetDeadline(time.Now().Add(2 * time.Second)); result.err != nil {
+			return
+		}
+		var size [4]byte
+		n, e := io.ReadFull(conn, size[:])
+		result.RequestBytes += n
+		if e != nil {
+			result.err = e
+			return
+		}
+		length := binary.BigEndian.Uint32(size[:])
+		if length < 10 || length > 256 {
+			result.err = errors.New("synthetic handshake request length rejected")
+			return
+		}
+		request := make([]byte, int(length))
+		n, e = io.ReadFull(conn, request)
+		result.RequestBytes += n
+		if e != nil {
+			result.err = e
+			return
+		}
+		if binary.BigEndian.Uint16(request[:2]) != 18 || binary.BigEndian.Uint16(request[2:4]) != 0 || int(binary.BigEndian.Uint16(request[8:10])) != len(request)-10 || string(request[10:]) != "kaferry-lab-link-readiness" {
+			result.err = errors.New("synthetic peer did not receive the single fixed ApiVersions-v0 request")
+			return
+		}
+		result.RequestComplete = true
+		header := make([]byte, 8)
+		binary.BigEndian.PutUint32(header[:4], 10) // correlation plus six-byte body
+		copy(header[4:], request[4:8])
+		var reply []byte
+		switch mode {
+		case "empty":
+		case "header only":
+			reply = header
+		case "partial header":
+			reply = header[:4]
+		case "partial body":
+			reply = append(header, 0)
+		case "malformed":
+			reply = append(header, 0, 0, 0, 0, 0, 1) // one absent API entry
+		case "healthy":
+			binary.BigEndian.PutUint32(header[:4], 16)
+			reply = append(header, 0, 0, 0, 0, 0, 1, 0, 18, 0, 0, 0, 0)
+		default:
+			result.err = errors.New("unknown synthetic readiness peer mode")
+			return
+		}
+		if len(reply) > 0 {
+			n, result.err = conn.Write(reply)
+			result.ResponseBytes = n
+			if n != len(reply) {
+				result.err = errors.Join(result.err, io.ErrShortWrite)
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	observed, probeErr := kafkaLinkBrokerProbeWithConnection(ctx, listener.Addr().String(), wrap)
+	var peer linkReadyPeerResult
+	select {
+	case peer = <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("synthetic readiness peer failed its bounded join")
+	}
+	retainLinkReadyControlError(t, s, "peer exchange", peer.err)
+	retainLinkReadyControlError(t, s, "actual Sarama probe", probeErr)
+	if peer.err != nil || !peer.Closed || !peer.RequestComplete {
+		t.Fatal("synthetic readiness handshake or close incomplete; exact private causes retained")
+	}
+	return observed, probeErr, peer
+}
+
+func TestLinkedRawReadinessEmptyEOFRequiresActualByteAndCloseWitness(t *testing.T) {
+	for _, mode := range []string{"empty", "header only", "partial header", "partial body", "malformed", "healthy"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given an actual sole direct Sarama request to an owned peer, When
+			// it closes after this fixed prefix, Then only a zero-byte clean EOF
+			// is availability; an independently counted nonempty prefix is fatal.
+			s := linkRetentionState(t)
+			observed, err, peer := runLinkReadyPeer(t, s, context.Background(), mode, nil)
+			if !observed.Opened || !observed.Closed || observed.Connection.ReadBytes != int64(peer.ResponseBytes) || observed.Connection.DialAttempts != 1 || observed.Connection.Connections != 1 || observed.Connection.CloseCalls != 1 || !observed.Connection.CloseReturned || !observed.Connection.CloseSucceeded {
+				t.Fatal("actual connection byte or terminal-close witness differs from independent peer")
+			}
+			switch mode {
+			case "empty":
+				if !errors.Is(err, io.EOF) || !linkBrokerRetryable(err) || peer.ResponseBytes != 0 {
+					t.Fatal("actual clean empty response EOF was not narrowly retryable")
+				}
+			case "header only":
+				if !errors.Is(err, io.EOF) || linkBrokerRetryable(err) || peer.ResponseBytes != 8 {
+					t.Fatal("header-only typed EOF was confused with empty response")
+				}
+			case "healthy":
+				if err != nil || validateLinkBrokerProbe(observed) != nil || observed.APIKeys != 1 {
+					t.Fatal("fixed healthy handshake control did not establish readiness")
+				}
+			case "partial header", "partial body":
+				if !errors.Is(err, io.ErrUnexpectedEOF) || linkBrokerRetryable(err) || peer.ResponseBytes == 0 {
+					t.Fatal("actual partial-response EOF not reached or treated as availability")
+				}
+			case "malformed":
+				if !errors.Is(err, sarama.ErrInsufficientData) || linkBrokerRetryable(err) || peer.ResponseBytes != 14 {
+					t.Fatal("actual incomplete API-entry decoder path not reached or treated as availability")
+				}
+			}
+			t.Logf("synthetic handshake request_bytes=%d response_bytes=%d peer_closed=true; actual client bytes/close matched", peer.RequestBytes, peer.ResponseBytes)
+		})
+	}
+}
+
+type linkReadyFailedClose struct{ net.Conn }
+
+func (c *linkReadyFailedClose) Close() error {
+	return errors.Join(c.Conn.Close(), errors.New("PRIVATE_READINESS=synthetic actual close return failure"))
+}
+
+func TestLinkedRawReadinessRetainsSaramaHiddenCloseFailureAndRejectsRetry(t *testing.T) {
+	// Given a real peer EOF and a literal failure returned after actual socket
+	// close, When Sarama discards that close return, Then the same-connection
+	// observer still retains it privately and cannot authorize another request.
+	s := linkRetentionState(t)
+	observed, err, peer := runLinkReadyPeer(t, s, context.Background(), "empty", func(c net.Conn) net.Conn { return &linkReadyFailedClose{Conn: c} })
+	if !errors.Is(err, io.EOF) || err == nil || !strings.Contains(err.Error(), "PRIVATE_READINESS=") || observed.Closed || observed.Connection.CloseCalls != 1 || !observed.Connection.CloseReturned || observed.Connection.CloseSucceeded || linkBrokerRetryable(err) || peer.ResponseBytes != 0 {
+		t.Fatal("hidden close failure was discarded or permitted retry")
+	}
+	assertLinkPublicWithholds(t, s, []byte("PRIVATE_READINESS=synthetic actual close return failure"))
+}
+
+type linkReadyCancelEOF struct {
+	net.Conn
+	cancel context.CancelFunc
+}
+
+func (c *linkReadyCancelEOF) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err == io.EOF {
+		c.cancel()
+	}
+	return n, err
+}
+
+func TestLinkedRawReadinessCancellationBesideActualEmptyEOFIsFatal(t *testing.T) {
+	// Given the actual peer EOF, When cancellation is observed on that same
+	// Read return, Then a complete close still cannot permit an EOF retry.
+	s := linkRetentionState(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed, err, _ := runLinkReadyPeer(t, s, ctx, "empty", func(c net.Conn) net.Conn {
+		return &linkReadyCancelEOF{Conn: c, cancel: cancel}
+	})
+	if !errors.Is(err, io.EOF) || !errors.Is(err, context.Canceled) || !observed.Closed || linkBrokerRetryable(err) {
+		t.Fatal("actual EOF bypassed observed cancellation")
+	}
+}
+
+func TestLinkedReadinessEmptyEOFWitnessAndFatalJoins(t *testing.T) {
+	// Given literal witness sensitivity controls (not native proof), When any
+	// required fact is absent or another fatal leaf joins EOF, Then retry stops.
+	complete := linkBrokerConnectionResult{DialAttempts: 1, Connections: 1, CloseCalls: 1, CloseReturned: true, CloseSucceeded: true}
+	if !linkBrokerRetryable(&linkBrokerEmptyEOF{connection: complete}) {
+		t.Fatal("complete literal witness control rejected")
+	}
+	for _, mutate := range []func(*linkBrokerConnectionResult){
+		func(c *linkBrokerConnectionResult) { c.DialAttempts = 2 },
+		func(c *linkBrokerConnectionResult) { c.Connections = 0 },
+		func(c *linkBrokerConnectionResult) { c.ReadBytes = 1 },
+		func(c *linkBrokerConnectionResult) { c.CloseCalls = 0 },
+		func(c *linkBrokerConnectionResult) { c.CloseCalls = 2 },
+		func(c *linkBrokerConnectionResult) { c.CloseReturned = false },
+		func(c *linkBrokerConnectionResult) { c.CloseSucceeded = false },
+	} {
+		partial := complete
+		mutate(&partial)
+		if linkBrokerRetryable(&linkBrokerEmptyEOF{connection: partial}) {
+			t.Fatal("incomplete connection witness permitted EOF retry")
+		}
+	}
+	for _, fatal := range []error{syscall.EACCES, syscall.EPERM, context.Canceled, context.DeadlineExceeded, io.ErrUnexpectedEOF, sarama.ErrInsufficientData, sarama.PacketDecodingError{Info: "synthetic malformed"}, errors.New("synthetic failed close"), errors.New("synthetic failed receipt")} {
+		if linkBrokerRetryable(errors.Join(&linkBrokerEmptyEOF{connection: complete}, fatal)) {
+			t.Fatal("fatal joined leaf permitted EOF retry")
+		}
+	}
+}
+
+func TestLinkedReadinessRetainsWitnessedEmptyEOFBeforeSameEndpointRetry(t *testing.T) {
+	// Given a literal completed connection witness, When the controller retries,
+	// Then the first exact private cause and counters precede the next request.
+	// Actual Sarama origin/bytes/close are calibrated by the native peer above.
+	s := linkRetentionState(t)
+	c := linkBrokerConnectionResult{DialAttempts: 1, Connections: 1, CloseCalls: 1, CloseReturned: true, CloseSucceeded: true}
+	calls := 0
+	var endpoints []string
+	err := readyLinkedBrokers(context.Background(), s, linkReadyExecutor(t, s, nil), func(_ context.Context, endpoint string) (linkBrokerProbeResult, error) {
+		calls++
+		endpoints = append(endpoints, endpoint)
+		if calls == 1 {
+			return linkBrokerProbeResult{Opened: true, Closed: true, Connection: c}, &linkBrokerEmptyEOF{connection: c}
+		}
+		files, e := filepath.Glob(filepath.Join(linkPrivateDirectory(s.RunID), "docker-*.json"))
+		if e != nil {
+			t.Fatal("literal EOF private inventory unavailable")
+		}
+		found := false
+		for _, path := range files {
+			body, e := os.ReadFile(path)
+			if e != nil {
+				t.Fatal("literal EOF private receipt unavailable")
+			}
+			var value struct {
+				CauseText     []byte
+				CauseComplete bool
+				Observation   linkBrokerProbeResult
+			}
+			if json.Unmarshal(body, &value) == nil && string(value.CauseText) == "EOF" && value.CauseComplete && value.Observation.Connection == c {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("next request preceded complete private EOF witness retention")
+		}
+		return linkReadyResult(), nil
+	})
+	if err != nil || calls != 3 || endpoints[0] != endpoints[1] || endpoints[0] != s.Source || endpoints[2] != s.Destination {
+		t.Fatal("literal EOF controller recovery changed endpoint or failed")
+	}
+}
+
+func TestLinkedReadinessWitnessedEOFCancellationOrReceiptFailureStops(t *testing.T) {
+	for _, stage := range []string{"cancel", "private outcome", "public outcome"} {
+		t.Run(stage, func(t *testing.T) {
+			s := linkRetentionState(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			err := readyLinkedBrokers(ctx, s, linkReadyExecutor(t, s, nil), func(context.Context, string) (linkBrokerProbeResult, error) {
+				calls++
+				if stage == "cancel" {
+					cancel()
+				} else {
+					path := linkPrivateDirectory(s.RunID)
+					if stage == "public outcome" {
+						path = linkDirectory(s.RunID)
+					}
+					if e := os.Rename(path, path+".retained"); e != nil {
+						retainLinkReadyControlError(t, s, "prepare receipt failure", e)
+						t.Fatal("synthetic receipt-failure preparation unavailable")
+					}
+					if e := os.WriteFile(path, []byte("synthetic occupied receipt root"), 0600); e != nil {
+						t.Fatal("synthetic occupied receipt root unavailable")
+					}
+				}
+				c := linkBrokerConnectionResult{DialAttempts: 1, Connections: 1, CloseCalls: 1, CloseReturned: true, CloseSucceeded: true}
+				return linkBrokerProbeResult{Opened: true, Closed: true, Connection: c}, &linkBrokerEmptyEOF{connection: c}
+			})
+			if err == nil || calls != 1 || stage == "cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatal("EOF bypassed cancellation or mandatory receipt failure")
 			}
 		})
 	}

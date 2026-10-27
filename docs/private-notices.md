@@ -54,9 +54,11 @@ foreground/admission/sealing/upload path, then authenticated Mac recovery. The
 single real diagnostic returned200 with the pinned annotated tag reference;
 headers/body remain private. The historical403 reason remains unknown.
 
-The next source activation enables stock-link runtime and ordinary release
-verification on trusted feature pushes; those new runtime outcomes remain
-unmeasured. Metadata dispatch remains separate and cannot trigger release jobs.
+Trusted feature pushes enable stock-link runtime and ordinary release
+verification; the first linked setup at `bfc99057` failed before calibration. Its32
+original driver/fixture receipts were recovered and reviewed; failed cleanup
+and the unreached test remain nonpassing. The readiness repair awaits native
+validation, and no stock-proxy behavior has passed. Metadata dispatch remains separate and cannot trigger release jobs.
 Do not retry with alternate credentials, endpoints, source or cache. Neither
 metadata availability nor capsule recovery establishes Kaferry qualification.
 

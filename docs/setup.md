@@ -6,8 +6,7 @@ Selected execution is GitHub-hosted native Linux AMD64. Diagnostic capsules may
 use the explicit [encrypted-artifact exception](private-notices.md); the private
 key stays on the Mac. Local Go/verification/capture stops remain binding.
 Trusted feature pushes select fresh release verification, the existing narrow
-release cases and stock-link calibration. Native results for this activation
-remain pending; harness CI does not establish M2 or final qualification.
+release cases and stock-link calibration. The zero-byte/close-observation readiness repair awaits native validation; harness CI does not establish M2 or final qualification.
 
 ## Prepare and check the harness
 
@@ -90,8 +89,8 @@ repository and trusted feature-branch push. Metadata-only dispatch runs none of
 those jobs. Calibration checks the lab, not Kaferry.
 
 The source reactivates `m1` and `m2-release` after reviewed diagnostic retention
-and authenticated recovery at `e521c099`. The new activation still needs its own
-native CI/evidence review. The release matrix covers healthy PRESERVE/KEY,
+and authenticated recovery at `e521c099`. The activation run passed fresh verification and the four release cases; its
+linked setup failed. The readiness repair still needs native CI/evidence review. The release matrix covers healthy PRESERVE/KEY,
 source-startup and repeated-kill development cases with fresh artifact
 verification, restoration/cleanup and network-isolated offline rechecks after
 target removal. It supplies no missing timeout, threshold-drain or source-save
@@ -115,12 +114,14 @@ branch, not as an active setup prerequisite.
 
 The feature-push `links` job builds `cmd/link-calibration` and the campaign test
 binary with clean exact-head metadata. `LAB_LINK_RUNTIME` is enabled in source;
-its first actual stock-proxy outcome remains pending. The unit transport sample
+its first setup at `bfc99057` failed before the calibration child started. The unit transport sample
 is suppressed, leaving one linked ciphertext artifact for the run. Actual
 foreground return, waits/tree/stream/sink closure and matching sealed metadata
 admit only `notice.cms`, with seven-day retention and no overwrite. Failed
 calibration may retain complete evidence but remains failed. Public selected
-build/caller/admission facts have separate14-day retention. Recover each actual
+build/caller/admission facts have separate14-day retention. The32-original failed linked-v2 capsule was recovered and independently checked;
+that failure is preserved. The zero-byte/actual-close readiness repair awaits
+new native controls, and links now depends on their unit job. Recover each new
 linked capsule; metadata recovery does not prove stock-proxy behavior. Local Go
 and capture stops remain in force; hosted CI is separately authorized.
 
