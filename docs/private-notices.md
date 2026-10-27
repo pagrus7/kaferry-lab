@@ -48,24 +48,28 @@ The reviewed unit transport sample runs only while linked runtime is disabled,
 so it must not collide with a future linked capsule. Recover and independently
 check each new actual run; historical sample success is not new custody proof.
 
-The initial restored hosted increment keeps `LAB_LINK_RUNTIME: disabled`.
-The `m1` and `m2-release` jobs remain explicitly skipped while the original tag
-GET403 lacks privately retained provider response evidence. Harness controls and
-build-only links may run; this is partial CI, not final qualification CI. A
-future original-endpoint diagnostic attempt needs reviewed bounded encrypted
-retention first. Do not retry with alternate credentials, endpoints, source or
-cache. Existing source verification and capsule runtime are not proved by this
-policy change.
+The restored hosted path passed source/native review at `e521c099`. Its
+calibration used the real Go diagnostic's known setup failure through the same
+foreground/admission/sealing/upload path, then authenticated Mac recovery. The
+single real diagnostic returned200 with the pinned annotated tag reference;
+headers/body remain private. The historical403 reason remains unknown.
 
-## Metadata-only modes awaiting native validation
+The next source activation enables stock-link runtime and ordinary release
+verification on trusted feature pushes; those new runtime outcomes remain
+unmeasured. Metadata dispatch remains separate and cannot trigger release jobs.
+Do not retry with alternate credentials, endpoints, source or cache. Neither
+metadata availability nor capsule recovery establishes Kaferry qualification.
+
+## Metadata-only modes
 
 The source implements `workflow_dispatch` modes `normal`,
 `metadata-calibration` and `metadata-diagnostic` in the existing workflow, restricted
 to `codex/resilience-release-lab`. The default is `normal`, preserving the partial
-harness path. Dispatch availability and native behavior remain unmeasured.
-Frozen-source review, exact-head native evidence and private Mac recovery must
-precede selection of the diagnostic mode.
-The `m1` and `m2-release` jobs stay disabled in every mode.
+harness path. Dispatch and the actual Go/caller/capsule path were measured at `e521c099`; see
+[setup evidence](setup.md#metadata-only-calibration-and-diagnostic). Fresh
+exact-head source review, native evidence and private Mac recovery must precede
+any newly selected diagnostic. `m1` and `m2-release` require trusted pushes and
+cannot run in a metadata-only dispatch.
 
 `metadata-calibration` exercises the metadata producer/caller and existing
 encrypted transport using fixed synthetic observations and controlled child,
@@ -142,8 +146,8 @@ possibly transparently decompressed body are not wire octets. Every affected
 stream records completeness/overflow and observed-length limits; a truncated
 prefix cannot claim the unseen bytes. Each final serialized JSON receipt,
 including encoding expansion and newline, must fit the existing256KiB file cap.
-These are planned admission bounds, not measurements or proof that all retained
-causes fit. Overflow may leave incomplete evidence; missing or failed final
+These are source admission bounds. Native controls measure selected boundaries,
+not proof that every possible cause fits. Overflow may leave incomplete evidence; missing or failed final
 persistence cannot pass.
 
 Complete input, terminal child wait/reap, joined stream copies and sink

@@ -19,7 +19,7 @@ concurrency:
   group: harness-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 env:
-  LAB_LINK_RUNTIME: 'disabled'
+  LAB_LINK_RUNTIME: 'enabled'
 jobs:
   unit:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'normal' }}
@@ -346,8 +346,8 @@ jobs:
             test "$CAPTURE_COMPLETE" = true
           fi
   m1:
-    # Original product tag GET returned 403; bounded private response capture is required before another attempt.
-    if: false
+    # Published-artifact verification resumes only on this trusted ordinary push.
+    if: ${{ github.repository == 'pagrus7/kaferry-lab' && github.repository_id == '1432555755' && github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -521,8 +521,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   m2-release:
-    # Original product tag GET returned 403; bounded private response capture is required before another attempt.
-    if: false
+    # These four existing narrow cases do not complete the remaining M2 mechanisms.
+    if: ${{ github.repository == 'pagrus7/kaferry-lab' && github.repository_id == '1432555755' && github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:

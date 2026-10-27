@@ -5,8 +5,9 @@ M0 and M1 are accepted. M2 targeted release scenarios are in development; requir
 Selected execution is GitHub-hosted native Linux AMD64. Diagnostic capsules may
 use the explicit [encrypted-artifact exception](private-notices.md); the private
 key stays on the Mac. Local Go/verification/capture stops remain binding.
-Hosted release jobs are temporarily skipped pending original403response retention;
-partial harness CI does not establish M2 or final qualification.
+Trusted feature pushes select fresh release verification, the existing narrow
+release cases and stock-link calibration. Native results for this activation
+remain pending; harness CI does not establish M2 or final qualification.
 
 ## Prepare and check the harness
 
@@ -80,26 +81,27 @@ Kafka is pinned to `apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b27
 ## CI and retained evidence
 
 Harness CI selects GitHub-hosted native Linux AMD64 `ubuntu-24.04` runners.
-The current partial workflow runs unit/offline/controller controls, live observer
-calibration and fresh linked driver/test builds. Actions are commit-pinned, jobs
-have explicit time budgets and contents-read permission, and untrusted PR code
-receives no publishing credential. Calibration checks the lab, not Kaferry.
+Trusted feature pushes select unit/offline/controller controls, live observer
+calibration, fresh release verification, the existing four-case release matrix
+and stock-link calibration. Actions are commit-pinned, jobs have explicit time
+budgets and contents-read permission, and untrusted PR code receives no
+publishing credential. Release and link runtime jobs admit only the exact lab
+repository and trusted feature-branch push. Metadata-only dispatch runs none of
+those jobs. Calibration checks the lab, not Kaferry.
 
-The implemented `m1` verification/version and four-case `m2-release` development
-matrix are **currently skipped** with `if: false`. The original source-startup
-tag GET returned403 without retaining provider body/headers. Before another
-original-endpoint attempt, prepare bounded private response retention and
-reviewed encrypted recovery. Do not rerun using alternate credentials,
-endpoints, source or cache. Existing M1/M2 histories and coverage remain
-historical; a green partial workflow cannot establish current release execution
-or final qualification CI.
+The source reactivates `m1` and `m2-release` after reviewed diagnostic retention
+and authenticated recovery at `e521c099`. The new activation still needs its own
+native CI/evidence review. The release matrix covers healthy PRESERVE/KEY,
+source-startup and repeated-kill development cases with fresh artifact
+verification, restoration/cleanup and network-isolated offline rechecks after
+target removal. It supplies no missing timeout, threshold-drain or source-save
+witness, and is not a complete M2 campaign. Packet capture remains stopped.
 
-When enabled after that prerequisite, the existing release matrix covers healthy
-PRESERVE/KEY, source-startup and repeated-kill development cases with fresh
-artifact verification, restoration/cleanup and network-isolated offline
-rechecks after target removal. It does not attempt packet capture; the recorded
-capture denial remains UNSUPPORTED. All required M2 variants and native AMD64
-campaign/publication remain unfinished requirements.
+The historical source-startup tag GET403 discarded its body/headers; its cause
+remains unknown. The separate one-shot diagnostic returned200 with the expected
+annotated tag reference; it made no tag-target, release-asset or provenance
+request. New ordinary verification must complete all those checks itself. No
+alternate credentials, endpoint, source or cache replaces a failed request.
 
 The user now authorizes bounded encrypted diagnostic artifacts from hosted
 synthetic runs. Plaintext originals and the private recipient key remain
@@ -112,39 +114,35 @@ failure limits. The old private-filesystem route is retained in its explicit
 branch, not as an active setup prerequisite.
 
 The feature-push `links` job builds `cmd/link-calibration` and the campaign test
-binary with clean exact-head metadata. `LAB_LINK_RUNTIME` remains disabled.
-Before live runtime is selected, frozen source review, native controls and
-actual authenticated Mac recovery are required. When selected, actual
+binary with clean exact-head metadata. `LAB_LINK_RUNTIME` is enabled in source;
+its first actual stock-proxy outcome remains pending. The unit transport sample
+is suppressed, leaving one linked ciphertext artifact for the run. Actual
 foreground return, waits/tree/stream/sink closure and matching sealed metadata
-admit only the fixed `notice.cms` upload, with seven-day retention and no
-overwrite. Failed calibration may retain complete evidence but remains failed;
-missing proof/retention never passes. Public selected build/caller/admission
-facts have their separate existing14-day retention. No new native runtime or
-unknown-capsule recovery is established by these instructions. Local Go and
-capture stops remain in force; hosted CI is separately authorized.
+admit only `notice.cms`, with seven-day retention and no overwrite. Failed
+calibration may retain complete evidence but remains failed. Public selected
+build/caller/admission facts have separate14-day retention. Recover each actual
+linked capsule; metadata recovery does not prove stock-proxy behavior. Local Go
+and capture stops remain in force; hosted CI is separately authorized.
 
-Feature pushes are the working premerge trigger. Read-only API preflight found
-no CI workflow file on default branch `main`; manual dispatch has not been
-established for this branch. The source-defined narrow dispatch below does not establish
-manual or scheduled M6 campaigns and makes no default-branch or repository-setting
-change by itself.
+Feature pushes remain the premerge release trigger. Narrow metadata-only manual
+dispatch is now measured on the feature branch. It does not establish manual or
+scheduled M6 campaigns or change the default branch.
 
-## Metadata-only calibration and diagnostic awaiting validation
+## Metadata-only calibration and diagnostic
 
 The source implements `workflow_dispatch` on
 `codex/resilience-release-lab`, with modes `normal` (default),
-`metadata-calibration` and `metadata-diagnostic`. The dispatch path is awaiting
-frozen-source review and native validation. No operational command is supplied
-until the workflow and admission path are reviewed and available; select the
-exact reviewed head and verify the resulting run identity. Local Go/build/verification/capture
+`metadata-calibration` and `metadata-diagnostic`. The exact-head source and native path at `e521c099` passed independent review.
+Select a reviewed head, verify the resulting run identity and obtain fresh
+calibration/recovery evidence before any newly selected diagnostic. Local Go/build/verification/capture
 stops remain in force; separately authorized hosted CI supplies future native
 Linux AMD64 evidence.
 
 The `normal` mode keeps the current partial harness behavior. The two
 metadata-only modes suppress ordinary unit-sample and linked-runtime ciphertext
 uploads so the existing retriever sees exactly one encrypted notice artifact
-across the whole run. `m1` and `m2-release` remain disabled in every mode; a
-successful diagnostic does not turn them on.
+across the whole run. `m1` and `m2-release` require trusted pushes and cannot run in either
+metadata mode; a successful diagnostic does not trigger them.
 
 Select `metadata-calibration` first, after frozen-source review. It must use fixed
 synthetic responses and controlled native child/stream/sink failures without
@@ -185,5 +183,16 @@ errors at32KiB. Final serialized JSON receipts must fit256KiB each. Client-decod
 headers and potentially decompressed body bytes are not wire octets; completeness,
 overflow and observed-length facts must stay explicit. See
 [encrypted diagnostics](private-notices.md) for closure, recovery and sink-loss
-limits. No new request, native run, key operation or recovery is established by
-the source implementation.
+limits. Measured diagnostic and recovery evidence is listed below; none is Kaferry
+qualification.
+
+The reviewed native calibration at
+[run40509295871](https://github.com/pagrus7/kaferry-lab/actions/runs/40509295871)
+passed17Go,27mocked caller,9admission and10native child cases, followed by
+Mac recovery of the actual three-file setup-failure capsule. Two native cleanup
+cases inject deadline/cancellation triggers and measure actual TERM/KILL/reap.
+The reviewed single diagnostic at
+[run40510578859](https://github.com/pagrus7/kaferry-lab/actions/runs/40510578859)
+returned200 and the pinned annotated tag reference; all three receipts were
+privately recovered after API whole-ZIP authentication. That observation does
+not explain the historical403 or verify the complete release.

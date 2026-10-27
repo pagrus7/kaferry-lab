@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +51,51 @@ def step(workflow, name):
     begin = '      - name: ' + name + '\n'
     assert workflow.count(begin) == 1
     return workflow.split(begin, 1)[1].split('      - name: ', 1)[0]
+
+
+def job_before_steps(workflow, name):
+    return workflow.split('  ' + name + ':\n', 1)[1].split('    steps:', 1)[0]
+
+
+def release_conditions(workflow, job):
+    # Only the four literal equality conjuncts used by these two trusted jobs
+    # are accepted. This is not a general GitHub expression evaluator.
+    body = job_before_steps(workflow, job)
+    guards = re.findall(r'^    if: \$\{\{ (.*?) \}\}$', body, re.M)
+    assert len(guards) == 1
+    clauses = guards[0].split(' && ')
+    assert len(clauses) == 4
+    conditions = {}
+    for clause in clauses:
+        match = re.fullmatch(r"(github\.[a-z_]+) == '([^']+)'", clause)
+        assert match and match[1] not in conditions
+        conditions[match[1]] = match[2]
+    return conditions
+
+
+def activation_policy(workflow):
+    assert workflow.count("  LAB_LINK_RUNTIME: 'enabled'\n") == 1
+    assert "  LAB_LINK_RUNTIME: 'disabled'\n" not in workflow
+    expected = {'github.repository': 'pagrus7/kaferry-lab', 'github.repository_id': '1432555755',
+                'github.event_name': 'push', 'github.ref': 'refs/heads/codex/resilience-release-lab'}
+    for job in ('m1', 'm2-release'):
+        assert release_conditions(workflow, job) == expected
+        assert '\n    runs-on: ubuntu-24.04\n' in job_before_steps(workflow, job)
+    # The old known sample must not create a second encrypted artifact while
+    # links owns the sole normal-run ciphertext. Both creation and upload stop.
+    common = "github.event_name == 'push' && github.ref == 'refs/heads/codex/resilience-release-lab' && env.LAB_LINK_RUNTIME != 'enabled'"
+    expected_guards = {
+        'Create reviewed fixed synthetic transport sample': common,
+        'Upload only reviewed synthetic transport ciphertext': common + " && steps.reviewed-notice-sample.outputs.complete == 'true'",
+    }
+    for name, guard in expected_guards.items():
+        selected = step(workflow, name)
+        actual = re.findall(r'^        if: \$\{\{ (.*?) \}\}$', selected, re.M)
+        # The following unnamed public unit artifact has a different if syntax.
+        assert actual == [guard]
+    normal = "    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'normal' }}"
+    for job in ('unit', 'observer'):
+        assert job_before_steps(workflow, job).splitlines().count(normal) == 1, 'normal mode isolation missing for ' + job
 
 
 def literal_metadata():
@@ -290,12 +336,49 @@ def main(attempt, helper):
             rejected = True
         assert rejected
         rows.append({'case': name, 'passed': True})
-    assert "  LAB_LINK_RUNTIME: 'disabled'\n" in workflow
     assert 'private_preflight' not in workflow and 'private_store' not in workflow
-    for job in ['m1', 'm2-release']:
-        job_body = workflow.split('  ' + job + ':\n', 1)[1].split('    steps:', 1)[0]
-        assert '\n    if: false\n' in job_body and '\n    runs-on: ubuntu-24.04\n' in job_body
-    rows.append({'case': 'exact-ciphertext-only-upload-public-paths-and-disabled-release-jobs', 'passed': True})
+    activation_policy(workflow)
+    rows.append({'case': 'exact-ciphertext-paths-and-trusted-push-release-activation', 'passed': True})
+    trusted = {'github.repository': 'pagrus7/kaferry-lab', 'github.repository_id': '1432555755',
+               'github.event_name': 'push', 'github.ref': 'refs/heads/codex/resilience-release-lab'}
+    contexts = [('trusted-push', {}, True), ('pull-request', {'github.event_name': 'pull_request'}, False),
+                ('manual-dispatch', {'github.event_name': 'workflow_dispatch'}, False),
+                ('wrong-repository', {'github.repository': 'foreign/kaferry-lab'}, False),
+                ('wrong-repository-id', {'github.repository_id': '1'}, False),
+                ('missing-branch', {'github.ref': ''}, False),
+                ('different-branch', {'github.ref': 'refs/heads/unreviewed'}, False)]
+    for job in ('m1', 'm2-release'):
+        conditions = release_conditions(workflow, job)
+        for name, changes, accepted in contexts:
+            context = dict(trusted, **changes)
+            admitted = all(context.get(key) == value for key, value in conditions.items())
+            assert admitted == accepted
+            rows.append({'case': job + '-job-context-' + name, 'passed': True})
+    # Mutate the actual job/step guards, not a parallel hand-written predicate.
+    for job in ('m1', 'm2-release'):
+        body = job_before_steps(workflow, job)
+        for name, changed in (
+                ('pull-request-job-admission', body.replace("github.event_name == 'push'", "github.event_name == 'pull_request'")),
+                ('wrong-repository-job-admission', body.replace("github.repository == 'pagrus7/kaferry-lab'", "github.repository == 'foreign/kaferry-lab'")),
+                ('missing-branch-job-admission', body.replace(" && github.ref == 'refs/heads/codex/resilience-release-lab'", ''))):
+            assert changed != body
+            candidate = workflow.replace(body, changed, 1)
+            try:
+                activation_policy(candidate)
+            except AssertionError:
+                rows.append({'case': job + '-mutation-reject-' + name, 'passed': True})
+            else:
+                raise AssertionError('weakened release activation was accepted')
+    for name in ('Create reviewed fixed synthetic transport sample', 'Upload only reviewed synthetic transport ciphertext'):
+        original = step(workflow, name)
+        changed = original.replace(" && env.LAB_LINK_RUNTIME != 'enabled'", '')
+        assert changed != original
+        try:
+            activation_policy(workflow.replace(original, changed, 1))
+        except AssertionError:
+            rows.append({'case': 'second-unit-ciphertext-rejected-' + name, 'passed': True})
+        else:
+            raise AssertionError('second unit ciphertext route was accepted')
     report = {'namespace': 'calibration/encrypted-notice-upload-controls', 'controls': rows, 'all_passed': True,
               'release_qualified': False, 'workflow_sha256': digest(workflow_raw),
               'admission_sha256': digest(admission.encode()), 'caller_proof_sha256': digest(proof_code.encode()),
