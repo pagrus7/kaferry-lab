@@ -2,7 +2,7 @@
 
 `scripts/run-hardware-calibration.py` implements a small direct-child caller for
 the four existing synthetic GDB wrappers at hardware source
-`82f176f7a6020a0e688f12af49f60a1626ba2ef1`. It uses private regular output files
+`60c6ff9ec50b8e239f6b80bbbd08d43170321b0d`. It uses private regular output files
 and `Popen.wait`. It does not build, install, run Git, invoke GDB directly, copy
 evidence, select a released Kaferry image or run multiple cases. The hardware
 controller continues to own inner process identities, exact original/adopted
@@ -41,14 +41,22 @@ It never issued exec-run or launched an inferior; no hardware hit or permission
 denial was observed. GDB stderr was empty. Actual GDB wait, closed channels,
 scoped absence checks and independent failed-evidence readback support bounded
 prelaunch reconciliation. Overall failure and the incomplete snapshot remain
-unchanged. The selected notification handling needs repair before another run.
+unchanged. The selected notification handling was repaired at60c6ff9, with
+finite synthetic presentation and both-order cleanup/context controls. That
+source has all three independent reviews, a passing targeted native check
+(.813s) and a passing full hardware-branch check (16.372s); actual GDB cases
+were skipped, and this older branch has separate AMD64-only skips. A new
+native build produced freshly bound synthetic binaries, copied and verified
+privately on the Mac. The current caller pins those exact new bytes and both
+presentation source files. These are source/manual development observations,
+not passing runtime controls or integrated native CI.
 Three cancellation cases remain unrun; no next case starts automatically. No calibration or passing harness control qualifies
 Kaferry or completes M2.
 
 ## Exact inputs before launch
 
-The coordinator prepares a fresh reviewed82f checkout per case at
-`/home/labrunner/kaferry-hardware-82f176f-RUN/source`. The caller checks canonical
+The coordinator prepares a fresh reviewed60c6ff9 checkout per case at
+`/home/labrunner/kaferry-hardware-60c6ff9-RUN/source`. The caller checks canonical
 paths, actual uid501 and Linux/aarch64 uname for the selected owned guest
 `kaferry-lab-arm64-20261026`, kernel
 `7.0.14-orbstack-00380-ga7e0a2dc9535`. OrbStack machine ID
