@@ -265,6 +265,54 @@ func knownKafkaInputs(label string, count int) ([]kafkaInput, error) {
 // readback; calling Publish again cannot retry ambiguous deliveries. Cancellation
 // during a synchronous send is reported after retaining that send's outcome.
 func (k *kafkaRun) Publish(ctx context.Context, warmup bool) ([]kafkaProduceAttempt, error) {
+	var inputs []kafkaInput
+	for _, input := range k.Inputs {
+		if input.Warmup == warmup {
+			inputs = append(inputs, input)
+		}
+	}
+	return k.publishInputs(ctx, inputs)
+}
+
+// PublishSaveProbe attempts only input-0003, the first non-warmup fixture.
+// Exactly three ordered warmup attempts must precede it; the caller must retain
+// their independent readback and establish the live primary separately. A
+// repeated call refuses even if the first probe outcome was ambiguous.
+func (k *kafkaRun) PublishSaveProbe(ctx context.Context) ([]kafkaProduceAttempt, error) {
+	inputs, err := k.saveProbeInputs(3)
+	if err != nil {
+		return nil, err
+	}
+	return k.publishInputs(ctx, inputs[3:4])
+}
+
+// saveProbeInputs admits only the known declaration and its exact ordered
+// attempt prefix. It never filters unknown or later attempts out of a phase.
+func (k *kafkaRun) saveProbeInputs(attemptCount int) ([]kafkaInput, error) {
+	if len(k.Inputs) < 8 || len(k.Inputs) > 1024 || k.Preparation.Source.Partitions != 3 || k.Preparation.Source.ClusterID == "" || k.Preparation.Source.Topic == "" || k.Preparation.Source.TopicID == "" {
+		return nil, errors.New("save probe requires bounded known input on three source partitions")
+	}
+	for i, input := range k.Inputs {
+		if input.ID != fmt.Sprintf("input-%04d", i) || input.Warmup != (i < 3) || input.Partition != int32(i%3) {
+			return nil, errors.New("save probe requires the original ordered known input declaration")
+		}
+	}
+	probe := k.Inputs[3]
+	if probe.LogicalID != nil || probe.Record.Key != (identity.NullableBytes{Null: true}) || probe.Record.Value != (identity.NullableBytes{Null: true}) || len(probe.Record.Headers) != 0 || probe.Record.TimestampMS == nil || *probe.Record.TimestampMS != kafkaFixtureTimestampMS || probe.Record.TimestampKind != "create_time" {
+		return nil, errors.New("save probe requires the unchanged null-key null-value byte fixture")
+	}
+	if len(k.Attempts) != attemptCount {
+		return nil, errors.New("save probe requires the exact preceding publication stage")
+	}
+	for i, attempt := range k.Attempts {
+		if attempt.InputID != k.Inputs[i].ID || (attempt.Offset == nil && attempt.Error == "") || (attempt.Offset != nil && (*attempt.Offset < 0 || attempt.Error != "")) {
+			return nil, errors.New("save probe has missing, unknown, repeated, misordered or inconsistent input attempts")
+		}
+	}
+	return k.Inputs[:4], nil
+}
+
+func (k *kafkaRun) publishInputs(ctx context.Context, inputs []kafkaInput) ([]kafkaProduceAttempt, error) {
 	if err := kafkaBounded(ctx); err != nil {
 		return nil, err
 	}
@@ -277,8 +325,8 @@ func (k *kafkaRun) Publish(ctx context.Context, warmup bool) ([]kafkaProduceAtte
 	}
 	var attempts []kafkaProduceAttempt
 	var errs []error
-	for _, input := range k.Inputs {
-		if input.Warmup != warmup || already[input.ID] {
+	for _, input := range inputs {
+		if already[input.ID] {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

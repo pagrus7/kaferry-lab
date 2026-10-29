@@ -87,6 +87,31 @@ for delivery/failed-threshold mechanism acceptance; counts, timers and logs do
 not establish ACK receipt or drain-path entry. Historical evidence-v2 semantics
 and all required M2 live observations remain unchanged.
 
+### M2 periodic source-save staging preparation
+
+Before adding this preparation, the tagged v0.6.0 source comparison was reread:
+`tests/compat/fault_test.go::TestBlockingCommitAcrossBrokerOutage` invokes the
+production adapter's `Save` directly during broker pause and after recovery;
+`internal/franz/recovery_test.go::TestProductionCopyClosesBlockedStartupAndFetchRequests`
+intercepts startup/fetch requests, including initial commit; and
+`internal/copy/runner_test.go::TestRevocationCommitFailures` distinguishes
+recoverable revocation handling from a failing periodic commit in process.
+This is an additional observation for the existing source-save scenario, not a
+new scenario or duplicate product fault: [source-save staging](source-save-staging.md)
+adds a single `input-0003` publication and exact four-input independent readback
+between the existing three-warmup and full finite-input stages. The eventual
+release-process experiment must retain the same primary while independently
+establishing newly visible but unsaved output and a current periodic-save origin.
+The source verifier scans all three partitions and rejects future/extra input,
+loss, changed nullable bytes, routing/provenance errors and ambiguous absence;
+its four-entry ledger cannot claim full96 membership. Synthetic producer/scan
+controls exercise these refusals and the no-second-attempt rule for an ambiguous
+probe send. The functions are implemented but unwired; author formatting/diff
+checks do not establish test success. Existing evidence-version3 admission still
+supports only warmup3/full96. The controller still reports the periodic-save
+mechanism unsupported; original-parent custody, three-stage evidence, reached
+failure, recovery, final full membership and M2 qualification remain incomplete.
+
 ### M2 executable bindings
 
 `lab scenario RUN_ID CASE ROUTING NEW_OUT_DIR` runs a partial case against the
