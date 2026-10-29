@@ -9,15 +9,28 @@ controller continues to own inner process identities, exact original/adopted
 waits, hardware hits, guard checks, internal channel EOFs and writer closure.
 
 After the launch-attempt repair,16 portable controls ran on the Mac:15 passed
-and the Linux-only FSIZE control skipped. The earlier acc5eb4 native full check
-passed all15 then-current controls, including actual FSIZE; the repaired head
-still needs its native check and independent reviews. Inert originals remain
-private locally.
-Native ordinary hardware controls passed previously with all four
-GDB cases skipped. The separate GDB source audit permits narrow source-reviewed
-fields, not runtime capability. Source reviews, native caller controls, an inert local
-custody/readback demonstration and the four actual GDB cases remain required.
-No calibration or passing harness control qualifies Kaferry or completes M2.
+and the Linux-only FSIZE control skipped. The native e703432 full check passed
+all16 controls, including actual FSIZE, and the Go checks in55.169s. Independent
+source reviews passed. An inert normal-shaped capture and an actual finite
+FSIZE failure were retained and independently read back on the Mac before the
+first debugger attempt. These controls do not execute the real specimen.
+
+The first actual normal attempt, `hardware-native-20261029-normal`, failed
+before an inferior launch. GDB emitted a startup index-cache path warning
+because its explicit environment omitted HOME and XDG_CACHE_HOME. The reader
+also rejected `cmd-param-changed` notifications from the supplied startup
+settings. Exact stderr/MI, waits and the incomplete snapshot remain private
+locally. The original controller cleanup verdict remains failed. Actual waits,
+no exec-run command in the retained trace and scoped absence checks for the
+three recorded PIDs support no remaining live process reconciliation for this
+prelaunch failure; they do not establish hardware capability.
+
+No permission denial was observed in that attempt. A prospective repair must
+retain fatal stderr handling and strict notification validation, use the actual
+existing default home without cache redirects, and obtain fresh controls and
+reviews before a new run. Three cancellation cases remain unrun; no next case
+starts automatically. No calibration or passing harness control qualifies
+Kaferry or completes M2.
 
 ## Exact inputs before launch
 
@@ -86,7 +99,7 @@ After frozen review and prerequisite admission, the one command would be:
 /usr/bin/python3 .cache/run-hardware-calibration.py RUN INPUT_SHA256
 ```
 
-This is an implemented interface, not a recorded runtime execution. Cwd is the
+This implemented interface was used by the failed first normal attempt above. Cwd is the
 fresh hardware checkout. Input hash selection is concrete per case; the
 coordinator supplies the already authorized fixed inputs without another
 approval workflow. The only child argv is the fixed native test image with
