@@ -2,7 +2,7 @@
 
 `scripts/run-hardware-calibration.py` implements a small direct-child caller for
 the four existing synthetic GDB wrappers at hardware source
-`60c6ff9ec50b8e239f6b80bbbd08d43170321b0d`. It uses private regular output files
+`eb0fd52c54b7d696d305eba1130e76b37c0000aa`. It uses private regular output files
 and `Popen.wait`. It does not build, install, run Git, invoke GDB directly, copy
 evidence, select a released Kaferry image or run multiple cases. The hardware
 controller continues to own inner process identities, exact original/adopted
@@ -47,16 +47,35 @@ source has all three independent reviews, a passing targeted native check
 (.813s) and a passing full hardware-branch check (16.372s); actual GDB cases
 were skipped, and this older branch has separate AMD64-only skips. A new
 native build produced freshly bound synthetic binaries, copied and verified
-privately on the Mac. The current caller pins those exact new bytes and both
+privately on the Mac. Caller sourcec0f53c3 pinned that60 build and both
 presentation source files. These are source/manual development observations,
 not passing runtime controls or integrated native CI.
 Three cancellation cases remain unrun; no next case starts automatically. No calibration or passing harness control qualifies
 Kaferry or completes M2.
 
+The subsequent normal-d attempt reached all24 guard readbacks, both signal
+policies, all three catchpoint creations and the verified parent launch. GDB
+reported parent exit02 before READY; no marker or hardware hit was reached.
+The controller rejected that nonzero stop and retained ECHILD during cleanup.
+Its actual GDB SIGKILL9 wait and the four later scoped PID absences cannot
+replace the missing parent wait, EOF or cleanup success. All31 available
+originals were privately hash-verified on the Mac; the snapshot stays incomplete.
+
+Exact stock GDB source explains the launch defect: `exec-arguments` forwards raw
+CLI text, and its no-shell path preserves individually added quotes. The specimen
+therefore receives a literal quoted mode instead of `parent`. This is a
+source-derived argument explanation, not a live argv observation or an inferred
+wait. Sourceeb0fd52 emits six admitted raw ASCII tokens while keeping the shell
+disabled and other MI-argument quoting unchanged. It has three independent
+source reviews, targeted native checks passing in.913s and a full hardware-branch
+check passing in15.737s; live GDB tests remain skipped. Fresh normal-e binaries
+are bound below. The new actual attempt remains unrun until final caller checks,
+reviews, filled inputs and custody admission are complete.
+
 ## Exact inputs before launch
 
-The coordinator prepares a fresh reviewed60c6ff9 checkout per case at
-`/home/labrunner/kaferry-hardware-60c6ff9-RUN/source`. The caller checks canonical
+The coordinator prepares a fresh reviewedeb0fd52 checkout per case at
+`/home/labrunner/kaferry-hardware-eb0fd52-RUN/source`. The caller checks canonical
 paths, actual uid501 and Linux/aarch64 uname for the selected owned guest
 `kaferry-lab-arm64-20261026`, kernel
 `7.0.14-orbstack-00380-ga7e0a2dc9535`. OrbStack machine ID
@@ -65,17 +84,17 @@ the actual external ownership descriptor. Uname does not prove that control-plan
 ID, physical hardware or kernel-source provenance.
 
 Already-built inputs live under `.cache/hardware-build/`. The coordinator's
-new native Go1.26 build occurred once in the normal-d source root; its exact
+new native Go1.26 build occurred once in the normal-e source root; its exact
 artifact bytes may be hash-verified private copies in the other three fresh
 checkouts. Do not call those copies fresh builds: rebuilding at a different
 absolute path may change DWARF/build bytes. The fixed artifacts are:
 
 | File | Bytes | SHA256 |
 |---|---:|---|
-|`hardwarecalibration.test`|6427341|`6f314ee66348e2c881d9f3bf2997a41a394b3061e0ea54aab174c674157c5105`|
-|`hardware-wait-specimen`|3993058|`f5c95e886f4120cbbd828820d519a702047eb3a133b6222d6e18697ad7ce2522`|
+|`hardwarecalibration.test`|6563426|`5a2596d8ee0979ec01bfa5bff205f0c53bcca490740312ca58908c380fbd8215`|
+|`hardware-wait-specimen`|3993074|`6251a303fdeb16a86c6eb87e5b09b12e8e66fa037760b8d0f1e40754377b9684`|
 
-The caller pins these whole bytes and twelve60c6ff9 source/build-input files. It also
+The caller pins these whole bytes and twelveeb0fd52 source/build-input files. It also
 pins the whole `build-binding.json` receipt, caller script, existing GDB plan
 and independently issued source-audit receipt. The build receipt's checked
 fields are SourceHead, GoVersion=go1.26.0, GOOS=linux, GOARCH=arm64,
