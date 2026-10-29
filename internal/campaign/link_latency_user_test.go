@@ -16,6 +16,44 @@ import (
 	"github.com/pagrus7/kaferry-lab/internal/fixture"
 )
 
+func TestLinkCalibrationConstructorReservationCauseStaysPrivate(t *testing.T) {
+	// Inject the available reservation cause; no filesystem is filled and no
+	// actual platform refusal is claimed. The selected primary sink already exists.
+	_, sink := driverProofFiles(t)
+	original := &os.PathError{Op: "mkdir", Path: "PRIVATE-synthetic-operation-reservation", Err: syscall.ENOSPC}
+	cause := &linkCalibrationCleanupError{constructorCause: original}
+	if strings.Contains(cause.Error(), "PRIVATE") || cause.retentionComplete || cause.dockerFailure {
+		t.Fatal("constructor cause was exposed or classified as a retained command")
+	}
+	if !retainLinkCalibrationError(sink, []string{"latency_resource_cleanup"}, cause) {
+		t.Fatal("primary sink failed to retain available constructor cause")
+	}
+	if err := closeLinkCalibrationSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(sink.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt struct {
+		Errors []struct {
+			Cause    []byte
+			Complete bool
+		}
+	}
+	if json.Unmarshal(body, &receipt) != nil || len(receipt.Errors) != 1 || !receipt.Errors[0].Complete || !bytes.Equal(receipt.Errors[0].Cause, []byte(original.Error())) {
+		t.Fatal("reservation path/errno bytes were lost from the primary sink")
+	}
+	before := append([]byte(nil), body...)
+	if retainLinkCalibrationError(sink, []string{"later"}, cause) {
+		t.Fatal("closed primary sink was retried successfully")
+	}
+	after, err := os.ReadFile(sink.Name())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("failed primary route replaced its retained bytes", err)
+	}
+}
+
 func TestLinkLatencyInitialCreateUsesExactPrivateFileOwner(t *testing.T) {
 	s, p, _, _, _ := driverLatencyCleanupFixture(t, true)
 	info, err := os.Stat(p.ConfigPath)

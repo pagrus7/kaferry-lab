@@ -8,8 +8,51 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestLinkCalibrationExecutorConstructorCauseUsesPrimarySink(t *testing.T) {
+	s, _, _, _, _ := driverLatencyCleanupFixture(t, true)
+	_, sink := driverProofFiles(t) // selected before the failed constructor
+	root := filepath.Join(".cache", "fixtures-private", s.RunID+"-links")
+	before, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := cleanupLinkCalibrationLatency(context.Background(), s, nil)
+	if err == nil || got.Attempted || got.Resolved || got.Removed || got.LogsRetained || strings.Contains(err.Error(), "linked Docker executor missing") {
+		t.Fatal("constructor failure claimed work, success or exposed its private cause", got, err)
+	}
+	if !retainLinkCalibrationError(sink, []string{"latency_resource_cleanup", s.RunID}, err) {
+		t.Fatal("existing primary sink lost constructor failure")
+	}
+	if err = closeLinkCalibrationSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(sink.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt struct {
+		Errors []struct {
+			Cause    []byte
+			Complete bool
+		}
+	}
+	if json.Unmarshal(body, &receipt) != nil || len(receipt.Errors) != 1 || !receipt.Errors[0].Complete || string(receipt.Errors[0].Cause) != "linked Docker executor missing" {
+		t.Fatal("exact constructor cause was not retained once in the preallocated primary sink")
+	}
+	after, err := os.ReadDir(root)
+	if err != nil || len(after) != len(before) {
+		t.Fatal("constructor failure tried another fixture operation or notice sink", err)
+	}
+	for i := range before {
+		if before[i].Name() != after[i].Name() {
+			t.Fatal("constructor failure changed fixture evidence routes")
+		}
+	}
+}
 
 // These controls deliberately use only APIs present before the repair, so the
 // same control source can demonstrate the frozen baseline's missing guards.

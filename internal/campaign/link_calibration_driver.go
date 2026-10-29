@@ -599,6 +599,10 @@ func retainLinkCalibrationError(sink *linkCalibrationSink, action []string, caus
 	if sink.finalized || sink.broken {
 		return false
 	}
+	var cleanup *linkCalibrationCleanupError
+	if errors.As(cause, &cleanup) && cleanup.constructorCause != nil {
+		cause = cleanup.constructorCause
+	}
 	raw := []byte(cause.Error())
 	complete := len(raw) <= 64<<10
 	if !complete {

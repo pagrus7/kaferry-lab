@@ -30,6 +30,7 @@ type linkCalibrationCleanupError struct {
 	reference         string
 	retentionComplete bool
 	dockerFailure     bool
+	constructorCause  error // available only to the driver's preallocated private sink
 }
 
 func (e *linkCalibrationCleanupError) Error() string {
@@ -165,7 +166,9 @@ func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDock
 	}
 	run, e := fixture.LinkExecutor(s, rawDocker)
 	if e != nil {
-		return r, &linkCalibrationCleanupError{dockerFailure: true}
+		// No command wrapper exists yet. Carry the available cause to the
+		// existing primary driver sink; do not try another fixture reservation.
+		return r, &linkCalibrationCleanupError{constructorCause: e}
 	}
 	r.Attempted = true
 	r.ContainerID, r.Absent, r.LogsRetained, err = cleanupLinkCalibrationLatencyContainer(ctx, s, plan, id, run)

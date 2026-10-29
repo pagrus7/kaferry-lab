@@ -169,3 +169,12 @@ follows. Captured logs are diagnostics, never worker ACK or readiness proof.
 Targeted host controls passed, including wrong-user rejection and failure
 retention; fresh frozen reviews and native execution of this increment remain
 required. Earlier stopped histories remain unchanged.
+
+Executor-construction errors precede the command wrapper and have no command
+receipt. Cleanup carries their available cause privately to the driver's
+already reserved primary file. The public error remains generic, cleanup stays
+incomplete, and no new fixture reservation, command or alternate diagnostic
+write follows a constructor failure. A nil-executor negative-before control
+reproduced the lost cause; the repaired primary-sink control retains it once.
+A separately injected reservation ENOSPC cause tests accounting only and makes
+no actual storage-fault claim.
