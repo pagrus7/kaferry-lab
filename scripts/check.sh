@@ -6,6 +6,7 @@ if [ -n "$unformatted" ]; then
   printf '%s\n' "$unformatted" >&2
   exit 1
 fi
+python3 scripts/test-hardware-calibration-caller.py -v
 go vet ./...
 mkdir -p .cache/unit
 go test -v -race -covermode=atomic -coverpkg=./... -coverprofile=.cache/unit/coverage.out -count=1 -timeout=3m ./...
