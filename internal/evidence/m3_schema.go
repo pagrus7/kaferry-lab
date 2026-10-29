@@ -2,8 +2,9 @@ package evidence
 
 import "github.com/pagrus7/kaferry-lab/internal/identity"
 
-// Evidence version 3 prepares the two finite input phases of M2. It is not
-// roadmap milestone M3 and supplies no delivery/threshold path observation.
+// Evidence version 3 prepares fixed finite M2 input phases: two for delivery,
+// three for source-save. It supplies no current fault-mechanism observation
+// and is not roadmap milestone M3.
 const PhaseSchemaVersion = 3
 const PhaseCheckerVersion = "evidence-v3"
 
@@ -39,7 +40,7 @@ type PhaseManifest struct {
 // A publication receipt alone creates no delivery obligation. Its exact
 // declared-ledger digest must subsequently match an independent source scan.
 type PhasePublication struct {
-	PhaseID      string     `json:"phase_id"` // warmup or full only
+	PhaseID      string     `json:"phase_id"` // warmup/full; save-probe only for source-save
 	WorkerID     string     `json:"worker_id"`
 	Interval     M2Interval `json:"interval"`
 	LedgerSHA256 string     `json:"ledger_sha256"`
@@ -79,7 +80,7 @@ type PhaseOutput struct {
 
 type PhaseAudit struct {
 	PhaseID     string  `json:"phase_id"`
-	WorkerID    string  `json:"worker_id"` // warmup witness names the owned primary; empty for settled full audits
+	WorkerID    string  `json:"worker_id"` // warmup/save-probe names the owned primary; empty for full audits
 	Observation M2Audit `json:"observation"`
 }
 

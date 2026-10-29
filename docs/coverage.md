@@ -106,11 +106,14 @@ The source verifier scans all three partitions and rejects future/extra input,
 loss, changed nullable bytes, routing/provenance errors and ambiguous absence;
 its four-entry ledger cannot claim full96 membership. Synthetic producer/scan
 controls exercise these refusals and the no-second-attempt rule for an ambiguous
-probe send. The functions are implemented but unwired; author formatting/diff
-checks do not establish test success. Existing evidence-version3 admission still
-supports only warmup3/full96. The controller still reports the periodic-save
-mechanism unsupported; original-parent custody, three-stage evidence, reached
-failure, recovery, final full membership and M2 qualification remain incomplete.
+probe send. The functions are implemented but unwired. The new fixed schema3
+source-save checker adds independent3/4/96 ledgers and a separate sampled
+visible-unsaved audit gate, followed by same-primary observed STOP, full
+readback, CONT and settled recovery checks. This adds an observation absent
+from the tagged direct-Save test; it does not identify a current periodic call.
+Complete data remains Unsupported/mechanism_unobserved, with violations retaining
+precedence. Original-parent custody, actual release evidence, reached failure,
+recovery, final full membership and M2 qualification remain incomplete.
 
 ### M2 executable bindings
 
