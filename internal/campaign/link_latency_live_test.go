@@ -102,6 +102,12 @@ func validateLinkLatencyMapping(raw []byte, mapping linkLatencyProxy, want []lin
 		return r
 	}
 	r.Components["mapping_fields"] = exactLatencyFields(fields, "name", "listen", "upstream", "enabled", "toxics")
+	// Pinned Toxiproxy2.12.0 also serializes its exported diagnostic Logger
+	// as {}. Admit only that exact extra member; it proves no mapping fact.
+	if exactLatencyFields(fields, "name", "listen", "upstream", "enabled", "toxics", "Logger") {
+		var logger map[string]json.RawMessage
+		r.Components["mapping_fields"] = json.Unmarshal(fields["Logger"], &logger) == nil && logger != nil && len(logger) == 0
+	}
 	toxics, present := fields["toxics"]
 	r.ToxicsFieldPresent, r.Components["toxics_present"] = present, present
 	var got linkLatencyProxy

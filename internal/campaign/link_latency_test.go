@@ -116,6 +116,12 @@ func TestLatencyMappingExplicitEmptyCollectionsAndMissingFacts(t *testing.T) {
 		accepted            bool
 	}{
 		{"empty array", literalLatencyEmptyMapping, "", true},
+		{"stock empty logger", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"Logger":{},"toxics":[]`, 1), "", true},
+		{"null logger", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"Logger":null,"toxics":[]`, 1), "mapping_fields", false},
+		{"array logger", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"Logger":[],"toxics":[]`, 1), "mapping_fields", false},
+		{"nonempty logger", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"Logger":{"unknown":true},"toxics":[]`, 1), "mapping_fields", false},
+		{"unknown mapping field", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"unknown":{},"toxics":[]`, 1), "mapping_fields", false},
+		{"logger and unknown field", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"Logger":{},"unknown":{},"toxics":[]`, 1), "mapping_fields", false},
 		{"explicit null", strings.Replace(literalLatencyEmptyMapping, `"toxics":[]`, `"toxics":null`, 1), "", true},
 		{"missing toxics", strings.Replace(literalLatencyEmptyMapping, `,"toxics":[]`, ``, 1), "toxics_present", false},
 		{"false enabled", strings.Replace(literalLatencyEmptyMapping, `"enabled":true`, `"enabled":false`, 1), "enabled", false},

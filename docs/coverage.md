@@ -194,7 +194,12 @@ file to its owner's explicit nonroot container UID:GID and captures bounded
 container logs before normal or lost-child removal. Wrong/missing/root-user,
 rm-before-logs and capture-refusal controls test those measurement preconditions;
 they add no Kaferry failure scenario. Empty mappings remain fatal with no retry
-or API-population fallback. Full native campaign custody/CI remains incomplete.
+or API-population fallback. A subsequent native run loaded the exact startup
+mapping and retained logs before removal, then rejected its otherwise matching
+wire response solely for the stock empty `Logger` diagnostic member. Literal
+controls distinguish that optional empty object from malformed/nonempty values
+and other unknown fields; all required route/toxic facts remain mandatory.
+Neither delay was reached in that run. Full native campaign custody/CI remains incomplete.
 Neither source nor these controls establish M3 release coverage or measured
 delay, pending-response behavior, timeout, drain or save paths.
 

@@ -178,3 +178,14 @@ write follows a constructor failure. A nil-executor negative-before control
 reproduced the lost cause; the repaired primary-sink control retains it once.
 A separately injected reservation ENOSPC cause tests accounting only and makes
 no actual storage-fault claim.
+
+At source de52517, a fresh native development run loaded one proxy from the
+private startup file and retained its logs before removal. The initial mapping
+response contained the exact expected routing and toxic facts plus `Logger:{}`;
+only the checker's exact-member predicate failed. The
+[pinned Toxiproxy2.12.0 source](https://raw.githubusercontent.com/Shopify/toxiproxy/3ccd6a79cbc6c6a72b884d295ad314b75cdf3962/proxy.go)
+exports that diagnostic field. The next source accepts this one optional empty
+object, rejects null/non-object/nonempty values and other unknown members, and
+keeps every required mapping/toxic check. No delay was applied in that failed
+run, and its retained verdict is unchanged. Fresh native calibration remains
+required; neither startup logs nor the Logger field proves an ACK.
