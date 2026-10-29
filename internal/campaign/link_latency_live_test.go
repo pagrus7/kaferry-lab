@@ -1276,8 +1276,9 @@ func pendingLinkLatencyRemoval(ctx context.Context, state fixture.State, origin 
 }
 
 // Return observations, never an inferred Kafka ACK or a claim that removal
-// necessarily flushes. An early read during the HTTP interval is distinguished
-// from one after its completion; a delayed read reports no observed early byte.
+// necessarily flushes. RemovalStartNS/EndNS enclose the removal callback,
+// including API receipt retention. HTTP return has a separate API journal time;
+// this classification distinguishes callback placement, not HTTP placement.
 func linkLatencyPendingEffect(v linkLatencyPendingRemoval) (string, error) {
 	e := v.Exchange
 	if !v.ReaderReaped || !linkLatencyServerWriteObserved(e) || e.ServerWriteEndNS <= 0 ||

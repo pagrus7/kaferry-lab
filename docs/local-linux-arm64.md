@@ -189,3 +189,17 @@ object, rejects null/non-object/nonempty values and other unknown members, and
 keeps every required mapping/toxic check. No delay was applied in that failed
 run, and its retained verdict is unchanged. Fresh native calibration remains
 required; neither startup logs nor the Logger field proves an ACK.
+
+The subsequent a6175b1 development run reached the400ms directional and20s
+downstream controls, removal and recovery on existing/new sockets. Independent
+review checked the retained exact-nonce exchanges, selected mapping readbacks,
+actual process waits, log-before-removal custody and empty owned-resource
+inventory. This accepts the bounded generic TCP calibration, not a Kaferry
+timeout, drain, save or ACK observation. Its raw evidence stays private locally.
+
+The pending response's first byte arrived51,459ns after the recorded HTTP DELETE
+return, within the larger removal callback envelope that also includes evidence
+retention. `RemovalStartNS`/`RemovalEndNS` and the original effect label describe
+that callback envelope. The API journal has the separate HTTP timing. Do not
+describe this observation as a byte arriving during the HTTP request or infer
+queued-byte disposition from it. No historical record is rewritten.

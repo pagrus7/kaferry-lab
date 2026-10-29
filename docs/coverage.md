@@ -184,24 +184,28 @@ measurement beyond the tagged reply gate: generic TCP timing cannot identify
 Kafka response types or worker ACK receipt. The dedicated driver adds bounded
 subreaper/anchor wait controls and run-journal-based cleanup of the extra nonce
 container; these calibrate evidence ownership, not a Kaferry scenario.
-These delay controls have no accepted reached native execution. Accepted b61/run
-40236814641 built specimens with runtime disabled. The later native c2ab5fc
-development run passed healthy topology but failed the initial mapping read with
-`{}` before applying either delay. Exact raw mapping and cleanup evidence are
-retained privately on the Mac; startup logs were not selected before removal,
-so its runtime cause is unknown. The next fresh-run source binds the0600 startup
-file to its owner's explicit nonroot container UID:GID and captures bounded
-container logs before normal or lost-child removal. Wrong/missing/root-user,
-rm-before-logs and capture-refusal controls test those measurement preconditions;
-they add no Kaferry failure scenario. Empty mappings remain fatal with no retry
-or API-population fallback. A subsequent native run loaded the exact startup
-mapping and retained logs before removal, then rejected its otherwise matching
-wire response solely for the stock empty `Logger` diagnostic member. Literal
-controls distinguish that optional empty object from malformed/nonempty values
-and other unknown fields; all required route/toxic facts remain mandatory.
-Neither delay was reached in that run. Full native campaign custody/CI remains incomplete.
-Neither source nor these controls establish M3 release coverage or measured
-delay, pending-response behavior, timeout, drain or save paths.
+At source a6175b1, native run `links-native-20261028e` passed independent
+review of the bounded generic TCP calibration:19 unique32-byte nonce exchanges
+covered400ms upstream/downstream delay,20s downstream delay, existing/new
+sockets, toxicity zero, removal and recovery. Exact mapping readbacks, private
+startup logs before removal, original process waits and an empty owned-resource
+inventory were retained locally. Full native campaign custody/CI integration
+and all Kaferry mechanism observations remain incomplete.
+
+Earlier c2ab5fc and de52517 histories remain failed. The former returned `{}`
+without retained startup logs; its cause is unknown. The latter loaded the
+startup mapping but the checker rejected the stock empty `Logger` member.
+The first-create0600 file-owner binding, bounded log retention and narrow
+optional-empty-Logger allowance have separate failure controls; empty mappings,
+unknown fields and malformed Logger values remain fatal without retry or API
+population. These are measurement preconditions, not new Kaferry scenarios.
+
+For the pending response in run E, the first byte arrived51,459ns after measured
+HTTP return, within the larger removal callback/evidence-retention envelope.
+The separate API journal timing must accompany the callback interval; neither
+identifies queued-byte disposition. Generic TCP calibration establishes no
+Kafka response type, worker ACK, timeout, threshold drain, source save or M3
+release coverage.
 
 ## M4 — Archive storage and replay
 
