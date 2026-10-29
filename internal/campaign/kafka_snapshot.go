@@ -37,11 +37,6 @@ func (k *kafkaRun) VerifyInputs(ctx context.Context, warmupOnly bool) (v kafkaIn
 	if err != nil {
 		return v, err
 	}
-	for p := range v.Snapshot.Before {
-		if v.Snapshot.Before[p] != v.Snapshot.After[p] {
-			return v, errors.New("source bounds changed while verifying finite input")
-		}
-	}
 	var inputs []kafkaInput
 	ids := map[string]bool{}
 	for _, input := range k.Inputs {
@@ -56,7 +51,42 @@ func (k *kafkaRun) VerifyInputs(ctx context.Context, warmupOnly bool) (v kafkaIn
 			attempts = append(attempts, attempt)
 		}
 	}
-	v.Ledger, err = kafkaSourceLedger(k.Preparation.Source, k.Preparation.Destination, k.Routing, inputs, attempts, v.Snapshot.Scans)
+	return k.verifyInputSnapshot(v.Snapshot, inputs, attempts)
+}
+
+// VerifySaveProbeInputs independently reads all three source partitions and
+// admits exactly the three warmups plus input-0003. Complete means this four-
+// record publication stage is verified; it does not establish the full ledger,
+// visible destination output, an unsaved position or a periodic-save origin.
+func (k *kafkaRun) VerifySaveProbeInputs(ctx context.Context) (v kafkaInputVerification, err error) {
+	inputs, err := k.saveProbeInputs(4)
+	if err != nil {
+		return v, err
+	}
+	v.Snapshot, err = snapshotKafkaTopic(ctx, k.sourceAdmin, k.sourceObserver, k.Preparation.Source)
+	if err != nil {
+		return v, err
+	}
+	return k.verifyInputSnapshot(v.Snapshot, inputs, k.Attempts)
+}
+
+func (k *kafkaRun) verifyInputSnapshot(snapshot kafkaScanSnapshot, inputs []kafkaInput, attempts []kafkaProduceAttempt) (v kafkaInputVerification, err error) {
+	v.Snapshot = snapshot
+	source := k.Preparation.Source
+	if snapshot.Error != "" || snapshot.Topic.ClusterID != source.ClusterID || snapshot.Topic.Topic != source.Topic || snapshot.Topic.TopicID != source.TopicID || snapshot.Topic.Partitions != source.Partitions || len(snapshot.Before) != int(source.Partitions) || len(snapshot.After) != int(source.Partitions) || len(snapshot.Scans) != int(source.Partitions) {
+		return v, errors.New("incomplete or foreign source snapshot")
+	}
+	for p, before := range snapshot.Before {
+		if before != snapshot.After[p] || before.Oldest != 0 || before.LastStable != before.HighWatermark || before.HighWatermark < 0 || before.HighWatermark > kafkaSnapshotMaxEnd {
+			return v, errors.New("source bounds changed or are not finite retained stable input")
+		}
+	}
+	for _, scan := range snapshot.Scans {
+		if scan.Partition < 0 || scan.Partition >= source.Partitions || scan.Start != 0 || scan.End != snapshot.Before[scan.Partition].HighWatermark || scan.Boundary != snapshot.Before[scan.Partition] {
+			return v, errors.New("source scan does not cover its complete sampled partition")
+		}
+	}
+	v.Ledger, err = kafkaSourceLedger(source, k.Preparation.Destination, k.Routing, inputs, attempts, snapshot.Scans)
 	v.Complete = err == nil
 	return v, err
 }
