@@ -8,9 +8,11 @@ evidence, select a released Kaferry image or run multiple cases. The hardware
 controller continues to own inner process identities, exact original/adopted
 waits, hardware hits, guard checks, internal channel EOFs and writer closure.
 
-The portable caller controls passed on the Mac:15 tests ran with the Linux-only
-FSIZE control skipped. Their inert process originals remain private locally.
-Native Linux FSIZE measurement and independent source reviews remain required.
+After the launch-attempt repair,16 portable controls ran on the Mac:15 passed
+and the Linux-only FSIZE control skipped. The earlier acc5eb4 native full check
+passed all15 then-current controls, including actual FSIZE; the repaired head
+still needs its native check and independent reviews. Inert originals remain
+private locally.
 Native ordinary hardware controls passed previously with all four
 GDB cases skipped. The separate GDB source audit permits narrow source-reviewed
 fields, not runtime capability. Source reviews, native caller controls, an inert local
@@ -135,8 +137,13 @@ succeeded. Only normal sets NormalCalibrationComplete=true. Each cancellation
 sets CancellationControlDetected=true and **ExperimentPassing=false**. All
 results set ReleaseQualified=false. Any refusal, timeout, missing witness,
 write/sync/close failure or inventory error returns2/INCOMPLETE; the script
-never starts the next case. Before a child starts there are no new inner
-resources to reconcile; after a failed wrapper, inner cleanup is unresolved.
+never starts the next case. Before launch is attempted there are no new inner resources to reconcile.
+`LaunchAttempted` is set before Popen, while `Started` records its successful
+return with a child handle. A constructor exception cannot prove no launch
+occurred: that failure remains incomplete with inner cleanup unresolved, no
+known PID invented and no second spawn/signal/wait route. A preflight refusal
+before the attempt is distinct. Failed wrappers also leave inner cleanup
+unresolved.
 
 Available exceptions and ordered read/close tracebacks remain in the existing
 primary error file, up to64KiB per record/256KiB total. Overflow preserves an
@@ -152,9 +159,11 @@ are optional only for early-cancel. Regular files retain their existing
 per-file bounds and a6MiB aggregate bound, stable descriptor/path identity,
 owner0600/single-link and whole-file hashes. FIFOs contribute metadata only;
 they are never opened/copied. Unexpected/missing/link/symlink members refuse.
-The caller's known files are inventoried only after their writers close, with
-the primary sink closed last. Final inventory has OwnFinalCloseProven=false;
-it does not hash or attest its own last close.
+The primary sink closes after the ordinary stream, input, wait and result
+writers. The terminal inventory then hashes those closed files and writes its
+own file, with no remaining diagnostic route for a failure at that boundary.
+Final inventory has OwnFinalCloseProven=false; it does not hash or attest its
+own last close. Actual external return/status and Mac readback remain mandatory.
 
 The existing bounded snapshot/Mac readback route must explicitly include these
 fixed roots and pinned inputs/binaries, using artifact bounds separate from
@@ -171,7 +180,7 @@ hardware selection. Snapshot/readback is not implemented by this script.
 
 `scripts/test-hardware-calibration-caller.py` uses visibly inert Python helpers
 through ordinary private function seams; it never runs Go/GDB/the real specimen
-or issues audit/plan inputs. The targeted command passed on the Mac with14
+or issues audit/plan inputs. The repaired targeted command passed on the Mac with15
 controls passing and the Linux-only FSIZE control skipped:
 
 ```text

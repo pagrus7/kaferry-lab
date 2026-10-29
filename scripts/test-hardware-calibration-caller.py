@@ -260,6 +260,34 @@ class CallerControls(unittest.TestCase):
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 
+    def test_constructor_failure_retains_launch_uncertainty_without_another_route(self):
+        original = OSError(errno.EAGAIN, "INERT constructor refusal after attempt")
+        binding = ({"Case": "normal", "RunID": self.run, "Purpose": "INERT UNIT SEAM ONLY"}, [])
+        with mock.patch.object(caller, "native_platform"), mock.patch.object(caller, "lower_limit"), \
+                mock.patch.object(caller, "bind_inputs", return_value=binding), \
+                mock.patch.object(caller.subprocess, "Popen", side_effect=original) as spawn, \
+                mock.patch.object(caller, "hardware_inventory") as inventory:
+            self.assertEqual(caller.run_attempt(self.root, self.run, "a" * 64), 2)
+        spawn.assert_called_once()
+        inventory.assert_not_called()
+        path = self.cache / "hardware-outer-private" / self.run
+        wait = json.loads((path / "wait.json").read_bytes())
+        self.assertTrue(wait.get("LaunchAttempted"))
+        self.assertFalse(wait["Started"] or wait["Waited"])
+        self.assertIsNone(wait["PID"])
+        result = json.loads((path / "result.json").read_bytes())
+        self.assertTrue(result["Incomplete"] and result["InnerCleanupUnresolved"])
+        errors = [json.loads(line) for line in (path / "errors.jsonl").read_bytes().splitlines()]
+        self.assertEqual(sum(row["Exception"] == repr(original) for row in errors), 1)
+        self.assertEqual((path / "inventory.json").read_bytes(), b"")
+        self.run = "inert-preflight-no-launch"
+        with mock.patch.object(caller, "native_platform", side_effect=ValueError("INERT preflight refusal")), \
+                mock.patch.object(caller.subprocess, "Popen") as spawn:
+            self.assertEqual(caller.run_attempt(self.root, self.run, "a" * 64), 2)
+        spawn.assert_not_called()
+        result = json.loads((self.cache / "hardware-outer-private" / self.run / "result.json").read_bytes())
+        self.assertFalse(result["InnerCleanupUnresolved"])
+
     def test_primary_failure_and_output_close_failure_cannot_complete_or_switch_sink(self):
         attempts = []
         def refuse(f, raw):

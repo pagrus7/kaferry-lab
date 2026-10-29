@@ -183,9 +183,10 @@ def native_platform():
 
 
 def wait_child(argv, root, env, out, err, record, budget=90):
-    result = {"Started": False, "Waited": False, "CallerPID": os.getpid(), "PID": None, "ReturnCode": None, "Timeout": False}
+    result = {"LaunchAttempted": False, "Started": False, "Waited": False, "CallerPID": os.getpid(), "PID": None, "ReturnCode": None, "Timeout": False}
     child, origin = None, time.monotonic_ns()
     try:
+        result["LaunchAttempted"] = True
         child = subprocess.Popen(argv, cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True)
         result.update(Started=True, PID=child.pid)
         result["ReturnCode"] = child.wait(timeout=budget)
@@ -241,7 +242,7 @@ def run_attempt(root, run, input_sha):
     attempt = root / ".cache/hardware-outer-private" / run
     attempt.mkdir(mode=0o700)
     directory(attempt)
-    files, state, result, code, wait = {}, {"Error": False, "Stopped": False, "Bytes": 0}, {}, 2, {"Started": False}
+    files, state, result, code, wait = {}, {"Error": False, "Stopped": False, "Bytes": 0}, {}, 2, {"LaunchAttempted": False, "Started": False}
     def record(error):
         state["Error"] = True
         if state["Stopped"] or "errors.jsonl" not in files:
@@ -293,7 +294,7 @@ def run_attempt(root, run, input_sha):
             if name in files:
                 close_file(files.pop(name), record)
         if state["Error"]:
-            code, result = 2, {"RunID": run, "ReleaseQualified": False, "Incomplete": True, "InnerCleanupUnresolved": wait["Started"]}
+            code, result = 2, {"RunID": run, "ReleaseQualified": False, "Incomplete": True, "InnerCleanupUnresolved": wait["LaunchAttempted"]}
         try:
             if "result.json" in files:
                 write_file(files["result.json"], encode(result))
