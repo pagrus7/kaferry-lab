@@ -275,6 +275,11 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 			if kind == "" {
 				kind = linkContainerReadbackKind(id, args)
 			}
+			if kind == "" && len(args) == 6 && args[0] == "container" && args[1] == "logs" && args[2] == "--tail" && args[3] == "64" && args[4] == "--timestamps" && linkID(args[5]) {
+				// This classifies capture only. The campaign must independently
+				// prove exact immutable ownership before requesting these logs.
+				kind = "linked-docker-container-log-readback"
+			}
 			if kind != "" {
 				// A successful command says nothing about the caller's later semantic
 				// admission. Preserve exact selected originals before that caller sees them.
@@ -440,4 +445,31 @@ func stopLinkOperation(id, operation string) error {
 	}
 	_, err := writeLinkPrivate(root, "STOPPED.json", struct{ RunID, Operation, Status string }{id, operation, "mandatory operation/evidence incomplete; no further Docker action permitted"})
 	return err
+}
+
+// StopLinkEvidence latches an incomplete non-command evidence operation. It
+// requires this run's existing private authority; it creates no reservation,
+// alternate sink or permission to touch a Docker resource.
+func StopLinkEvidence(s State, operation string) error {
+	if err := validateLinkPlan(s); err != nil {
+		return err
+	}
+	root := linkPrivateDirectory(s.RunID)
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return errors.New("existing private stop authority unavailable")
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || native.Uid != uint32(os.Geteuid()) {
+		return errors.New("private stop authority owner mismatch")
+	}
+	body, err := readImagePrivateFile(filepath.Join(root, "PRIVATE.json"), 4096)
+	var reservation struct{ RunID, Classification string }
+	if err != nil || json.Unmarshal(body, &reservation) != nil || reservation.RunID != s.RunID || reservation.Classification != "PRIVATE RAW EVIDENCE" {
+		return errors.New("existing private stop reservation unavailable")
+	}
+	if len(operation) == 0 || len(operation) > 1024 {
+		return errors.New("private stop operation exceeds fixed bound")
+	}
+	return stopLinkOperation(s.RunID, operation)
 }

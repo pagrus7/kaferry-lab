@@ -321,17 +321,30 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 	if err != nil {
 		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "Abs"}, nil, err, false))
 	}
-	if err = os.WriteFile(configPath, config, 0600); err != nil {
+	configFile, openErr := os.OpenFile(configPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	if openErr != nil {
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "OpenFile", configPath}, nil, openErr, false))
+	}
+	n, writeErr := configFile.Write(config)
+	if writeErr == nil && n != len(config) {
+		writeErr = io.ErrShortWrite
+	}
+	err = errors.Join(writeErr, configFile.Sync(), configFile.Close())
+	if err != nil {
 		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "WriteFile", configPath}, nil, err, false))
 	}
+	configIdentity, err := readLinkLatencyStartup(configPath, config)
+	if err != nil {
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_configuration", "ValidateOwnerBytes", configPath}, nil, err, false))
+	}
 	command := []string{"-host=127.0.0.1", "-port=" + apiPort, "-config=/calibration.json"}
+	resourcePlan := linkCalibrationLatencyPlan{RunID: state.RunID, Name: name, Role: "latency-calibration", Image: proxyImage, ExpectedImageID: proxyImageID, Network: "host", API: api, Endpoint: endpoint, Upstream: upstream, ConfigPath: configPath, User: configIdentity.user(), ConfigFile: configIdentity, Command: command, MemoryBytes: 128 << 20, NanoCPUs: 500000000, PIDs: 64, LogBytes: 1 << 20}
 	mustRetain("resource_plan", struct {
-		RunID, Name, Role, Image, ExpectedImageID, Network, API, Endpoint, Upstream, ConfigPath              string
-		Command                                                                                              []string
-		BudgetSeconds, WorkSeconds, MemoryBytes, NanoCPUs, PIDs, LogBytes, Connections, Requests, NonceBytes int64
-		LatencyMS, GranularityMS, DelayedMinimumMS, PromptMaximumMS, RequestBoundMS                          int
-		LongLatencyMS, LongMinimumMS, LongRequestBoundMS, PendingTriggerMaximumMS                            int
-	}{state.RunID, name, "latency-calibration", proxyImage, proxyImageID, "host", api, endpoint, upstream, configPath, command, 90, 70, 128 << 20, 500000000, 64, 1 << 20, 10, 19, 32, 400, 100, 300, 200, 4000, 20000, 19900, 25000, 1000})
+		linkCalibrationLatencyPlan
+		BudgetSeconds, WorkSeconds, Connections, Requests, NonceBytes, CleanupDockerCommands int64
+		LatencyMS, GranularityMS, DelayedMinimumMS, PromptMaximumMS, RequestBoundMS          int
+		LongLatencyMS, LongMinimumMS, LongRequestBoundMS, PendingTriggerMaximumMS            int
+	}{resourcePlan, 90, 70, 10, 19, 32, 3, 400, 100, 300, 200, 4000, 20000, 19900, 25000, 1000})
 	t.Log("STOCK PROXY ECHO CALIBRATION ONLY; selected synthetic facts: " + filepath.Join(directory, "observations.jsonl"))
 
 	serverEvents := make(chan linkLatencyServerReceipt, 16)
@@ -377,56 +390,15 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		var facts struct {
-			ID, Name, Image         string
-			ImageManifestDescriptor *fixture.ImageManifestIdentity
-			Config                  struct {
-				Image           string
-				Labels          map[string]string
-				Cmd, Entrypoint []string
-			}
-			State      struct{ Running, Paused *bool }
-			HostConfig struct {
-				NetworkMode                 string
-				Memory, NanoCPUs, PidsLimit int64
-				Privileged, ReadonlyRootfs  bool
-				PortBindings                map[string]json.RawMessage
-				LogConfig                   struct {
-					Type   string
-					Config map[string]string
-				}
-			}
-			Mounts []struct {
-				Type, Source, Destination string
-				RW                        bool
-			}
-		}
-		if len(raw) > 64<<10 || json.Unmarshal(raw, &facts) != nil {
-			return errors.New("calibration ownership inspection malformed or oversized")
-		}
-		if err := fixture.ValidateLinkContainerImage(state, true, facts.Image, facts.ImageManifestDescriptor); err != nil {
+		facts, err := inspectLinkCalibrationLatencyContainer(raw, state, resourcePlan, containerID, running)
+		if err != nil {
 			return err
-		}
-		if !linkLatencyContainerID(facts.ID) || facts.Name != "/"+name || containerID != "" && facts.ID != containerID || facts.Image != proxyImageID || facts.Config.Image != proxyImage || facts.Config.Labels[brokerOwnerLabel] != state.RunID || facts.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
-			return errors.New("calibration immutable ownership/image mismatch")
-		}
-		if !reflect.DeepEqual(facts.Config.Cmd, command) || !reflect.DeepEqual(facts.Config.Entrypoint, []string{"/toxiproxy"}) || facts.State.Running == nil || facts.State.Paused == nil || *facts.State.Paused || running && !*facts.State.Running {
-			return errors.New("calibration command or required process state mismatch")
-		}
-		if facts.HostConfig.NetworkMode != "host" || facts.HostConfig.Memory != 128<<20 || facts.HostConfig.NanoCPUs != 500000000 || facts.HostConfig.PidsLimit != 64 || facts.HostConfig.Privileged || !facts.HostConfig.ReadonlyRootfs || len(facts.HostConfig.PortBindings) != 0 {
-			return errors.New("calibration network/resource configuration mismatch")
-		}
-		if facts.HostConfig.LogConfig.Type != "json-file" || facts.HostConfig.LogConfig.Config["max-size"] != "1m" || facts.HostConfig.LogConfig.Config["max-file"] != "1" {
-			return errors.New("calibration container log bound mismatch")
-		}
-		if len(facts.Mounts) != 1 || facts.Mounts[0].Type != "bind" || facts.Mounts[0].Source != configPath || facts.Mounts[0].Destination != "/calibration.json" || facts.Mounts[0].RW {
-			return errors.New("calibration exact read-only startup configuration mismatch")
 		}
 		containerID = facts.ID
 		if cause := retain("container_ownership", struct {
-			ID, Name, ImageID string
-			Running           bool
-		}{facts.ID, name, facts.Image, *facts.State.Running}); cause != nil {
+			ID, Name, ImageID, User string
+			Running                 bool
+		}{facts.ID, name, facts.Image, facts.Config.User, *facts.State.Running}); cause != nil {
 			return linkLatencyRetainFailure(state, []string{"latency_journal", "Persist", "container_ownership", journal.Name()}, nil, cause, false)
 		}
 		return nil
@@ -462,11 +434,13 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		if created {
 			status = "unresolved container and any active toxic; no unsafe cleanup attempted"
 			if !dockerStopped {
-				if err := inspect(cleanup, false); err != nil {
-					t.Errorf("calibration cleanup ownership failed: %v", err)
-				} else if _, err := docker(cleanup, "container", "rm", "-f", containerID); err != nil {
-					t.Errorf("calibration cleanup removal failed: %v", err)
+				if actual, absent, _, err := cleanupLinkCalibrationLatencyContainer(cleanup, state, resourcePlan, containerID, docker); err != nil {
+					dockerStopped = true
+					t.Errorf("calibration cleanup failed: %v", err)
+				} else if absent {
+					status = "exact planned calibration container absent"
 				} else {
+					containerID = actual
 					status = "exact owned container removed; its toxic chains destroyed"
 				}
 			} else {
@@ -481,7 +455,11 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		}
 	})
 	mustRetain("create_intent", struct{ Name string }{name})
-	raw, err := docker(ctx, "container", "create", "--name", name, "--network", "host", "--platform", platform, "--pull=never", "--memory", "128m", "--cpus", "0.5", "--pids-limit", "64", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1", "--label", brokerOwnerLabel+"="+state.RunID, "--label", "io.kaferry-lab.role=latency-calibration", "--mount", "type=bind,src="+configPath+",dst=/calibration.json,readonly", proxyImage, command[0], command[1], command[2])
+	createArgs, err := linkLatencyCreateArguments(state, resourcePlan, platform)
+	if err != nil {
+		t.Fatal(linkLatencyRetainFailure(state, []string{"latency_create", "ValidateInitialUser"}, nil, err, false))
+	}
+	raw, err := docker(ctx, createArgs...)
 	created = true // even a failed create may have left its planned owned resource
 	if err != nil {
 		t.Fatal(err) // LinkExecutor returns only a safe private-receipt reference.

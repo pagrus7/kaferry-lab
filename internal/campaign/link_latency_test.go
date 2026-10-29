@@ -26,7 +26,11 @@ import (
 
 func latencyNoticeState(t *testing.T) fixture.State {
 	t.Helper()
-	t.Chdir(t.TempDir())
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(directory)
 	id, prefix := "latency-test", "kaferry-lab-latency-test"
 	s := fixture.State{RunID: id, DockerPlatform: "linux/amd64", Image: fixture.Image, Network: prefix, Containers: []string{prefix + "-source", prefix + "-dest"}, ClusterIDs: []string{"source-cluster", "dest-cluster"}, Source: "127.0.0.1:19092", Destination: "127.0.0.1:19093", WorkerSource: "127.0.0.1:29092", WorkerDestination: "127.0.0.1:29093", Proxy: &fixture.ProxyState{Image: fixture.ProxyImage, Container: prefix + "-links", API: "127.0.0.1:18474", Source: fixture.ProxyMapping{Name: prefix + "-source-worker", Listen: "0.0.0.0:8666", Upstream: prefix + "-source:29092"}, Destination: fixture.ProxyMapping{Name: prefix + "-dest-worker", Listen: "0.0.0.0:8667", Upstream: prefix + "-dest:29092"}}}
 	for _, path := range []string{filepath.Join(".cache", "fixtures", id+"-links"), filepath.Join(".cache", "fixtures-private", id+"-links")} {
@@ -34,7 +38,7 @@ func latencyNoticeState(t *testing.T) fixture.State {
 			t.Fatal(err)
 		}
 	}
-	body, _ := json.Marshal(struct{ RunID string }{id})
+	body, _ := json.Marshal(struct{ RunID, Classification, Publication string }{id, "PRIVATE RAW EVIDENCE", "withhold pending explicit redaction review"})
 	if err := os.WriteFile(filepath.Join(".cache", "fixtures-private", id+"-links", "PRIVATE.json"), body, 0600); err != nil {
 		t.Fatal(err)
 	}

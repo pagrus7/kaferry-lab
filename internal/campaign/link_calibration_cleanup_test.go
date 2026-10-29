@@ -22,6 +22,9 @@ func driverLatencyCleanupFixture(t *testing.T, withID bool) (fixture.State, link
 func driverLatencyCleanupFixtureForPlatform(t *testing.T, withID bool, platform string) (fixture.State, linkCalibrationLatencyPlan, string, []byte, string) {
 	t.Helper()
 	s := latencyNoticeState(t)
+	if os.Geteuid() == 0 {
+		t.Skip("latency startup ownership requires a nonroot file owner")
+	}
 	s.DockerPlatform = platform
 	s.Proxy.ImageID = "sha256:3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa"
 	if platform == "linux/arm64" {
@@ -41,7 +44,14 @@ func driverLatencyCleanupFixtureForPlatform(t *testing.T, withID bool, platform 
 	if e != nil {
 		t.Fatal(e)
 	}
-	p := linkCalibrationLatencyPlan{RunID: s.RunID, Name: name, Role: "latency-calibration", Image: s.Proxy.Image, ExpectedImageID: s.Proxy.ImageID, Network: "host", API: "127.0.0.1:18475", Endpoint: "127.0.0.1:18476", Upstream: "127.0.0.1:18477", ConfigPath: config, Command: []string{"-host=127.0.0.1", "-port=18475", "-config=/calibration.json"}, MemoryBytes: 128 << 20, NanoCPUs: 500000000, PIDs: 64, LogBytes: 1 << 20}
+	if e = os.WriteFile(config, []byte("[]"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	configIdentity, e := readLinkLatencyStartup(config, []byte("[]"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := linkCalibrationLatencyPlan{RunID: s.RunID, Name: name, Role: "latency-calibration", Image: s.Proxy.Image, ExpectedImageID: s.Proxy.ImageID, Network: "host", API: "127.0.0.1:18475", Endpoint: "127.0.0.1:18476", Upstream: "127.0.0.1:18477", ConfigPath: config, User: configIdentity.user(), ConfigFile: configIdentity, Command: []string{"-host=127.0.0.1", "-port=18475", "-config=/calibration.json"}, MemoryBytes: 128 << 20, NanoCPUs: 500000000, PIDs: 64, LogBytes: 1 << 20}
 	id := strings.Repeat("4", 64)
 	var rows []byte
 	appendRow := func(kind string, fact any) {
@@ -58,7 +68,7 @@ func driverLatencyCleanupFixtureForPlatform(t *testing.T, withID bool, platform 
 	appendRow("resource_plan", p)
 	appendRow("create_intent", struct{ Name string }{name})
 	if withID {
-		appendRow("container_ownership", struct{ ID, Name, ImageID string }{id, name, s.Proxy.ImageID})
+		appendRow("container_ownership", struct{ ID, Name, ImageID, User string }{id, name, s.Proxy.ImageID, p.User})
 	}
 	// A proved active toxic is precisely the state t.Cleanup can fail to restore.
 	appendRow("api", struct{ Method, Path string }{"POST", "/proxies/echo/toxics"})
@@ -68,9 +78,9 @@ func driverLatencyCleanupFixtureForPlatform(t *testing.T, withID bool, platform 
 	}
 	facts := map[string]any{
 		"ID": id, "Name": "/" + name, "Image": s.Proxy.ImageID,
-		"Config":     map[string]any{"Image": s.Proxy.Image, "Labels": map[string]string{brokerOwnerLabel: s.RunID, "io.kaferry-lab.role": "latency-calibration"}, "Cmd": p.Command, "Entrypoint": []string{"/toxiproxy"}},
+		"Config":     map[string]any{"Image": s.Proxy.Image, "User": p.User, "Labels": map[string]string{brokerOwnerLabel: s.RunID, "io.kaferry-lab.role": "latency-calibration"}, "Cmd": p.Command, "Entrypoint": []string{"/toxiproxy"}},
 		"State":      map[string]bool{"Running": true, "Paused": false},
-		"HostConfig": map[string]any{"NetworkMode": "host", "Memory": 128 << 20, "NanoCPUs": 500000000, "PidsLimit": 64, "Privileged": false, "ReadonlyRootfs": true, "PortBindings": map[string]any{}, "LogConfig": map[string]any{"Type": "json-file", "Config": map[string]string{"max-size": "1m", "max-file": "1"}}},
+		"HostConfig": map[string]any{"NetworkMode": "host", "CapAdd": []string{}, "CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges"}, "Memory": 128 << 20, "NanoCPUs": 500000000, "PidsLimit": 64, "Privileged": false, "ReadonlyRootfs": true, "PortBindings": map[string]any{}, "LogConfig": map[string]any{"Type": "json-file", "Config": map[string]string{"max-size": "1m", "max-file": "1"}}},
 		"Mounts":     []map[string]any{{"Type": "bind", "Source": config, "Destination": "/calibration.json", "RW": false}},
 	}
 	raw, e := json.Marshal(facts)
@@ -98,6 +108,9 @@ func TestLinkCalibrationRestoresExactLatencyContainerAfterLostTestCleanup(t *tes
 							}
 							return raw, nil
 						}
+						if len(args) == 6 && args[0] == "container" && args[1] == "logs" && args[2] == "--tail" && args[3] == "64" && args[4] == "--timestamps" && args[5] == id {
+							return []byte("synthetic startup log"), nil
+						}
 						if len(args) != 4 || args[0] != "container" || args[1] != "rm" || args[2] != "-f" || args[3] != id {
 							t.Fatal("cleanup removed by name/label or changed route")
 						}
@@ -111,7 +124,7 @@ func TestLinkCalibrationRestoresExactLatencyContainerAfterLostTestCleanup(t *tes
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					got, err := cleanupLinkCalibrationLatency(ctx, s, run)
-					if err != nil || !got.Resolved || !got.Removed || !got.JournalComplete || got.ContainerID != id || len(calls) != 2 {
+					if err != nil || !got.Resolved || !got.Removed || !got.JournalComplete || got.ContainerID != id || !got.LogsRetained || len(calls) != 3 {
 						t.Fatal("available exact cleanup did not restore killed-test resource", err)
 					}
 				})
@@ -275,6 +288,9 @@ func TestLinkCalibrationLatencyJournalAuthorityAndTail(t *testing.T) {
 				if args[1] == "inspect" {
 					return raw, nil
 				}
+				if len(args) == 6 && args[0] == "container" && args[1] == "logs" && args[5] == id {
+					return []byte("synthetic startup log"), nil
+				}
 				if args[3] != id {
 					t.Fatal("wrong cleanup ID")
 				}
@@ -282,7 +298,7 @@ func TestLinkCalibrationLatencyJournalAuthorityAndTail(t *testing.T) {
 			}
 			got, err := cleanupLinkCalibrationLatency(context.Background(), s, run)
 			if kind == "tail" {
-				if err != nil || !got.Resolved || !got.Removed || got.JournalComplete || calls != 2 {
+				if err != nil || !got.Resolved || !got.Removed || !got.LogsRetained || got.JournalComplete || calls != 3 {
 					t.Fatal("retained partial observation prevented safe exact restoration or became complete", err)
 				}
 			} else if err == nil || got.Resolved || calls != 0 {

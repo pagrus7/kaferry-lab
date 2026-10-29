@@ -108,7 +108,7 @@ new refusal remains evidence and stops its selected operation. Only the complete
 roadmap, reviewed native runs, offline rechecks and final-head CI can complete
 the project; no PR or release qualification follows from this platform port.
 
-## Containerd-store admission repair (source under review)
+## Containerd-store admission and development observations
 
 The new path keeps the runtime image target, selected platform manifest and
 configuration digest distinct. Classic stores still require their exact pinned
@@ -134,6 +134,38 @@ whole archive hash/identity without repeating tar or layer semantic decoding.
 
 The nonlinked setup path currently lacks this private authority and refuses the
 modern proof before resource creation. This source does not silently provision a
-new M0 authority. These implementations passed host controls but still require
-independent source review, native archive/controller/custody measurements and a
-new reached stock-link calibration. No failed history is upgraded by the repair.
+new M0 authority. At source c2ab5fc, the three independent source reviews passed,
+as did native full harness checks, the retained stock-save archive control and
+the reached descendant-held-pipe failure control. A new stock-link development
+run passed image admission and healthy topology, then failed its initial latency
+mapping read with `{}` before either delay was applied. Its original failure and
+complete local evidence remain retained. These observations do not qualify a
+Kaferry fault or establish complete native campaign custody/CI.
+
+## Private startup configuration and diagnostic retention
+
+Toxiproxy2.12.0 populates its startup configuration synchronously before starting
+the HTTP listener. A configuration-open or population failure is logged and does
+not prevent that listener from starting; `/version` readiness cannot prove the
+mapping loaded. The failed development run removed its latency container before
+selecting those logs, so its runtime cause is unknown. Retained source and file
+facts identify a configuration access mismatch to address in a fresh run: the
+0600 file belongs to the nonroot harness user while the previous container
+defaulted to root with all capabilities dropped. No observed EACCES is claimed.
+
+The repaired first-create plan selects the exact private file owner's numeric
+UID:GID and retains file identity, mode, size and SHA256. Prestart, use and cleanup
+inspection require that user, readonly mount/root, dropped capabilities,
+no-new-privileges and existing resource bounds. The file remains0600. An empty
+mapping is still fatal; no configuration API fallback or empty-mapping retry is
+introduced. A refusal cannot cause a later user/mode/capability change.
+
+Normal and lost-child cleanup share a fresh ownership inspection followed by
+one bounded `container logs --tail 64 --timestamps` capture, before removal of
+the verified container ID. Exact successful output is retained privately before
+semantic interpretation. Log refusal, overflow or a failed evidence sink stops
+the route and leaves the attempt incomplete; no alternate capture or removal
+follows. Captured logs are diagnostics, never worker ACK or readiness proof.
+Targeted host controls passed, including wrong-user rejection and failure
+retention; fresh frozen reviews and native execution of this increment remain
+required. Earlier stopped histories remain unchanged.

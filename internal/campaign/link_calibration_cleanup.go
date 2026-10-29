@@ -16,20 +16,26 @@ import (
 )
 
 type LinkCalibrationCleanup struct {
-	PlannedName, ContainerID                                         string
-	PlanFound, Attempted, Resolved, Removed, Absent, JournalComplete bool
+	PlannedName, ContainerID                                                       string
+	PlanFound, Attempted, Resolved, Removed, Absent, JournalComplete, LogsRetained bool
 }
 type linkCalibrationLatencyPlan struct {
 	RunID, Name, Role, Image, ExpectedImageID, Network, API, Endpoint, Upstream, ConfigPath string
+	User                                                                                    string
+	ConfigFile                                                                              linkLatencyStartupIdentity
 	Command                                                                                 []string
 	MemoryBytes, NanoCPUs, PIDs, LogBytes                                                   int64
 }
 type linkCalibrationCleanupError struct {
 	reference         string
 	retentionComplete bool
+	dockerFailure     bool
 }
 
 func (e *linkCalibrationCleanupError) Error() string {
+	if e.dockerFailure {
+		return "latency Docker cleanup failed; original private Docker evidence retained if available"
+	}
 	if !e.retentionComplete {
 		return "latency cleanup incomplete; exact private notice unavailable"
 	}
@@ -62,6 +68,10 @@ func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDock
 	var notice []byte
 	defer func() {
 		if err != nil {
+			var retained *linkCalibrationCleanupError
+			if errors.As(err, &retained) {
+				return
+			}
 			ref, e := fixture.RetainLinkNetworkFailure(s, action, notice, err)
 			if e != nil {
 				err = &linkCalibrationCleanupError{retentionComplete: false}
@@ -155,47 +165,88 @@ func cleanupLinkCalibrationLatency(ctx context.Context, s fixture.State, rawDock
 	}
 	run, e := fixture.LinkExecutor(s, rawDocker)
 	if e != nil {
-		return r, e
+		return r, &linkCalibrationCleanupError{dockerFailure: true}
 	}
-	target := id
-	if target == "" {
-		target = plan.Name
-	}
-	action = []string{"latency_owner_cleanup", "container", "inspect", target, "--format", "{{json .}}"}
-	raw, e := run(ctx, "container", "inspect", target, "--format", "{{json .}}")
-	notice = raw
 	r.Attempted = true
-	if e != nil {
-		// LinkExecutor returns raw failure bytes only for its reviewed exact
-		// absence outcome, after retaining the original and clearing its stop.
-		if exactCalibrationContainerAbsence(raw, target) {
-			r.Resolved, r.Absent = true, true
-			return r, nil
-		}
-		return r, e
+	r.ContainerID, r.Absent, r.LogsRetained, err = cleanupLinkCalibrationLatencyContainer(ctx, s, plan, id, run)
+	if err == nil {
+		r.Resolved = true
+		r.Removed = !r.Absent
 	}
-	actual, e := validateLinkCalibrationLatencyContainer(raw, s, plan, id)
-	if e != nil {
-		return r, e
-	}
-	r.ContainerID = actual
-	// Keep selected immutable ownership facts before removal can destroy the
-	// inspected resource. This fixed private receipt belongs to the same run.
-	if e = persistLinkCalibrationJSON(filepath.Join(".cache", "fixtures-private", s.RunID+"-links"), "latency-cleanup-owner.json", struct {
-		RunID, Name, ID, ImageID, Image, Role, Network, ConfigPath string
-		Command                                                    []string
-		JournalSHA256                                              string
-	}{s.RunID, plan.Name, actual, s.Proxy.ImageID, s.Proxy.Image, "latency-calibration", "host", plan.ConfigPath, plan.Command, processDigest(body)}); e != nil {
-		return r, e
-	}
-	action = []string{"latency_owner_cleanup", "container", "rm", "-f", actual}
-	notice = nil
-	if _, e = run(ctx, "container", "rm", "-f", actual); e != nil {
-		return r, e
-	}
-	r.Resolved, r.Removed = true, true
-	return r, nil
+	return r, err
 }
+
+// run is the already-authorized fixture LinkExecutor (or the live bounded
+// wrapper around it). Successful log capture is evidence custody only.
+func cleanupLinkCalibrationLatencyContainer(ctx context.Context, s fixture.State, p linkCalibrationLatencyPlan, retained string, run fixture.Executor) (actual string, absent, logs bool, err error) {
+	target := retained
+	if target == "" {
+		target = p.Name
+	}
+	action := []string{"latency_owner_cleanup", "container", "inspect", target, "--format", "{{json .}}"}
+	var notice []byte
+	dockerFailure, sinkFailure := false, false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if dockerFailure {
+			err = &linkCalibrationCleanupError{dockerFailure: true}
+			return
+		}
+		if sinkFailure {
+			_ = fixture.StopLinkEvidence(s, "latency cleanup ownership evidence incomplete")
+			err = &linkCalibrationCleanupError{}
+			return
+		}
+		ref, e := fixture.RetainLinkNetworkFailure(s, action, notice, err)
+		if e != nil {
+			err = &linkCalibrationCleanupError{}
+		} else {
+			err = &linkCalibrationCleanupError{reference: ref, retentionComplete: true}
+		}
+	}()
+	notice, err = run(ctx, "container", "inspect", target, "--format", "{{json .}}")
+	if err != nil {
+		if exactCalibrationContainerAbsence(notice, target) {
+			return "", true, false, nil
+		}
+		dockerFailure = true
+		return
+	}
+	actual, err = validateLinkCalibrationLatencyContainer(notice, s, p, retained)
+	if err != nil {
+		return
+	}
+	planBytes, e := json.Marshal(p)
+	if e != nil {
+		err = e
+		return
+	}
+	if err = persistLinkCalibrationJSON(filepath.Join(".cache", "fixtures-private", s.RunID+"-links"), "latency-cleanup-owner.json", struct {
+		RunID, Name, ID, ImageID, Image, Role, Network, ConfigPath, User string
+		ConfigFile                                                       linkLatencyStartupIdentity
+		Command                                                          []string
+		PlanSHA256                                                       string
+	}{s.RunID, p.Name, actual, s.Proxy.ImageID, s.Proxy.Image, "latency-calibration", "host", p.ConfigPath, p.User, p.ConfigFile, p.Command, processDigest(planBytes)}); err != nil {
+		sinkFailure = true
+		return
+	}
+	// No removal, alternate capture or second command follows a log/receipt
+	// refusal. LinkExecutor retains the exact bounded original and its stop.
+	_, err = run(ctx, "container", "logs", "--tail", "64", "--timestamps", actual)
+	if err != nil {
+		dockerFailure = true
+		return
+	}
+	logs = true
+	_, err = run(ctx, "container", "rm", "-f", actual)
+	if err != nil {
+		dockerFailure = true
+	}
+	return
+}
+
 func calibrationHex(s string) bool {
 	for _, c := range s {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
@@ -277,11 +328,11 @@ func readLinkCalibrationLatencyPlan(body []byte, s fixture.State, name string) (
 				return plan, id, nil, decodeErr
 			}
 		case "container_ownership":
-			var fact struct{ ID, Name, ImageID string }
+			var fact struct{ ID, Name, ImageID, User string }
 			if decodeErr := json.Unmarshal(row.Facts, &fact); decodeErr != nil {
 				return plan, id, nil, decodeErr
 			}
-			if len(fact.ID) != 64 || !calibrationHex(fact.ID) || fact.Name != name || fact.ImageID != s.Proxy.ImageID || id != "" && fact.ID != id {
+			if len(fact.ID) != 64 || !calibrationHex(fact.ID) || fact.Name != name || fact.ImageID != s.Proxy.ImageID || fact.User != plan.User || id != "" && fact.ID != id {
 				return plan, id, nil, errors.New("latency immutable identity receipt inconsistent")
 			}
 			id = fact.ID
@@ -296,59 +347,71 @@ func readLinkCalibrationLatencyPlan(body []byte, s fixture.State, name string) (
 	if plans != 1 || !imageBound || e != nil || host != "127.0.0.1" || port == "" || plan.RunID != s.RunID || plan.Name != name || plan.Role != "latency-calibration" || plan.Image != image || plan.ExpectedImageID != imageID || plan.Network != "host" || plan.ConfigPath != configPath || !reflect.DeepEqual(plan.Command, []string{"-host=127.0.0.1", "-port=" + port, "-config=/calibration.json"}) || plan.MemoryBytes != 128<<20 || plan.NanoCPUs != 500000000 || plan.PIDs != 64 || plan.LogBytes != 1<<20 {
 		return plan, id, tail, errors.Join(e, errors.New("latency plan differs from this run's fixed ownership contract"))
 	}
+	err = validateLinkLatencyStartup(plan)
 	return
 }
 func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p linkCalibrationLatencyPlan, retained string) (string, error) {
+	facts, err := inspectLinkCalibrationLatencyContainer(raw, s, p, retained, false)
+	return facts.ID, err
+}
+
+type linkCalibrationLatencyContainerFacts struct {
+	ID, Name, Image         string
+	ImageManifestDescriptor *fixture.ImageManifestIdentity
+	Config                  struct {
+		Image, User     string
+		Labels          map[string]string
+		Cmd, Entrypoint []string
+	}
+	HostConfig struct {
+		NetworkMode                  string
+		CapAdd, CapDrop, SecurityOpt []string
+		Memory, NanoCPUs, PidsLimit  int64
+		Privileged, ReadonlyRootfs   bool
+		PortBindings                 map[string]json.RawMessage
+		LogConfig                    struct {
+			Type   string
+			Config map[string]string
+		}
+	}
+	State  struct{ Running, Paused *bool }
+	Mounts []struct {
+		Type, Source, Destination string
+		RW                        bool
+	}
+}
+
+func inspectLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p linkCalibrationLatencyPlan, retained string, requireRunning bool) (linkCalibrationLatencyContainerFacts, error) {
 	_, image, imageID, err := selectedLinkCalibrationProxy(s)
 	if err != nil {
-		return "", err
+		return linkCalibrationLatencyContainerFacts{}, err
+	}
+	if err := validateLinkLatencyStartup(p); err != nil {
+		return linkCalibrationLatencyContainerFacts{}, err
 	}
 	if p.Image != image || p.ExpectedImageID != imageID {
-		return "", errors.New("latency cleanup plan image differs from native fixture")
+		return linkCalibrationLatencyContainerFacts{}, errors.New("latency cleanup plan image differs from native fixture")
 	}
-	var f struct {
-		ID, Name, Image         string
-		ImageManifestDescriptor *fixture.ImageManifestIdentity
-		Config                  struct {
-			Image           string
-			Labels          map[string]string
-			Cmd, Entrypoint []string
-		}
-		HostConfig struct {
-			NetworkMode                 string
-			Memory, NanoCPUs, PidsLimit int64
-			Privileged, ReadonlyRootfs  bool
-			PortBindings                map[string]json.RawMessage
-			LogConfig                   struct {
-				Type   string
-				Config map[string]string
-			}
-		}
-		State  struct{ Running, Paused *bool }
-		Mounts []struct {
-			Type, Source, Destination string
-			RW                        bool
-		}
-	}
+	var f linkCalibrationLatencyContainerFacts
 	if len(raw) > 64<<10 {
-		return "", errors.New("latency cleanup inspect malformed or oversized")
+		return linkCalibrationLatencyContainerFacts{}, errors.New("latency cleanup inspect malformed or oversized")
 	}
 	if decodeErr := json.Unmarshal(raw, &f); decodeErr != nil {
-		return "", decodeErr
+		return linkCalibrationLatencyContainerFacts{}, decodeErr
 	}
 	if err := fixture.ValidateLinkContainerImage(s, true, f.Image, f.ImageManifestDescriptor); err != nil {
-		return "", err
+		return linkCalibrationLatencyContainerFacts{}, err
 	}
 	if len(f.ID) != 64 || !calibrationHex(f.ID) || retained != "" && f.ID != retained || f.Name != "/"+p.Name || f.Image != imageID || f.Config.Image != image || f.Config.Labels[brokerOwnerLabel] != s.RunID || f.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
-		return "", errors.New("latency cleanup immutable ownership mismatch")
+		return linkCalibrationLatencyContainerFacts{}, errors.New("latency cleanup immutable ownership mismatch")
 	}
-	if !reflect.DeepEqual(f.Config.Cmd, p.Command) || !reflect.DeepEqual(f.Config.Entrypoint, []string{"/toxiproxy"}) || f.State.Running == nil || f.State.Paused == nil || *f.State.Paused || f.HostConfig.NetworkMode != "host" || f.HostConfig.Memory != 128<<20 || f.HostConfig.NanoCPUs != 500000000 || f.HostConfig.PidsLimit != 64 || f.HostConfig.Privileged || !f.HostConfig.ReadonlyRootfs || len(f.HostConfig.PortBindings) != 0 {
-		return "", errors.New("latency cleanup process/resource mismatch")
+	if f.Config.User != p.User || !reflect.DeepEqual(f.HostConfig.CapDrop, []string{"ALL"}) || len(f.HostConfig.CapAdd) != 0 || !reflect.DeepEqual(f.HostConfig.SecurityOpt, []string{"no-new-privileges"}) || requireRunning && f.State.Running != nil && !*f.State.Running || !reflect.DeepEqual(f.Config.Cmd, p.Command) || !reflect.DeepEqual(f.Config.Entrypoint, []string{"/toxiproxy"}) || f.State.Running == nil || f.State.Paused == nil || *f.State.Paused || f.HostConfig.NetworkMode != "host" || f.HostConfig.Memory != 128<<20 || f.HostConfig.NanoCPUs != 500000000 || f.HostConfig.PidsLimit != 64 || f.HostConfig.Privileged || !f.HostConfig.ReadonlyRootfs || len(f.HostConfig.PortBindings) != 0 {
+		return linkCalibrationLatencyContainerFacts{}, errors.New("latency cleanup process/resource mismatch")
 	}
 	if f.HostConfig.LogConfig.Type != "json-file" || f.HostConfig.LogConfig.Config["max-size"] != "1m" || f.HostConfig.LogConfig.Config["max-file"] != "1" || len(f.Mounts) != 1 || f.Mounts[0].Type != "bind" || f.Mounts[0].Source != p.ConfigPath || f.Mounts[0].Destination != "/calibration.json" || f.Mounts[0].RW {
-		return "", errors.New("latency cleanup exact configuration mismatch")
+		return linkCalibrationLatencyContainerFacts{}, errors.New("latency cleanup exact configuration mismatch")
 	}
-	return f.ID, nil
+	return f, nil
 }
 func exactCalibrationContainerAbsence(raw []byte, target string) bool {
 	// Same exact combined stdout/stderr framing admitted by LinkExecutor. Its

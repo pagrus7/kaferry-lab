@@ -184,14 +184,19 @@ measurement beyond the tagged reply gate: generic TCP timing cannot identify
 Kafka response types or worker ACK receipt. The dedicated driver adds bounded
 subreaper/anchor wait controls and run-journal-based cleanup of the extra nonce
 container; these calibrate evidence ownership, not a Kaferry scenario.
-These controls have no accepted native proxy execution. Accepted b61/run
-40236814641 built specimens with runtime disabled. The earlier enabled/public-CMS
-candidate is superseded. Current runtime remains disabled, unknown-notice CMS has
-no public upload path, and the policy is settled: reviewed facts public, originals
-private. The native-worker-to-Mac private route, actual custody and later recovery
-remain unconfigured/unmeasured. Neither source nor these controls establish M3
-release coverage. Source assertions establish no measured delay,
-pending-response behavior, timeout, drain or save path.
+These delay controls have no accepted reached native execution. Accepted b61/run
+40236814641 built specimens with runtime disabled. The later native c2ab5fc
+development run passed healthy topology but failed the initial mapping read with
+`{}` before applying either delay. Exact raw mapping and cleanup evidence are
+retained privately on the Mac; startup logs were not selected before removal,
+so its runtime cause is unknown. The next fresh-run source binds the0600 startup
+file to its owner's explicit nonroot container UID:GID and captures bounded
+container logs before normal or lost-child removal. Wrong/missing/root-user,
+rm-before-logs and capture-refusal controls test those measurement preconditions;
+they add no Kaferry failure scenario. Empty mappings remain fatal with no retry
+or API-population fallback. Full native campaign custody/CI remains incomplete.
+Neither source nor these controls establish M3 release coverage or measured
+delay, pending-response behavior, timeout, drain or save paths.
 
 ## M4 — Archive storage and replay
 
