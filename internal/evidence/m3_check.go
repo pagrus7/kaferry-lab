@@ -14,14 +14,19 @@ import (
 )
 
 func phaseResult(m PhaseManifest) Result {
-	return Result{Verdict: HarnessError, Namespace: m.Namespace, RunID: m.RunID, ScenarioID: m.ScenarioID, Findings: []Finding{}, Limitations: []string{
+	r := Result{Verdict: HarnessError, Namespace: m.Namespace, RunID: m.RunID, ScenarioID: m.ScenarioID, Findings: []Finding{}, Limitations: []string{
 		"Evidence version 3 is M2 two-phase admission/data checking, not roadmap milestone M3 or qualification.",
 		"Recorded scans, waits and hashes do not authenticate a hostile author's claims to have observed reality.",
 		"No accepted delivery-timeout/live-TERM or failed threshold-drain mechanism observation is implemented; counts, timers and generic logs cannot establish ACK or path entry.",
 	}}
+	if m.ScenarioID == "source-save" {
+		r.Limitations[0] = "Evidence version3 checks fixed warmup3/save-probe4/full96 data admission, not qualification."
+		r.Limitations[2] = "Current periodic-save origin and actual impaired-save failure remain unsupported; a sampled visible-unsaved record, timer, log or ACK establishes neither."
+	}
+	return r
 }
 
-// CheckPhaseHistory checks the fixed warmup3/full96 experiment without I/O.
+// CheckPhaseHistory checks fixed delivery or source-save data stages without I/O.
 // Valid admission remains UNSUPPORTED for mechanism acceptance. An independently
 // established data violation takes precedence over that missing mechanism.
 func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []PhaseEvent) Result {
@@ -42,9 +47,10 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 		r.Verdict = Unsupported
 		return bad("phase_version", "unsupported phase schema/checker")
 	}
-	if m.ScenarioID != "delivery-stop" && m.ScenarioID != "delivery-threshold" {
+	sourceSave := m.ScenarioID == "source-save"
+	if m.ScenarioID != "delivery-stop" && m.ScenarioID != "delivery-threshold" && !sourceSave {
 		r.Verdict = Unsupported
-		return bad("phase_scenario", "only the two compiled M2 delivery experiments have two phases")
+		return bad("phase_scenario", "only compiled M2 delivery/source-save phase experiments are supported")
 	}
 	if m.RunID == "" || m.Group == "" || m.Scope != "kafka" || m.Given == "" || m.When == "" || m.Then == "" || m.FinalAuditID == "" || m.BudgetNS <= 0 || m.BudgetNS > 600_000_000_000 {
 		return bad("phase_manifest", "finite Kafka identity, Given/When/Then, final audit and at most ten minutes are required")
@@ -90,6 +96,13 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 	}
 	warmup := phaseWarmup(declared)
 	ledgers := map[string]Ledger{"warmup": warmup, "full": declared}
+	if sourceSave {
+		probe, err := sourceSaveProbeLedger(declared)
+		if err != nil {
+			return bad("phase_save_probe_ledger", err.Error())
+		}
+		ledgers["save-probe"] = probe
+	}
 	publications := map[string]PhasePublication{}
 	workers := map[string]*m2WorkerHistory{}
 	settingsIDs := map[string]string{}
@@ -102,6 +115,8 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 	current := ""
 	verifiedAt, lastSettled, lastSettledStart, warmupProgress := identity.Int64(-1), identity.Int64(-1), identity.Int64(-1), identity.Int64(-1)
 	var primary, warmupWorker string
+	saveLiveEnd, saveWitnessEnd := identity.Int64(-1), identity.Int64(-1)
+	saveWitnessID := ""
 	stopped := false
 	fullVerified, resumed, finished, final := false, false, false, false
 	var elapsed identity.Int64
@@ -137,15 +152,28 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				if current != "" || len(workers) != 0 || p.WorkerID != "" {
 					return bad("phase_publication", "warmup publication precedes the primary")
 				}
+			} else if sourceSave && p.PhaseID == "save-probe" {
+				w := workers[primary]
+				if current != "warmup" || w == nil || w.exit != nil || p.WorkerID != primary || stopped || len(w.signals) != 0 || warmupProgress < 0 || warmupWorker != primary || p.Interval.StartNS < max(warmupProgress, previousElapsed) || len(pending) != 0 {
+					return bad("phase_save_probe_order", "probe publication needs the same running unlimited primary after complete warmup progress")
+				}
+				saveLiveEnd = p.Interval.EndNS
 			} else {
 				w := workers[primary]
-				if current != "warmup" || w == nil || w.exit != nil || p.WorkerID != primary || !stopped || warmupProgress < 0 || warmupWorker != primary || len(w.signals) == 0 || w.signals[len(w.signals)-1].Interval.EndNS > p.Interval.StartNS {
+				predecessor := "warmup"
+				if sourceSave {
+					predecessor = "save-probe"
+				}
+				if current != predecessor || w == nil || w.exit != nil || p.WorkerID != primary || !stopped || warmupProgress < 0 || warmupWorker != primary || len(w.signals) == 0 || w.signals[len(w.signals)-1].Interval.EndNS > p.Interval.StartNS || sourceSave && (saveWitnessID == "" || len(pending) != 0) {
 					return bad("phase_stop", "full publication requires the same live primary actually STOPPED after warmup progress")
 				}
 			}
 			publications[p.PhaseID] = p
 		case "input_phase_verified":
 			v := event.Verified
+			if sourceSave && len(pending) != 0 {
+				return bad("phase_output", "unfinished source-save output scans cannot cross readback or phase transitions")
+			}
 			l, exists := ledgers[v.PhaseID]
 			p, published := publications[v.PhaseID]
 			if !exists || !published || !m2Interval(v.Interval, elapsed) || v.Interval.StartNS < p.Interval.EndNS || v.Interval.StartNS < verifiedAt || !v.Complete || v.Error != "" || v.Method != "independent_source_scan" || !reflect.DeepEqual(v.Ledger, l) {
@@ -154,7 +182,14 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 			if v.PhaseID == "warmup" && (current != "" || len(workers) != 0) {
 				return bad("phase_order", "warmup is verified once before any primary start")
 			}
-			if v.PhaseID == "full" && current != "warmup" && current != "full" {
+			if sourceSave && v.PhaseID == "save-probe" && (current != "warmup" || stopped || len(workers) != 1 || workers[primary] == nil || workers[primary].exit != nil || v.Interval.StartNS < saveLiveEnd || len(pending) != 0) {
+				return bad("phase_save_probe_order", "probe readback follows its sole publication with the same live primary")
+			}
+			predecessor := "warmup"
+			if sourceSave {
+				predecessor = "save-probe"
+			}
+			if v.PhaseID == "full" && current != predecessor && current != "full" {
 				return bad("phase_order", "full follows the verified warmup")
 			}
 			if v.PhaseID == "full" {
@@ -167,7 +202,7 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				}
 			}
 			for id, w := range workers {
-				if w.exit == nil && (id != primary || !stopped) {
+				if w.exit == nil && (id != primary || !stopped && !(sourceSave && v.PhaseID == "save-probe")) {
 					return bad("phase_stop", "source verification while a worker exists requires the same owned stopped primary")
 				}
 			}
@@ -175,6 +210,9 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				return bad("phase_scan", err.Error())
 			}
 			current, verifiedAt = v.PhaseID, v.Interval.EndNS
+			if sourceSave && current == "save-probe" {
+				saveLiveEnd = verifiedAt
+			}
 			fullVerified = current == "full"
 		case "worker":
 			pw := event.Worker
@@ -221,6 +259,9 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 			if len(h.signals) > 0 && w.Interval.StartNS < h.signals[len(h.signals)-1].Interval.EndNS {
 				return bad("phase_worker_order", "lifecycle intervals cannot precede an already observed signal")
 			}
+			if sourceSave && id.WorkerID == primary && w.Action != "start" && w.Interval.StartNS < saveLiveEnd {
+				return bad("phase_save_primary_order", "primary lifecycle cannot backdate across used live-stage observations")
+			}
 			switch w.Action {
 			case "start":
 			case "signal":
@@ -229,8 +270,16 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 				}
 				switch w.Signal {
 				case "SIGSTOP":
-					if id.WorkerID != primary || stopped || current != "warmup" || warmupProgress < 0 || warmupWorker != id.WorkerID || w.Interval.StartNS < warmupProgress || (w.ObservedState != "T" && w.ObservedState != "t") {
+					stopPhase := "warmup"
+					if sourceSave {
+						stopPhase = "save-probe"
+					}
+					if id.WorkerID != primary || stopped || current != stopPhase || warmupProgress < 0 || warmupWorker != id.WorkerID || w.Interval.StartNS < warmupProgress || (w.ObservedState != "T" && w.ObservedState != "t") {
 						return bad("phase_stop", "STOP needs observed stopped ownership after independently copied/saved warmup3")
+					}
+					if sourceSave && (saveWitnessID == "" || w.Interval.StartNS < saveWitnessEnd || len(pending) != 0) {
+						r.Verdict = Unsupported
+						return bad("phase_save_probe_unreached", "no complete visible-unsaved probe snapshot precedes the owned STOP")
 					}
 					stopped = true
 				case "SIGCONT":
@@ -340,6 +389,20 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 					return bad("phase_warmup_progress", "warmup progress must name this live primary and scan output/saved/group only after its completed launch")
 				}
 				warmupProgress, warmupWorker = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS), pa.WorkerID
+				if sourceSave {
+					saveLiveEnd = warmupProgress
+				}
+			}
+			if sourceSave && current == "save-probe" {
+				w := workers[primary]
+				if w == nil || w.exit != nil || stopped || pa.WorkerID != primary || a.ScanInterval.StartNS < max(saveLiveEnd, w.start.Interval.EndNS) || a.SavedInterval.StartNS < w.start.Interval.EndNS || a.GroupInterval.StartNS < w.start.Interval.EndNS || a.Mode != "snapshot" || a.Final {
+					return bad("phase_save_probe_audit", "probe snapshot must name the same live primary after fresh complete probe readback")
+				}
+				saveLiveEnd = max(a.ScanInterval.EndNS, max(a.SavedInterval.EndNS, a.GroupInterval.EndNS))
+				saveWitnessID, saveWitnessEnd = "", -1
+				if sourceSaveProbeVisible(m, ledgers[current], a, outputs) {
+					saveWitnessID, saveWitnessEnd = a.ID, saveLiveEnd
+				}
 			}
 			if settled {
 				lastSettled, lastSettledStart = max(a.SavedInterval.EndNS, a.GroupInterval.EndNS), a.ScanInterval.StartNS
@@ -362,7 +425,14 @@ func CheckPhaseHistory(m PhaseManifest, artifact ArtifactMetadata, events []Phas
 		return bad("phase_completion", "the run has no finalized complete observation")
 	}
 	r.Verdict = Unsupported
-	r.Findings = append(r.Findings, Finding{Code: "phase_admission_complete", Message: "warmup3/full96 admission and settled final data obligations are complete"}, Finding{Code: "mechanism_unobserved", Message: "delivery/failed-threshold mechanism acceptance remains unsupported; no ACK/path predicate is supplied"})
+	if sourceSave {
+		if !violated {
+			r.Findings = append(r.Findings, Finding{Code: "source_save_admission_complete", Message: "warmup3/save-probe4/full96 and settled recovered data obligations are complete"})
+		}
+		r.Findings = append(r.Findings, Finding{Code: "mechanism_unobserved", Message: "current periodic-save origin and actual impaired-save failure remain unsupported"})
+	} else {
+		r.Findings = append(r.Findings, Finding{Code: "phase_admission_complete", Message: "warmup3/full96 admission and settled final data obligations are complete"}, Finding{Code: "mechanism_unobserved", Message: "delivery/failed-threshold mechanism acceptance remains unsupported; no ACK/path predicate is supplied"})
+	}
 	if violated {
 		r.Verdict = Violation
 	}
@@ -388,10 +458,13 @@ func phaseProfiles(m PhaseManifest, l Ledger) (map[string]M2Settings, error) {
 		return nil, fmt.Errorf("one explicit primary-threshold4 or primary-unlimited profile followed by recovery-unlimited is required")
 	}
 	primaryID := m.Profiles[0].ID
+	if m.ScenarioID == "source-save" && primaryID != "primary-unlimited" {
+		return nil, fmt.Errorf("source-save requires the explicit unlimited primary")
+	}
 	threshold := identity.Int64(4)
 	if primaryID == "primary-unlimited" {
-		if m.ScenarioID != "delivery-stop" {
-			return nil, fmt.Errorf("primary-unlimited is only the explicit delivery-stop variant")
+		if m.ScenarioID != "delivery-stop" && m.ScenarioID != "source-save" {
+			return nil, fmt.Errorf("primary-unlimited requires explicit delivery-stop or source-save selection")
 		}
 		threshold = 0
 	}
