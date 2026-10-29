@@ -65,17 +65,17 @@ the actual external ownership descriptor. Uname does not prove that control-plan
 ID, physical hardware or kernel-source provenance.
 
 Already-built inputs live under `.cache/hardware-build/`. The coordinator's
-new native Go1.26 build occurred once in the normal-c source root; its exact
+new native Go1.26 build occurred once in the normal-d source root; its exact
 artifact bytes may be hash-verified private copies in the other three fresh
 checkouts. Do not call those copies fresh builds: rebuilding at a different
 absolute path may change DWARF/build bytes. The fixed artifacts are:
 
 | File | Bytes | SHA256 |
 |---|---:|---|
-|`hardwarecalibration.test`|6025379|`b9d767fc3b992cfacd1fed8f5edd32bfcb4091bdbf7e64d62b0976a733e462ea`|
-|`hardware-wait-specimen`|3992553|`388fd05f5ab000c636667ddaea133e9b218cd7ef0c8e87368940b26bac491ae5`|
+|`hardwarecalibration.test`|6427341|`6f314ee66348e2c881d9f3bf2997a41a394b3061e0ea54aab174c674157c5105`|
+|`hardware-wait-specimen`|3993058|`f5c95e886f4120cbbd828820d519a702047eb3a133b6222d6e18697ad7ce2522`|
 
-The caller pins these whole bytes and ten82f source/build-input files. It also
+The caller pins these whole bytes and twelve60c6ff9 source/build-input files. It also
 pins the whole `build-binding.json` receipt, caller script, existing GDB plan
 and independently issued source-audit receipt. The build receipt's checked
 fields are SourceHead, GoVersion=go1.26.0, GOOS=linux, GOARCH=arm64,
