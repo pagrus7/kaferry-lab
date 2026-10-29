@@ -92,14 +92,34 @@ guest actual-Wait fact. False EOF fields mean unproven; nonzero waits are
 conservative because os/exec can prioritize ExitError over pipe-wait errors.
 
 Linux failure controls retain their originals in
-`.cache/native-check-controller-controls/{healthy,nonzero,orphan,cancel-exit0}-*`
+`.cache/native-check-controller-controls/{healthy,nonzero,orphan,cancel-exit0,post-start-membership,injected-wait-gate}-*`
 (0700). Fixed0600 files are `errors.json`, `stdout.bin`, `stderr.bin`,
-`result.json`/`result.pending.json`, `controller-wait.json` and, when reached,
+`result.json`/`result.pending.json`, `controller-wait.json`, `control-facts.json` and, when reached,
 `specimen-ready` (PID/ready bytes). Streams retain at most16MiB each; receipts and
-the primary error sink at most256KiB each. The four finite controls prove capture
+the primary error sink at most256KiB each. The first four finite controls prove capture
 beyond the old64KiB profile, fake-PASS/nonzero rejection, an actually adopted
 descendant holding a log pipe, and reached cancellation followed by actual
 exit0. Their helper processes self-expire within12s, controller within32s and
 outer test has38s. A test timeout/failure remains failed and originals remain.
 Temporary coverage directories use Go test's normal temporary storage and are
 not private diagnostic originals. Existing link failure controls remain intact.
+
+The native unit helper uses its own12s anchor. Its one failure path retains the
+original exact cause, attempts only the existing stop/sole-anchor-Wait/close
+route if closure has not already started, and stages all actually obtained
+Wait/Tree/PID/start/signal facts and output prefixes before `t.Fatal`.
+`control-facts.json` is an original INCOMPLETE snapshot, never a completion receipt.
+`post-start-membership` intentionally supplies the owned controller's nonmember
+PID to the existing membership check after actual anchor start. The resulting
+closed signal phase must issue zero signals; its same owner observes natural
+unit-anchor expiry and terminal Wait within20s. Actual ECHILD/closed-tree facts
+do not turn this failed identity experiment into success.
+
+`injected-wait-gate` supplies a clearly synthetic false direct-wait admission
+gate to the existing close function. It observes the actual terminal anchor Wait
+but preserves the rejected original Tree with Closed/NoChildren false. No command
+is launched, no command Wait is invented, and no second close/drain/signal route
+relabels that snapshot. This exercises a real evidence-admission rejection and
+retention; it does not claim a real timed-out or unreaped condition. The outer
+test expects these two helper processes to fail and independently reads their
+exact original causes and snapshots. Their failed experiments stay incomplete.

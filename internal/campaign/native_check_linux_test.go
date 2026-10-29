@@ -5,6 +5,7 @@ package campaign
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,29 @@ import (
 	"testing"
 	"time"
 )
+
+func TestNativeCheckUnitAnchorSpecimen(t *testing.T) {
+	if os.Getenv("NATIVE_CHECK_UNIT_ANCHOR") != "1" {
+		return
+	}
+	signal.Ignore(syscall.SIGTERM)
+	// This unit anchor has no descendants/output and independently expires well
+	// inside the unchanged20s close bound, even after identity/signal admission
+	// closes. It is not the390s production anchor or a changed production route.
+	time.Sleep(12 * time.Second)
+	os.Exit(0)
+}
+
+type nativeCheckControlFacts struct {
+	Status, SyntheticMechanism            string
+	Wait                                  LinkCalibrationWait
+	Tree                                  LinkCalibrationTree
+	GroupClosureStarted                   bool
+	ExplicitCloseCalls, GroupSignalCalls  int
+	InjectedFalseDirectWaitGate           bool
+	OwnFinalCloseProven, ReleaseQualified bool
+	RequiresExternalWaitAndMacReadback    bool
+}
 
 func TestNativeCheckPipeHolderSpecimen(t *testing.T) {
 	if os.Getenv("NATIVE_CHECK_HOLDER") != "1" {
@@ -100,11 +124,61 @@ func TestNativeCheckControllerSpecimen(t *testing.T) {
 			closeLinkCalibrationSink(sink)
 		}
 	}()
+	var group *linkCalibrationGroup
+	var tree LinkCalibrationTree
+	var wait LinkCalibrationWait
+	var stdout, stderr []byte
+	var explicitCloseCalls, groupSignalCalls int
+	var syntheticMechanism string
+	injectedGate, factsStaged := false, false
+	stage := func() error {
+		if factsStaged {
+			return nil // one original snapshot/one attempt per selected file
+		}
+		factsStaged = true
+		closureStarted := false
+		if group != nil {
+			tree, closureStarted = group.result, group.closureStarted
+		}
+		// Retain actually obtained facts and prefixes even when a subsequent
+		// assertion must fail. This original snapshot grants no completion claim.
+		return errors.Join(
+			nativeCheckWrite(directory, "stdout.bin", stdout, nativeCheckOutputLimit),
+			nativeCheckWrite(directory, "stderr.bin", stderr, nativeCheckOutputLimit),
+			nativeCheckJSON(directory, "control-facts.json", nativeCheckControlFacts{
+				Status: "INCOMPLETE", SyntheticMechanism: syntheticMechanism, Wait: wait, Tree: tree,
+				GroupClosureStarted: closureStarted, ExplicitCloseCalls: explicitCloseCalls, GroupSignalCalls: groupSignalCalls,
+				InjectedFalseDirectWaitGate: injectedGate, RequiresExternalWaitAndMacReadback: true,
+			}))
+	}
+	closeGroup := func(testStopped bool) error {
+		stopErr := group.beginStop()
+		if stopErr == nil {
+			stopErr = group.lastSignal()
+		}
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer closeCancel()
+		explicitCloseCalls++
+		_, closeErr := group.close(closeCtx, testStopped)
+		return errors.Join(stopErr, closeErr)
+	}
 	fail := func(cause error) {
 		retainLinkCalibrationError(sink, []string{"native_controller_control"}, cause)
+		if group != nil && !group.closureStarted {
+			// Preserve the only stop/signal/Wait route. A post-start identity
+			// failure can already have SignalsClosed=true; no alternate signal
+			// is attempted, but the same owner still performs its bounded Wait.
+			closed := !wait.Started || (wait.WaitReturned && wait.Reaped && wait.StreamCopiesJoined)
+			if cleanupErr := closeGroup(closed); cleanupErr != nil {
+				retainLinkCalibrationError(sink, []string{"native_control_failure_cleanup"}, cleanupErr)
+			}
+		}
+		if stageErr := stage(); stageErr != nil {
+			retainLinkCalibrationError(sink, []string{"native_control_failure_facts"}, stageErr)
+		}
 		t.Fatal("native check control failed; exact private notice retained if available")
 	}
-	seed, err := prepareLinkCalibrationTree()
+	tree, err = prepareLinkCalibrationTree()
 	if err != nil {
 		fail(err)
 	}
@@ -112,11 +186,39 @@ func TestNativeCheckControllerSpecimen(t *testing.T) {
 	if err != nil {
 		fail(err)
 	}
-	anchor := exec.Command(exe, "-test.run=^TestLinkCalibrationTreeAnchorSpecimen$")
-	anchor.Env = []string{"LINK_TREE_ANCHOR=normal", "GOCOVERDIR=" + os.Getenv("GOCOVERDIR")}
-	group, err := startLinkCalibrationGroup(anchor, seed)
+	anchor := exec.Command(exe, "-test.run=^TestNativeCheckUnitAnchorSpecimen$")
+	anchor.Env = []string{"NATIVE_CHECK_UNIT_ANCHOR=1", "GOCOVERDIR=" + os.Getenv("GOCOVERDIR")}
+	group, err = startLinkCalibrationGroup(anchor, tree)
+	if group != nil {
+		originalSignal := group.killGroup
+		group.killGroup = func(pid int, signal syscall.Signal) error {
+			groupSignalCalls++
+			return originalSignal(pid, signal) // same selected syscall; observation only
+		}
+	}
+	if err == nil && mode == "post-start-membership" {
+		syntheticMechanism = "synthetic wrong owned controller PID supplied to membership admission; not a platform denial"
+		// Supply a known owned NONmember instead of a command PID, after the
+		// actual anchor start. This reaches the existing real mismatch branch.
+		err = group.checkMember(os.Getpid())
+		if err == nil {
+			fail(errors.New("synthetic post-start membership failure was not reached"))
+		}
+	}
 	if err != nil {
 		fail(err)
+	}
+	if mode == "injected-wait-gate" {
+		syntheticMechanism = "synthetic false direct-wait evidence-admission gate; no timed-out or unreaped child is simulated"
+		injectedGate = true
+		// Exercise the existing rejection AFTER the actual sole anchor Wait.
+		// No command is launched. The failed original Tree lacks ECHILD/Closed
+		// and is retained as such; never retry close or invent a command Wait.
+		gateErr := closeGroup(false)
+		if gateErr == nil {
+			fail(errors.New("synthetic false direct-wait gate was not rejected"))
+		}
+		fail(gateErr)
 	}
 	ready := filepath.Join(directory, "specimen-ready")
 	command := exec.Command(exe, "-test.run=^TestNativeCheckCommandSpecimen$")
@@ -138,7 +240,8 @@ func TestNativeCheckControllerSpecimen(t *testing.T) {
 			cancel()
 		}()
 	}
-	wait, stdout, stderr, _, waitErr := waitOwnedHarnessCommand(ctx, command, group, nativeCheckOutputLimit)
+	var waitErr error
+	wait, stdout, stderr, _, waitErr = waitOwnedHarnessCommand(ctx, command, group, nativeCheckOutputLimit)
 	if waitErr != nil && !retainLinkCalibrationError(sink, []string{"fixed_native_profile_command"}, waitErr) {
 		fail(errors.New("control original command notice incomplete"))
 	}
@@ -151,13 +254,8 @@ func TestNativeCheckControllerSpecimen(t *testing.T) {
 	if !r.CommandWritersStopped {
 		fail(errors.New("control did not actually wait and close its owned tree"))
 	}
-	for _, item := range []struct {
-		name string
-		body []byte
-	}{{"stdout.bin", stdout}, {"stderr.bin", stderr}} {
-		if err := nativeCheckWrite(directory, item.name, item.body, nativeCheckOutputLimit); err != nil {
-			fail(err)
-		}
+	if stageErr := stage(); stageErr != nil {
+		fail(stageErr)
 	}
 	if mode == "healthy" && (waitErr != nil || len(stdout) <= linkCalibrationOutputLimit || !bytes.Contains(stdout, bytes.Repeat([]byte{0, 255}, 48<<10))) {
 		fail(errors.New("healthy native profile failed or lost binary bytes beyond old link bound"))
@@ -207,7 +305,7 @@ func TestNativeCheckOwnedCommandControls(t *testing.T) {
 	if info, err := os.Lstat(parent); err != nil || !info.IsDir() || info.Mode().Perm() != 0700 || !nativeCheckOwned(info) {
 		t.Fatal("native control private storage identity mismatch")
 	}
-	for _, mode := range []string{"healthy", "nonzero", "orphan", "cancel-exit0"} {
+	for _, mode := range []string{"healthy", "nonzero", "orphan", "cancel-exit0", "post-start-membership", "injected-wait-gate"} {
 		t.Run(mode, func(t *testing.T) {
 			directory, err := os.MkdirTemp(parent, mode+"-")
 			if err != nil {
@@ -239,7 +337,37 @@ func TestNativeCheckOwnedCommandControls(t *testing.T) {
 			}{pid, true, command.ProcessState != nil, stdout, stderr, cause, outCount, errCount, false}); err != nil {
 				t.Fatal("native control foreground wait retention incomplete")
 			}
-			if runErr != nil || outCount > linkCalibrationOutputLimit || errCount > linkCalibrationOutputLimit {
+			negative := mode == "post-start-membership" || mode == "injected-wait-gate"
+			if negative {
+				var exit *exec.ExitError
+				if !errors.As(runErr, &exit) || exit.ExitCode() != 1 {
+					t.Fatal("synthetic failed-controller path was not reached; private originals retained")
+				}
+				factsRaw, factsErr := os.ReadFile(filepath.Join(directory, "control-facts.json"))
+				errorRaw, errorErr := os.ReadFile(filepath.Join(directory, "errors.json"))
+				var facts nativeCheckControlFacts
+				var original struct{ Errors []struct{ Cause []byte } }
+				if factsErr != nil || errorErr != nil || json.Unmarshal(factsRaw, &facts) != nil || json.Unmarshal(errorRaw, &original) != nil || len(original.Errors) == 0 {
+					t.Fatal("failed-controller original facts/error retention incomplete")
+				}
+				if facts.Status != "INCOMPLETE" || facts.SyntheticMechanism == "" || facts.Wait.Started || facts.Wait.WaitReturned ||
+					!facts.GroupClosureStarted || facts.ExplicitCloseCalls != 1 || !facts.Tree.AnchorStarted || facts.Tree.AnchorPID <= 0 || facts.Tree.AnchorStartTicks == "" ||
+					!facts.Tree.AnchorWaitReturned || !facts.Tree.AnchorReaped || facts.OwnFinalCloseProven || facts.ReleaseQualified || !facts.RequiresExternalWaitAndMacReadback {
+					t.Fatal("failed-controller snapshot invented closure, lost actual waits or retried close")
+				}
+				if mode == "post-start-membership" && (string(original.Errors[0].Cause) != "test did not join the owned anchor group" || !facts.Tree.ControlFailed ||
+					!facts.Tree.SignalsClosed || facts.GroupSignalCalls != 0 || len(facts.Tree.Signals) != 0 || !facts.Tree.Closed || !facts.Tree.NoChildren || !syscall.WaitStatus(facts.Tree.AnchorStatus).Exited()) {
+					t.Fatal("post-start mismatch did not retain original failure and actual natural-expiry wait without signals")
+				}
+				if mode == "injected-wait-gate" && (string(original.Errors[0].Cause) != "direct wait ownership not closed" || !facts.InjectedFalseDirectWaitGate ||
+					facts.Tree.Closed || facts.Tree.NoChildren || facts.GroupSignalCalls != 3 || !syscall.WaitStatus(facts.Tree.AnchorStatus).Signaled()) {
+					t.Fatal("injected wait gate did not preserve the original incomplete tree separately from actual terminal anchor wait")
+				}
+				if _, err := os.Stat(filepath.Join(directory, "result.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("failed helper path published a completed native result")
+				}
+			}
+			if (!negative && runErr != nil) || outCount > linkCalibrationOutputLimit || errCount > linkCalibrationOutputLimit {
 				t.Fatal("native check owned control failed; private originals retained")
 			}
 		})
