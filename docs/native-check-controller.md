@@ -4,8 +4,9 @@
 `/bin/sh scripts/check.sh`. It creates no Docker resources and enables no live
 test opt-ins. Its harness verdict never qualifies Kaferry or proves its own final
 process return, final close, guest-to-Mac transfer, or retention. The workflow,
-installed hooks, guest foreground parent and Mac readback are separate unfinished
-requirements. This source has not itself established a reached native check.
+installed hooks, authentic bootstrap, transport and Mac readback are separate
+unfinished requirements. The fixed guest-parent source below is preparation; no
+production native-check invocation or CI integration is established.
 
 The external caller supplies only `--repository`, `--run-id`, `--reviewed-head`
 and `--input-sha256`. Run IDs are lowercase letters/digits/hyphens, start with a
@@ -123,3 +124,92 @@ relabels that snapshot. This exercises a real evidence-admission rejection and
 retention; it does not claim a real timed-out or unreaped condition. The outer
 test expects these two helper processes to fail and independently reads their
 exact original causes and snapshots. Their failed experiments stay incomplete.
+
+
+## Fixed guest-parent source and controls
+
+`scripts/native-check-guest-parent.py` supplies one fixed foreground owner for
+one already-built controller. Its only interface is `--input
+/home/labrunner/kaferry-native-ci-RUN/parent-input.json --input-sha256 SHA`.
+The0700 base, source-only0700 tree and source catalog must be authenticated to the
+reviewed head externally. The fixed controller resides at `BASE/controller/native-check`;
+its0600 `controller-build.json` and `native-check.buildinfo` bind the whole
+Linux ARM64 ELF, clean reviewed build head, Go1.26.0 and the SDK hash above.
+The actual compiler wait and trusted SDK/source provenance must be retained by
+the future bootstrap; these input assertions do not authenticate themselves.
+
+The exact parent-input fields are Version(string1), RunID, SourceHead,
+GuestName, GuestMachineID, ControllerSHA256, ControllerBytes,
+ControllerBuildSHA256, NativeInputSHA256 and ParentSHA256. NativeInputSHA256
+binds `SOURCE/.cache/native-check-input.json`; ParentSHA256 binds this exact
+tracked script and its catalog row. Unknown fields, substituted bytes, an old
+build head or a reused parent-private directory fail. There is no operator
+argv/environment choice, rebuild fallback or inherited test opt-in.
+
+The guest parent reserves `BASE/parent-private/errors.jsonl` before admission,
+then its fixed stdout.bin, stderr.bin, inputs.json, wait.json, result.json and
+inventory.json. All are0600 single-link originals in0700 directories. The primary
+sink is256KiB total/64KiB per cause, binary streams64KiB each, other receipts256KiB.
+Private causes are not printed publicly. Canonical ownership, selected guest,
+normal HOME, default SIGCHLD and unlimited inherited FSIZE are checked; a finite
+hardware limit is rejected rather than raised. Production HOME, environment,
+limits and default Go caches are never redirected or modified.
+
+One Popen starts only the bound native controller. A selected Linux pidfd,
+registered alongside both binary pipes, provides one retained signal handle and
+exit readiness before the sole Popen.wait. The deadline is360s, with same-handle
+TERM then30s grace/KILL and10s allowance. Known direct return closes signaling;
+a separate2s drain deadline preserves descendant-held output as incomplete.
+Read/overflow/cancellation errors retain available prefixes and actual waits.
+A pidfd construction/registration/signal refusal preserves its exact error and
+permits only bounded same-child capture/Wait, never a numeric-PID or process-group
+fallback. Constructor uncertainty is not an invented prelaunch/no-child fact.
+This parent creates no second inner tree oracle, anchor or subreaper chain.
+
+Cancellation is observed throughout the installed handler lifetime, including
+post-Wait drain, input/producer readback and finalization. One latched cause goes
+to the original sink while writable. A post-Wait cancellation issues no signal
+or second wait. If a candidate result was already serialized, it is not rewritten;
+the failed actual parent return rejects it. After the primary sink closes, the
+cause cannot be written elsewhere, and success still fails. Literal late-cancel
+controls invoke the installed handler after real wait/readback and in the finite
+held-pipe drain, preserving original actual waits and incomplete output.
+
+After successful actual direct wait and natural output EOFs, the parent rechecks
+its pinned inputs and reads exactly the Go producer's seven completed original
+files. It checks their declared identity/verdict without recreating Go's waits.
+It always leaves OwnFinalCloseProven:false, GuardReleaseAuthorized:false and
+ReleaseQualified:false. Its primary sink closes before final inventory close;
+a failure of either cannot be repaired through another sink or declare success.
+Actual external parent return and independent Mac readback are still required.
+No result file or Orb client return releases an external guard by itself.
+
+`test-native-check-guest-parent.py` uses clearly separate inert Python specimens
+and ELF-shaped data through private unit seams, never a production selector.
+It covers binary bytes/one actual wait, fake PASS/nonzero, timeout/refusal,
+constructor uncertainty, changed/missing inputs, incomplete producer output,
+read/write/close failures and reused attempts. Linux-only controls separately
+exercise the actual selected pidfd and a finite dedicated inert subreaper that
+waits an adopted pipe holder. That fixture's reconciliation does not upgrade the
+original missing-EOF parent result; production and the shared unit process do
+not become subreapers.
+
+Original controls remain under `.cache/native-check-parent-controls/inert-*`,
+including each finite source/controller/input fixture, parent-private originals,
+actual fixture-launch/body PID/environment/limit receipts and independent unit
+reconciliation when needed. A future Mac transport must admit this explicit
+unit diagnostic root and its finite inventory; no recursive cache/home upload is
+implemented. Temporary fixture Python launches use fixed `-S -B` so host user-site
+lookups and bytecode writes are outside this synthetic mechanism. The exact
+three supplied environment keys are retained separately from the child's actual
+platform environment. Production execution remains the native Go controller.
+
+The first Mac control suite timed out and retained missing waits; its unknown
+constructor-child PID cannot be reconstructed from known-PID absence checks.
+A second suite reached actual fixture bodies but failed on automatic Darwin
+child environment and an insufficient fake-signal unit grace. These failures
+remain distinct from native qualification. New controls retain a launch PID before
+constructor uncertainty and a body marker; any subsequent check must retain its
+own result. Source/control reviews, authentic controller/bootstrap and source
+archive bindings, bounded Mac transport, external return/readback/guards and
+actual native CI remain required before this composition can claim success.

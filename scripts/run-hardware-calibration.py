@@ -131,7 +131,7 @@ def bind_inputs(root, run, expected):
     require(set(m) == {"RunID", "Case", "RepoRoot", "SourceHead", "GuestName", "GuestMachineID", "CallerSHA256",
                        "TestSHA256", "TestBytes", "SpecimenSHA256", "SpecimenBytes", "BuildSHA256", "PlanSHA256", "AuditSHA256"})
     require(m["RunID"] == run and m["Case"] in CASES and m["RepoRoot"] == str(root) and m["SourceHead"] == HEAD
-            and root == Path("/home/labrunner") / ("kaferry-hardware-" + HEAD[:7] + "-" + run) / "source"
+            and root == Path("/run/user/501") / ("kaferry-hardware-" + HEAD[:7] + "-" + run) / "source"
             and m["GuestName"] == "kaferry-lab-arm64-20261026" and m["GuestMachineID"] == "01M5XVQQ4GRX6H79K1SE76R0X1")
     for key in ("CallerSHA256", "TestSHA256", "SpecimenSHA256", "BuildSHA256", "PlanSHA256", "AuditSHA256"):
         require(type(m[key]) is str and re.fullmatch(r"[0-9a-f]{64}", m[key]))

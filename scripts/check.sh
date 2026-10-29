@@ -7,6 +7,7 @@ if [ -n "$unformatted" ]; then
   exit 1
 fi
 python3 scripts/test-hardware-calibration-caller.py -v
+python3 scripts/test-native-check-guest-parent.py -v
 go vet ./...
 mkdir -p .cache/unit
 go test -v -race -covermode=atomic -coverpkg=./... -coverprofile=.cache/unit/coverage.out -count=1 -timeout=3m ./...

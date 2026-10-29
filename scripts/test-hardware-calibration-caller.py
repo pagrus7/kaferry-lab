@@ -47,14 +47,15 @@ class CallerControls(unittest.TestCase):
         self.run = "inert-unit-control"
 
     def test_reviewed_source_directory_reaches_pins_and_stale_prefix_does_not(self):
-        # Literal external directory from the reviewed AF5 preparation; do not
+        # Literal fixed workspace for AF5; do not
         # derive its prefix from the production expression being exercised.
-        valid = Path("/home/labrunner/kaferry-hardware-af5e4b2-inert-unit-control/source")
-        stale = Path("/home/labrunner/kaferry-hardware-eb0fd52-inert-unit-control/source")
-        wrong_run = Path("/home/labrunner/kaferry-hardware-af5e4b2-other-run/source")
+        valid = Path("/run/user/501/kaferry-hardware-af5e4b2-inert-unit-control/source")
+        stale = Path("/run/user/501/kaferry-hardware-eb0fd52-inert-unit-control/source")
+        wrong_run = Path("/run/user/501/kaferry-hardware-af5e4b2-other-run/source")
+        old_home = Path("/home/labrunner/kaferry-hardware-af5e4b2-inert-unit-control/source")
         class ReachedSourcePin(Exception):
             pass
-        for root, admitted in ((valid, True), (stale, False), (wrong_run, False)):
+        for root, admitted in ((valid, True), (stale, False), (wrong_run, False), (old_home, False)):
             with self.subTest(root=str(root)):
                 manifest = {"RunID": self.run, "Case": "normal", "RepoRoot": str(root),
                             "SourceHead": caller.HEAD, "GuestName": "kaferry-lab-arm64-20261026",

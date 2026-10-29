@@ -95,10 +95,28 @@ A control with literal AF5, stale EB and wrong-run directories fails against the
 old source and distinguishes the corrected source-pin boundary. This corrects
 caller preparation; no prior lifecycle failure or mapping gate is relaxed.
 
+The subsequent normal-f attempt reached READY and target exec but failed the
+unchanged mapping gate. Its complete diagnostic identifies only the device
+minor: opened-file stat00:2a versus maps00:26, with the same inode, permissions,
+range and calculated offset. All actual waits and copied originals remain
+retained; normal-mode cleanup still fails and no hardware hit is established.
+Current filesystem metadata identifies Btrfs, whose subvolume stat identity can
+differ from the inode superblock reported in maps. Equal inode/path text alone
+cannot repair that identity relation, so the gate is not relaxed.
+
+The fixed next-case workspace uses the already existing, user-owned tmpfs at
+`/run/user/501`, with unchanged UID, namespace, kernel, GDB, image bytes, HOME,
+caches, guards and oracles. No mount, privilege or propagation change is made.
+A small read-only data mapping matched file stat and distinguished an identical-byte
+clone's inode; it did not execute an artifact or establish hardware capability.
+The literal caller-root control also rejects the old home workspace before
+source-pin reads. See [workspace ownership and retention](hardware-workspace.md)
+for the separate capacity, volatile-lifetime and persistent-copy requirements.
+
 ## Exact inputs before launch
 
 The coordinator prepares a fresh reviewedaf5e4b2 checkout per case at
-`/home/labrunner/kaferry-hardware-af5e4b2-RUN/source`. The caller checks canonical
+`/run/user/501/kaferry-hardware-af5e4b2-RUN/source`. The caller checks canonical
 paths, actual uid501 and Linux/aarch64 uname for the selected owned guest
 `kaferry-lab-arm64-20261026`, kernel
 `7.0.14-orbstack-00380-ga7e0a2dc9535`. OrbStack machine ID
