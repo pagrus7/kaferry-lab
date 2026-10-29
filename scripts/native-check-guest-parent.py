@@ -241,6 +241,15 @@ def signal_child(handle, value):
     signal.pidfd_send_signal(handle, value, None, 0)
 
 
+def observe_cancellation(cancelled, record):
+    # The handler only sets the first flag. Latch its cause once, through the
+    # original sink; Errors.record still rejects success after that sink closes.
+    if cancelled[0] and not cancelled[1]:
+        cancelled[1] = True
+        record(InterruptedError("parent cancellation requested"))
+    return cancelled[0]
+
+
 def wait_controller(argv, source, out, err, record, cancelled):
     """One Popen/Wait owner; pidfd readability precedes the sole actual Wait."""
     r = {"LaunchAttempted": False, "Started": False, "LaunchUncertain": False, "PID": None,
@@ -311,10 +320,11 @@ def wait_controller(argv, source, out, err, record, cancelled):
             r["SignalRouteClosed"] = True  # same-child capture/Wait only, no alternate signaling
         while True:
             now = time.monotonic()
+            observe_cancellation(cancelled, stop)
             if not r["WaitAttempted"]:
-                if not fault and (cancelled[0] or now - origin >= WAIT_SECONDS):
-                    r["Timeout"] = not cancelled[0]
-                    stop(InterruptedError("parent cancellation requested") if cancelled[0] else TimeoutError("fixed native controller wait budget expired"))
+                if not fault and now - origin >= WAIT_SECONDS:
+                    r["Timeout"] = True
+                    stop(TimeoutError("fixed native controller wait budget expired"))
                 if kill_at is not None and now >= kill_at and not r["SignalRouteClosed"]:
                     kill_at = None
                     try:
@@ -406,6 +416,7 @@ def wait_controller(argv, source, out, err, record, cancelled):
             except BaseException as error:
                 fault = True
                 record(error)
+    observe_cancellation(cancelled, stop)
     r["ElapsedNS"] = int((time.monotonic() - origin) * 1_000_000_000)
     r["OutputComplete"] = not fault and r["Waited"] and r["StdoutEOF"] and r["StderrEOF"] and all(
         r[label + "Bytes"] == r["Captured" + label + "Bytes"] <= STREAM_LIMIT for label in ("Stdout", "Stderr"))
@@ -441,7 +452,7 @@ def run_attempt(base, expected):
     directory(attempt)
     errors = Errors(create(attempt / "errors.jsonl"))  # first reserved sink
     files, bound, go_rows, result, wait, code, handlers = {}, [], [], {}, {}, 2, {}
-    cancelled = [False]
+    cancelled = [False, False]  # requested, cause already observed
     def cancel(_number, _frame):
         cancelled[0] = True
     try:
@@ -451,7 +462,7 @@ def run_attempt(base, expected):
             handlers[value] = signal.signal(value, cancel)
         native_platform()
         m, bound = bind_inputs(base, expected)
-        require(not cancelled[0] and set(os.listdir(base / "source/.cache")) == {"native-check-input.json"})
+        require(not observe_cancellation(cancelled, errors.record) and set(os.listdir(base / "source/.cache")) == {"native-check-input.json"})
         write_file(files["inputs.json"], encode({"ParentInputSHA256": expected, "Input": m, "Bindings": bound,
                    "ExternalApprovedHeadAndMachineBindingRequired": True}))
         argv = [str(base / "controller/native-check"), "--repository", str(base / "source"), "--run-id", m["RunID"],
@@ -460,9 +471,12 @@ def run_attempt(base, expected):
         write_file(files["wait.json"], encode({"Argv": argv, "GuestParentPID": os.getpid(), **wait}))
         for name in ("stdout.bin", "stderr.bin", "inputs.json", "wait.json"):
             close_file(files.pop(name), errors.record)
+        observe_cancellation(cancelled, errors.record)
         require(wait["Waited"] and wait["ReturnCode"] == 0 and wait["OutputComplete"] and not wait["Timeout"] and not errors.failed)
         require(bind_inputs(base, expected) == (m, bound))
+        require(not observe_cancellation(cancelled, errors.record))
         go_rows = producer_files(base, m)
+        require(not observe_cancellation(cancelled, errors.record))
         result = {"RunID": m["RunID"], "Status": "CONTROLLER_RETURN_CORROBORATED_EXTERNAL_CUSTODY_REQUIRED",
                   "ControllerReturnCorroborated": True, "OwnFinalCloseProven": False,
                   "RequiresExternalReturnAndMacReadback": True, "GuardReleaseAuthorized": False, "ReleaseQualified": False}
@@ -470,14 +484,16 @@ def run_attempt(base, expected):
     except BaseException as error:
         errors.record(error)
     finally:
+        for name in ("stdout.bin", "stderr.bin", "inputs.json", "wait.json"):
+            if name in files:
+                close_file(files.pop(name), errors.record)
+        observe_cancellation(cancelled, errors.record)
         for value, handler in handlers.items():
             try:
                 signal.signal(value, handler)
             except BaseException as error:
                 errors.record(error)
-        for name in ("stdout.bin", "stderr.bin", "inputs.json", "wait.json"):
-            if name in files:
-                close_file(files.pop(name), errors.record)
+        observe_cancellation(cancelled, errors.record)
         if errors.failed:
             result = {"Status": "INCOMPLETE", "ControllerReturnCorroborated": False,
                       "ControllerLaunchAttempted": wait.get("LaunchAttempted", False), "ControllerWaited": wait.get("Waited", False),
@@ -490,7 +506,11 @@ def run_attempt(base, expected):
             except BaseException as error:
                 errors.record(error)
             close_file(files.pop("result.json"), errors.record)
+        # A candidate already serialized/closed is never rewritten. A newly
+        # observed cancellation rejects it through the actual external return.
+        observe_cancellation(cancelled, errors.record)
         errors.close()
+        observe_cancellation(cancelled, errors.record)
         # The final inventory cannot attest its own close. An error now has no
         # replacement sink; actual parent return/Mac readback must reject it.
         if not errors.failed and code == 0:
@@ -501,9 +521,11 @@ def run_attempt(base, expected):
                            "OwnFinalCloseProven": False, "RequiresExternalReturnAndMacReadback": True}))
             except BaseException:
                 errors.failed = True
+        observe_cancellation(cancelled, errors.record)
         if "inventory.json" in files:
             close_file(files.pop("inventory.json"), lambda _: setattr(errors, "failed", True))
-    return 2 if errors.failed else code
+        observe_cancellation(cancelled, errors.record)
+    return 2 if errors.failed or cancelled[0] else code
 
 
 def main(argv):

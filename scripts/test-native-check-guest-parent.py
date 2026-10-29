@@ -200,6 +200,40 @@ class ParentControls(unittest.TestCase):
     def saved(self, name):
         return (self.base / "parent-private" / name).read_bytes()
 
+    def invoke_postwait_handler(self, value, handler=None):
+        # Directly invoke the actual installed handler, visibly synthetic signal
+        # delivery AFTER the real finite child Wait. Never invent a wait result.
+        self.assertEqual(len(self.waits), 1)
+        self.assertEqual(self.externally_owned[0].returncode, 0)
+        self.assertEqual(self.waits[0], self.externally_owned[0].pid)
+        self.wait_before_cancellation = self.saved("wait.json")
+        handler = handler if handler is not None else signal.getsignal(value)
+        self.assertTrue(callable(handler))
+        handler(value, None)
+        handler(value, None)  # repeated delivery still has one retained cause
+
+    def assert_cancelled_original_wait(self, candidate=False, cause_retained=True):
+        wait = m.decode(self.saved("wait.json"))
+        self.assertTrue(wait["WaitAttempted"] and wait["Waited"] and wait["SignalRouteClosed"])
+        self.assertEqual(wait["ReturnCode"], 0)
+        self.assertGreater(wait["WaitObservedNS"], 0)
+        self.assertEqual(wait["PID"], self.externally_owned[0].pid)
+        self.assertEqual(self.externally_owned[0].returncode, 0)
+        self.assertEqual(len(self.waits), 1)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.signals, [])
+        before = getattr(self, "wait_before_cancellation", b"")
+        if before:
+            self.assertEqual(self.saved("wait.json"), before)
+        result = m.decode(self.saved("result.json"))
+        self.assertEqual(result["ControllerReturnCorroborated"], candidate)
+        if not candidate:
+            self.assertEqual(result["Status"], "INCOMPLETE")
+        self.assertFalse(result["OwnFinalCloseProven"] or result["GuardReleaseAuthorized"] or result["ReleaseQualified"])
+        self.assertTrue(result["RequiresExternalReturnAndMacReadback"])
+        causes = [row["Exception"] for row in map(m.decode, self.saved("errors.jsonl").splitlines())]
+        self.assertEqual(causes.count("InterruptedError('parent cancellation requested')"), 1 if cause_retained else 0)
+
     def assert_body_environment(self, actual):
         # Preserve and check the actual body observation, distinct from the
         # three-key environment supplied to Popen. Darwin's measured automatic
@@ -243,6 +277,83 @@ class ParentControls(unittest.TestCase):
         self.assertEqual(wait["ReturnCode"], 7)
         self.assertEqual(len(self.waits), 1)
         self.assertFalse(m.decode(self.saved("result.json"))["ControllerReturnCorroborated"])
+
+    def test_postwait_producer_cancellation_is_retained_once(self):
+        actual = m.producer_files
+        def cancelled_producer(*args):
+            rows = actual(*args)
+            self.invoke_postwait_handler(signal.SIGTERM)
+            return rows
+        self.patch(m, "producer_files", cancelled_producer)
+        self.assertEqual(self.run_parent(), 2)
+        self.assert_cancelled_original_wait()
+
+    def test_postwait_input_recheck_cancellation_is_retained_once(self):
+        actual, calls = m.bind_inputs, []
+        def cancelled_recheck(*args):
+            bound = actual(*args)
+            calls.append(True)
+            if len(calls) == 2:
+                self.invoke_postwait_handler(signal.SIGINT)
+            return bound
+        self.patch(m, "bind_inputs", cancelled_recheck)
+        self.assertEqual(self.run_parent(), 2)
+        self.assertEqual(len(calls), 2)
+        self.assert_cancelled_original_wait()
+
+    def test_finalization_cancellation_before_handler_restore_is_retained(self):
+        actual, installed, delivered = signal.signal, {}, []
+        def restore_with_cancel(value, handler):
+            if value not in installed:
+                installed[value] = handler
+            elif value == signal.SIGTERM and not delivered:
+                delivered.append(True)
+                self.invoke_postwait_handler(value, installed[value])
+            return actual(value, handler)
+        self.patch(m.signal, "signal", restore_with_cancel)
+        self.assertEqual(self.run_parent(), 2)
+        self.assertEqual(delivered, [True])
+        self.assert_cancelled_original_wait()
+
+    def test_serialized_candidate_cancellation_is_rejected_by_actual_return(self):
+        actual_producer, actual_write, installed, delivered = m.producer_files, m.write_file, [], []
+        def capture_handler(*args):
+            rows = actual_producer(*args)
+            installed.append(signal.getsignal(signal.SIGINT))
+            return rows
+        def write_then_cancel(f, raw):
+            actual_write(f, raw)
+            if b'"ControllerReturnCorroborated": true' in raw and not delivered:
+                delivered.append(True)
+                self.invoke_postwait_handler(signal.SIGINT, installed[0])
+        self.patch(m, "producer_files", capture_handler)
+        self.patch(m, "write_file", write_then_cancel)
+        self.assertEqual(self.run_parent(), 2)
+        self.assertEqual(delivered, [True])
+        # This already-written candidate is preserved; actual return2 plus its
+        # retained cancellation reject it. It never claims its final close.
+        self.assert_cancelled_original_wait(candidate=True)
+        self.assertEqual(self.saved("inventory.json"), b"")
+
+    def test_postprimary_cancellation_has_no_replacement_sink_or_success(self):
+        actual_producer, actual_read, installed, delivered = m.producer_files, m.read_file, [], []
+        def capture_handler(*args):
+            rows = actual_producer(*args)
+            installed.append(signal.getsignal(signal.SIGTERM))
+            return rows
+        def read_then_cancel(path, *args, **kwargs):
+            original = actual_read(path, *args, **kwargs)
+            if path.parent.name == "parent-private" and not delivered:
+                delivered.append(True)
+                self.invoke_postwait_handler(signal.SIGTERM, installed[0])
+            return original
+        self.patch(m, "producer_files", capture_handler)
+        self.patch(m, "read_file", read_then_cancel)
+        self.assertEqual(self.run_parent(), 2)
+        self.assertEqual(delivered, [True])
+        self.assert_cancelled_original_wait(candidate=True, cause_retained=False)
+        self.assertEqual(self.saved("errors.jsonl"), b"")
+        self.assertEqual(set(p.name for p in (self.base / "parent-private").iterdir()), set(m.FILES))
 
     def test_timeout_has_one_selected_route_and_one_actual_wait(self):
         self.patch(m, "WAIT_SECONDS", 0.15)
@@ -495,9 +606,17 @@ class ParentControls(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "linux", "owned descendant reaping control requires Linux subreaper")
     def test_actual_direct_wait_cannot_replace_descendant_held_output_eof(self):
+        self.run_owned_held_output_control(False)
+
+    @unittest.skipUnless(sys.platform == "linux", "owned descendant reaping control requires Linux subreaper")
+    def test_postwait_cancellation_during_actual_held_output_drain_is_retained(self):
+        self.run_owned_held_output_control(True)
+
+    def run_owned_held_output_control(self, cancel_during_drain):
         # Only this dedicated, finite INERT helper becomes a subreaper. Neither
         # the production guest parent nor the shared unittest process does so.
-        argv = [sys.executable, "-S", "-B", str(TEST_SCRIPT), "--owned-held-output-control", str(self.base)]
+        selected = "--owned-held-output-cancel-control" if cancel_during_drain else "--owned-held-output-control"
+        argv = [sys.executable, "-S", "-B", str(TEST_SCRIPT), selected, str(self.base)]
         child = REAL_POPEN(argv,
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(m.ENV), close_fds=True)
         self.externally_owned.append(child)
@@ -514,9 +633,11 @@ class ParentControls(unittest.TestCase):
         report = m.decode(stdout)
         self.assertTrue(report["ActualControllerWaited"] and report["ActualHolderWaited"])
         self.assertFalse(report["ParentCorroborated"] or report["OutputComplete"] or report["ReleaseQualified"])
+        self.assertEqual(report["CancellationInjected"], cancel_during_drain)
+        self.assertEqual(report["CancellationCauseCount"], 1 if cancel_during_drain else 0)
 
 
-def owned_held_output_control(ledger_root):
+def owned_held_output_control(ledger_root, cancel_during_drain=False):
     """Finite isolated unit owner reaps its adopted holder; no production route."""
     signal.alarm(6)
     m.directory(ledger_root)
@@ -537,17 +658,42 @@ def owned_held_output_control(ledger_root):
         holder_file = case.base / "holder.pid"
         case.producer("pid=os.fork()\nif pid==0:\n time.sleep(0.4);os._exit(0)\n"
                       "pathlib.Path(" + repr(str(holder_file)) + ").write_text(str(pid));os.write(1,b'held-prefix')")
+        delivered = []
+        if cancel_during_drain:
+            actual_selector = m.selectors.DefaultSelector
+            def cancellation_selector():
+                selector = actual_selector()
+                actual_select = selector.select
+                def select_after_wait(timeout=None):
+                    # Real direct Wait has returned; the finite descendant is
+                    # still holding both output pipes. Invoke the actual live
+                    # handler, with no signal syscall or invented wait facts.
+                    if case.externally_owned and case.externally_owned[0].returncode == 0 and not delivered:
+                        delivered.append(True)
+                        case.invoke_postwait_handler(signal.SIGINT)
+                    return actual_select(timeout)
+                selector.select = select_after_wait
+                return selector
+            case.patch(m.selectors, "DefaultSelector", cancellation_selector)
         code = case.run_parent()
+        # Reap the exact finite owned holder BEFORE diagnostic assertions can
+        # fail. This separate reconciliation never upgrades the parent result.
+        holder = int(holder_file.read_text())
+        returned, status = os.waitpid(holder, 0)
         wait, result = m.decode(case.saved("wait.json")), m.decode(case.saved("result.json"))
         require = m.require
         require(code == 2 and wait["Waited"] and wait["ReturnCode"] == 0 and not wait["OutputComplete"]
                 and not wait["StdoutEOF"] and not wait["StderrEOF"] and len(case.waits) == 1 and not case.signals)
-        holder = int(holder_file.read_text())
-        returned, status = os.waitpid(holder, 0)  # exact adopted INERT child only
         require(returned == holder and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
+        causes = [row["Exception"] for row in map(m.decode, case.saved("errors.jsonl").splitlines())]
+        cancellation_count = causes.count("InterruptedError('parent cancellation requested')")
+        require(bool(delivered) == cancel_during_drain and cancellation_count == (1 if cancel_during_drain else 0))
+        if cancel_during_drain:
+            case.assert_cancelled_original_wait()
         report = {"ParentRoot": str(case.base), "ActualControllerWaited": wait["Waited"], "ActualHolderWaited": returned == holder,
                   "HolderPID": holder, "HolderRawStatus": status, "ParentCorroborated": result["ControllerReturnCorroborated"],
                   "OutputComplete": wait["OutputComplete"], "OriginalParentStatus": result["Status"], "ReleaseQualified": False,
+                  "CancellationInjected": cancel_during_drain, "CancellationCauseCount": cancellation_count,
                   "Scope": "dedicated inert subreaper reconciliation; original incomplete parent capture unchanged"}
         f = m.create(ledger_root / "owned-held-control-reconcile.json")
         m.write_file(f, m.encode(report))
@@ -564,6 +710,6 @@ def owned_held_output_control(ledger_root):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--owned-held-output-control":
-        sys.exit(owned_held_output_control(Path(sys.argv[2])))
+    if len(sys.argv) == 3 and sys.argv[1] in ("--owned-held-output-control", "--owned-held-output-cancel-control"):
+        sys.exit(owned_held_output_control(Path(sys.argv[2]), sys.argv[1] == "--owned-held-output-cancel-control"))
     unittest.main(verbosity=2)

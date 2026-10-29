@@ -166,6 +166,15 @@ permits only bounded same-child capture/Wait, never a numeric-PID or process-gro
 fallback. Constructor uncertainty is not an invented prelaunch/no-child fact.
 This parent creates no second inner tree oracle, anchor or subreaper chain.
 
+Cancellation is observed throughout the installed handler lifetime, including
+post-Wait drain, input/producer readback and finalization. One latched cause goes
+to the original sink while writable. A post-Wait cancellation issues no signal
+or second wait. If a candidate result was already serialized, it is not rewritten;
+the failed actual parent return rejects it. After the primary sink closes, the
+cause cannot be written elsewhere, and success still fails. Literal late-cancel
+controls invoke the installed handler after real wait/readback and in the finite
+held-pipe drain, preserving original actual waits and incomplete output.
+
 After successful actual direct wait and natural output EOFs, the parent rechecks
 its pinned inputs and reads exactly the Go producer's seven completed original
 files. It checks their declared identity/verdict without recreating Go's waits.
