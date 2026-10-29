@@ -46,6 +46,36 @@ class CallerControls(unittest.TestCase):
             (self.cache / name).mkdir(mode=0o700)
         self.run = "inert-unit-control"
 
+    def test_reviewed_source_directory_reaches_pins_and_stale_prefix_does_not(self):
+        # Literal external directory from the reviewed AF5 preparation; do not
+        # derive its prefix from the production expression being exercised.
+        valid = Path("/home/labrunner/kaferry-hardware-af5e4b2-inert-unit-control/source")
+        stale = Path("/home/labrunner/kaferry-hardware-eb0fd52-inert-unit-control/source")
+        wrong_run = Path("/home/labrunner/kaferry-hardware-af5e4b2-other-run/source")
+        class ReachedSourcePin(Exception):
+            pass
+        for root, admitted in ((valid, True), (stale, False), (wrong_run, False)):
+            with self.subTest(root=str(root)):
+                manifest = {"RunID": self.run, "Case": "normal", "RepoRoot": str(root),
+                            "SourceHead": caller.HEAD, "GuestName": "kaferry-lab-arm64-20261026",
+                            "GuestMachineID": "01M5XVQQ4GRX6H79K1SE76R0X1",
+                            "TestBytes": 6567549, "SpecimenBytes": 3993074}
+                for field in ("CallerSHA256", "TestSHA256", "SpecimenSHA256", "BuildSHA256", "PlanSHA256", "AuditSHA256"):
+                    manifest[field] = "a" * 64
+                raw = caller.encode(manifest)
+                calls = []
+                def read(path, *args, **kwargs):
+                    calls.append(path)
+                    if len(calls) == 1:
+                        self.assertEqual(path, root / ".cache/hardware-gdb-caller-input.json")
+                        return raw, {}
+                    self.assertEqual(path, root / ".gitignore")
+                    raise ReachedSourcePin()
+                with mock.patch.object(caller, "read_file", read), mock.patch.object(caller, "__file__", str(root / ".cache/run-hardware-calibration.py")):
+                    with self.assertRaises(ReachedSourcePin if admitted else ValueError):
+                        caller.bind_inputs(root, self.run, hashlib.sha256(raw).hexdigest())
+                self.assertEqual(len(calls), 2 if admitted else 1)
+
     def file(self, path, raw, mode=0o600):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
         with os.fdopen(fd, "wb") as f:

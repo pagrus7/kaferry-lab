@@ -86,6 +86,15 @@ with all three affected source reviews passing; the actual GDB tests skipped.
 Fresh normal-f binaries are bound below. No actual normal-f attempt is ready
 until caller validation/reviews, filled inputs and custody admission complete.
 
+The first normal-f data-admission check refused before any wrapper or debugger
+launch: the caller still required the old `eb0fd52` directory prefix despite
+its AF5 source/artifact pins. That failed packet and exact refusal are retained.
+The canonical directory now derives its seven-character prefix from the same
+fixed reviewed HEAD, keeping the existing exact guest/run/source constraint.
+A control with literal AF5, stale EB and wrong-run directories fails against the
+old source and distinguishes the corrected source-pin boundary. This corrects
+caller preparation; no prior lifecycle failure or mapping gate is relaxed.
+
 ## Exact inputs before launch
 
 The coordinator prepares a fresh reviewedaf5e4b2 checkout per case at
