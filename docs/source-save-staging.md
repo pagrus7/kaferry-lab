@@ -70,6 +70,30 @@ full obligation ledger remain required before final completion.
 
 ## Controls and integration limits
 
+The schema3 checker now admits a fixed `source-save` data profile using the
+existing event fields. Given the immutable96-entry declaration, it checks
+`warmup`3 → `save-probe`4 → `full`96, with source ends1/1/1 →2/1/1 →32/32/32.
+Only one primary-unlimited and a distinct recovery-unlimited are allowed.
+The probe audit must independently show all four exact output records and
+present saved-next1 on all three partitions while that same primary is live.
+That sampled visible-unsaved observation precedes an observed owned STOP;
+full publication/readback and one CONT follow. It proves no later save attempt.
+
+Complete data still returns `Unsupported`, with
+`source_save_admission_complete` and `mechanism_unobserved`; no PASS or release
+qualification is added. Missing, corrupt or misrouted records and settled
+unsafe prefixes retain precedence over the missing mechanism. A live snapshot
+does not become quiescence, and an already saved probe is an unreached window.
+Existing delivery profiles and v1/v2 behavior remain unchanged. This is additive
+compiled schema3 vocabulary; old checkers reject the new scenario as unsupported.
+No wire field, generic stage language, writer or loader was added.
+
+`internal/evidence/m3_source_save_test.go` supplies independent asymmetric
+histories and seven controls for data, order, ownership, unreached probes,
+settled violations and deterministic writer/load rechecks. The targeted host
+check passed in2.276s; native checks and independent reviews of this checker
+increment remain pending. These data controls do not execute a broker or release.
+
 `internal/campaign/kafka_save_staging_test.go` contains synthetic fake-producer
 controls that decode whole producer messages into complete three-partition
 scans. They cover 3→4→96 selection, exact nullable probe/provenance/routing,
@@ -82,8 +106,8 @@ broker or released process ran. Native checks, required CI and independent
 source/evidence reviews remain required before acceptance.
 
 There is deliberately no call from `scenario.go`. Integration depends on the
-current periodic-save witness, original-parent/process custody, same-primary
-observations, and evidence-version3 publication-stage support. The existing
-two-stage version3 warmup3/full96 admission is unchanged and does not yet admit
-the intermediate four-record stage. Adding staging helpers cannot turn the
-current unsupported mechanism into a passing scenario.
+current periodic-save witness, original-parent/process custody and actual
+same-primary observations. The two-stage delivery profiles remain unchanged;
+source-save's three-stage checker does not supply its missing mechanism.
+Adding staging helpers or data admission cannot turn that unsupported
+mechanism into a passing scenario.
