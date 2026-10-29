@@ -315,7 +315,7 @@ func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run f
 	if err != nil {
 		return err
 	}
-	proxyConfig, err := fixture.LinkProxyImageID(state.DockerPlatform)
+	identity, err := fixture.ValidatedLinkImage(state, true)
 	if err != nil || state.Proxy == nil || state.Proxy.Image != proxyReference {
 		return errors.Join(err, errors.New("proxy does not match the recorded native image profile"))
 	}
@@ -329,8 +329,9 @@ func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run f
 		return errors.New("owned proxy inspect exceeds evidence bound")
 	}
 	var info struct {
-		ID, Name, Image string
-		Config          struct {
+		ID, Name, Image         string
+		ImageManifestDescriptor *fixture.ImageManifestIdentity
+		Config                  struct {
 			Image  string
 			Labels map[string]string
 		}
@@ -347,7 +348,10 @@ func checkLiveLinkProxyOwnership(ctx context.Context, state fixture.State, run f
 	if json.Unmarshal(raw, &info) != nil {
 		return errors.New("owned proxy inspect malformed")
 	}
-	if info.ID != state.Proxy.ContainerID || info.Name != "/"+state.Proxy.Container || info.Image != state.Proxy.ImageID || info.Image != proxyConfig || info.Config.Image != proxyReference || info.Config.Labels[brokerOwnerLabel] != state.RunID || info.Config.Labels["io.kaferry-lab.role"] != "proxy" || info.State.Running == nil || info.State.Paused == nil || !*info.State.Running || *info.State.Paused || info.HostConfig.NetworkMode != state.Network || len(info.NetworkSettings.Networks) != 1 || info.NetworkSettings.Networks[state.Network].NetworkID != state.Proxy.NetworkID {
+	if err := fixture.ValidateLinkContainerImage(state, true, info.Image, info.ImageManifestDescriptor); err != nil {
+		return err
+	}
+	if info.ID != state.Proxy.ContainerID || info.Name != "/"+state.Proxy.Container || info.Image != state.Proxy.ImageID || info.Image != identity.RuntimeImageID || info.Config.Image != proxyReference || info.Config.Labels[brokerOwnerLabel] != state.RunID || info.Config.Labels["io.kaferry-lab.role"] != "proxy" || info.State.Running == nil || info.State.Paused == nil || !*info.State.Running || *info.State.Paused || info.HostConfig.NetworkMode != state.Network || len(info.NetworkSettings.Networks) != 1 || info.NetworkSettings.Networks[state.Network].NetworkID != state.Proxy.NetworkID {
 		return errors.New("proxy ownership/image/network/state mismatch")
 	}
 	expected := map[string]string{"8474/tcp": state.Proxy.API, "8666/tcp": state.WorkerSource, "8667/tcp": state.WorkerDestination}

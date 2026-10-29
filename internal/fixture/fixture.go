@@ -166,7 +166,7 @@ func up(ctx context.Context, id string, run Executor, links bool, request linkRe
 	if err = save(s); err != nil {
 		return s, err
 	}
-	cleanupNeeded := !links
+	cleanupNeeded := false // no resources exist before image admission
 	defer func() {
 		if err != nil && cleanupNeeded {
 			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)

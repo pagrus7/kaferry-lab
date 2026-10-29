@@ -378,8 +378,9 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 			return err
 		}
 		var facts struct {
-			ID, Name, Image string
-			Config          struct {
+			ID, Name, Image         string
+			ImageManifestDescriptor *fixture.ImageManifestIdentity
+			Config                  struct {
 				Image           string
 				Labels          map[string]string
 				Cmd, Entrypoint []string
@@ -402,6 +403,9 @@ func TestLiveOwnedLinkDirectionalLatency(t *testing.T) {
 		}
 		if len(raw) > 64<<10 || json.Unmarshal(raw, &facts) != nil {
 			return errors.New("calibration ownership inspection malformed or oversized")
+		}
+		if err := fixture.ValidateLinkContainerImage(state, true, facts.Image, facts.ImageManifestDescriptor); err != nil {
+			return err
 		}
 		if !linkLatencyContainerID(facts.ID) || facts.Name != "/"+name || containerID != "" && facts.ID != containerID || facts.Image != proxyImageID || facts.Config.Image != proxyImage || facts.Config.Labels[brokerOwnerLabel] != state.RunID || facts.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
 			return errors.New("calibration immutable ownership/image mismatch")

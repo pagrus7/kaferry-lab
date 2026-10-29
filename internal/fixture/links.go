@@ -68,8 +68,9 @@ func LinkProxyImageID(dockerPlatform string) (string, error) {
 type ProxyState struct {
 	Image, Container, API                          string
 	Source, Destination                            ProxyMapping
-	ContainerID, NetworkID, ImageID, BrokerImageID string   `json:",omitempty"`
-	BrokerIDs                                      []string `json:",omitempty"`
+	ContainerID, NetworkID, ImageID, BrokerImageID string             `json:",omitempty"`
+	BrokerIDs                                      []string           `json:",omitempty"`
+	ImageIdentity, BrokerImageIdentity             *LinkImageIdentity `json:",omitempty"`
 }
 type ProxyMapping struct {
 	Name     string `json:"name"`
@@ -79,6 +80,7 @@ type ProxyMapping struct {
 type linkIdentity struct {
 	RunID, ManifestSHA256, ContainerID, NetworkID, ImageID, BrokerImageID string
 	BrokerIDs                                                             []string
+	ImageIdentity, BrokerImageIdentity                                    *LinkImageIdentity `json:",omitempty"`
 }
 type linkNetwork struct {
 	ID, Name string
@@ -86,8 +88,9 @@ type linkNetwork struct {
 }
 type linkBinding struct{ HostIP, HostPort string }
 type linkContainer struct {
-	ID, Name, Image string
-	Config          struct {
+	ID, Name, Image         string
+	ImageManifestDescriptor *ImageManifestIdentity
+	Config                  struct {
 		Image  string
 		Labels map[string]string
 		Env    []string
@@ -295,6 +298,13 @@ func loadLinkIdentity(s *State, manifest []byte) error {
 	}
 	s.Proxy.ContainerID, s.Proxy.NetworkID, s.Proxy.ImageID, s.Proxy.BrokerImageID = id.ContainerID, id.NetworkID, id.ImageID, id.BrokerImageID
 	s.Proxy.BrokerIDs = append([]string{}, id.BrokerIDs...)
+	s.Proxy.ImageIdentity, s.Proxy.BrokerImageIdentity = id.ImageIdentity, id.BrokerImageIdentity
+	if _, e = ValidatedLinkImage(*s, true); e != nil {
+		return e
+	}
+	if _, e = ValidatedLinkImage(*s, false); e != nil {
+		return e
+	}
 	return nil
 }
 func saveLinkIdentity(s *State, r linkResources) error {
@@ -313,7 +323,7 @@ func saveLinkIdentity(s *State, r linkResources) error {
 	if reserved.RunID != s.RunID || reserved.Source != s.Source || reserved.Destination != s.Destination || reserved.WorkerSource != s.WorkerSource || reserved.WorkerDestination != s.WorkerDestination || reserved.Proxy.API != s.Proxy.API {
 		return errors.New("link manifest changed before identity reservation")
 	}
-	id := linkIdentity{s.RunID, linkDigest(manifest), r.Proxy.ID, r.NetworkID, r.ProxyImageID, r.BrokerImageID, []string{r.Brokers[0].ID, r.Brokers[1].ID}}
+	id := linkIdentity{RunID: s.RunID, ManifestSHA256: linkDigest(manifest), ContainerID: r.Proxy.ID, NetworkID: r.NetworkID, ImageID: r.ProxyImageID, BrokerImageID: r.BrokerImageID, BrokerIDs: []string{r.Brokers[0].ID, r.Brokers[1].ID}, ImageIdentity: s.Proxy.ImageIdentity, BrokerImageIdentity: s.Proxy.BrokerImageIdentity}
 	body, e := json.MarshalIndent(id, "", "  ")
 	if e != nil {
 		return e
@@ -619,7 +629,7 @@ func linkInspect(ctx context.Context, run Executor, kind, target string, out any
 		}
 		return false, e
 	}
-	if len(raw) > 64<<10 || json.Unmarshal(raw, out) != nil {
+	if len(raw) > 64<<10 || decodeImageArchiveJSON(raw, out) != nil {
 		return false, errors.New("owned link Docker inspection malformed or oversized")
 	}
 	return true, nil
@@ -645,7 +655,8 @@ func inspectLinkImage(ctx context.Context, run Executor, s State, reference stri
 		return "", err
 	}
 	expected := profile.brokerConfig
-	if reference == profile.proxyImage {
+	proxy := reference == profile.proxyImage
+	if proxy {
 		expected = profile.proxyConfig
 	} else if reference != Image {
 		return "", errors.New("unreviewed fixture image reference")
@@ -654,15 +665,43 @@ func inspectLinkImage(ctx context.Context, run Executor, s State, reference stri
 	if err != nil {
 		return "", err
 	}
-	var image struct {
-		ID           string `json:"Id"`
-		OS           string `json:"Os"`
-		Architecture string
+	var image imageInspectIdentity
+	if len(raw) > linkOutputLimit || decodeImageArchiveJSON(raw, &image) != nil || image.OS != "linux" || image.Architecture != profile.architecture {
+		return "", errors.New("pinned fixture image native platform mismatch")
 	}
-	if len(raw) > 64<<10 || json.Unmarshal(raw, &image) != nil || image.ID != expected || image.OS != "linux" || image.Architecture != profile.architecture {
-		return "", errors.New("pinned fixture image config or native platform mismatch")
+	if image.ID == expected {
+		if image.Descriptor != nil {
+			return "", errors.New("classic config image has unreviewed manifest descriptor")
+		}
+		if s.Proxy != nil {
+			saved := s.Proxy.BrokerImageIdentity
+			if proxy {
+				saved = s.Proxy.ImageIdentity
+			}
+			classic := LinkImageIdentity{Mode: classicImageMode, RuntimeImageID: image.ID, ConfigDigest: expected}
+			if saved != nil && *saved != classic {
+				return "", errors.New("retained image identity domain changed")
+			}
+		}
+		return image.ID, nil
 	}
-	return image.ID, nil
+	id, err := admitModernImage(ctx, run, s, reference, raw)
+	if err != nil {
+		return "", err
+	}
+	saved := s.Proxy.BrokerImageIdentity
+	if proxy {
+		saved = s.Proxy.ImageIdentity
+	}
+	if saved != nil && (saved.Mode != id.Mode || saved.RuntimeImageID != id.RuntimeImageID || saved.ConfigDigest != id.ConfigDigest || saved.ProofSHA256 != id.ProofSHA256 || !sameManifest(saved.Manifest, id.Manifest)) {
+		return "", errors.New("retained modern image identity changed")
+	}
+	if proxy {
+		s.Proxy.ImageIdentity = &id
+	} else {
+		s.Proxy.BrokerImageIdentity = &id
+	}
+	return id.RuntimeImageID, nil
 }
 func inspectLinkContainer(ctx context.Context, s State, run Executor, index int, networkID, imageID string, setup bool) (linkFacts, bool, error) {
 	name, role, reference, target := s.Proxy.Container, "proxy", s.Proxy.Image, s.Proxy.ContainerID
@@ -686,6 +725,10 @@ func inspectLinkContainer(ctx context.Context, s State, run Executor, index int,
 	}
 	if !linkID(c.ID) || c.Name != "/"+name || c.Config.Labels[ownerLabel] != s.RunID || c.Config.Labels[linkRoleLabel] != role || c.Config.Image != reference || c.Image != imageID || target != name && c.ID != target || c.HostConfig.NetworkMode != s.Network || networkID == "" || c.State.Running == nil || c.State.Paused == nil {
 		return linkFacts{}, true, errors.New("owned link container identity/image/network mismatch")
+	}
+	identity, imageErr := imageIdentityForInspection(s, index == 2, imageID)
+	if imageErr != nil || identity.Mode == manifestImageMode && !sameManifest(c.ImageManifestDescriptor, identity.Manifest) || identity.Mode == classicImageMode && c.ImageManifestDescriptor != nil {
+		return linkFacts{}, true, errors.New("owned container selected manifest identity mismatch")
 	}
 	// A failed Docker start can leave only the exact configured network/binds.
 	// Such a stopped owned container may be removed, but cannot prove readiness.

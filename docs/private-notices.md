@@ -20,8 +20,10 @@ The sole workflow job is **local retention calibration**, not harness CI or a
 released Kaferry campaign. It runs on the existing repository-scoped Mac runner's
 unique `kaferry-lab-mac-custody-20261025` label. It does not select hosted runners,
 Go, a product executable, Docker faults, packet capture or metadata diagnostics.
-Ordinary Go builds/tests with unchanged caches are now user-authorized and the
-original host retry succeeded. Separate attestation-cache/capture stops remain.
+Ordinary Go builds/tests with unchanged caches are user-authorized and the
+original host retry succeeded. The separately authorized original Mac attestation
+retry later passed unchanged, followed by fresh native ARM64 verification.
+Capture/global-process stops remain.
 The selected qualification target is native Linux ARM64 in OrbStack; this Darwin
 host and the fixed custody workflow cannot provide that runtime evidence. No
 emulated run may silently replace native qualification. M2–M6 remain unfinished.

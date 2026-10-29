@@ -267,3 +267,22 @@ requires explicit mapping/toxic fields, and treats only an explicit expected
 zero collection's null/empty encodings alike. Exact one-leading-LF container
 absence framing is covered separately from permission/unknown-prefix failures;
 these are authored measurement controls, not new Kaferry qualification cases.
+
+## Native image-store and caller calibration (in progress)
+
+No new Kaferry scenario is introduced by this harness work. The native ARM64
+transition independently checks the fixture trust boundary and guest/host caller
+observations. Docker29.1.3's containerd store returned an image index/manifest
+digest where the old admission expected a configuration digest; the first native
+linked development run failed before any test child or delay fault. The original
+STOPPED record and failed verdict remain. Exact local image target, selected
+manifest, configuration, platform and owned-container identities must be proved
+separately before this backend is admitted; an index alone cannot pass.
+
+The standalone linked caller has63 data-only refusal/closure controls, including
+wrong native metadata, missing foreground return, dropped output and quiescent
+failed outcomes. These controls are separate from native fault calibration and
+Kaferry qualification. Native execution/custody, current review and final CI are
+required independently. Unstarted disposable image-identity specimens may measure
+the backend's identity fields with exact ownership and removal; they do not
+establish broker/proxy behavior or a reached Kaferry fault.

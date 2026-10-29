@@ -271,7 +271,11 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 			raw = raw[:linkOutputLimit]
 		}
 		if cause == nil && complete {
-			if kind := linkMetadataReadbackKind(args); kind != "" {
+			kind := linkMetadataReadbackKind(args)
+			if kind == "" {
+				kind = linkContainerReadbackKind(id, args)
+			}
+			if kind != "" {
 				// A successful command says nothing about the caller's later semantic
 				// admission. Preserve exact selected originals before that caller sees them.
 				_, e = writeLinkPrivate(operation, "", struct {
@@ -369,6 +373,22 @@ func linkMetadataReadbackKind(args []string) string {
 		if args[2] == Image || args[2] == ProxyImage || args[2] == arm64ProxyImage {
 			return "linked-docker-image-inspect"
 		}
+	}
+	if len(args) == 7 && args[0] == "image" && args[1] == "inspect" && args[2] == "--platform" && args[3] == "linux/arm64" && (args[4] == Image || args[4] == arm64ProxyImage) && args[5] == "--format" && args[6] == "{{json .}}" {
+		return "linked-docker-selected-native-image-inspect"
+	}
+	return ""
+}
+
+// A candidate inspection is retained before ownership/descriptor admission;
+// raw success does not assert that the queried candidate belongs to this run.
+func linkContainerReadbackKind(id string, args []string) string {
+	if len(args) != 5 || args[0] != "container" || args[1] != "inspect" || args[3] != "--format" || args[4] != "{{json .}}" {
+		return ""
+	}
+	prefix := "kaferry-lab-" + id
+	if args[2] == prefix+"-source" || args[2] == prefix+"-dest" || args[2] == prefix+"-links" || linkID(args[2]) {
+		return "linked-docker-container-candidate-inspect"
 	}
 	return ""
 }

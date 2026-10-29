@@ -21,6 +21,7 @@ type brokerInterval struct {
 }
 
 type brokerFacts struct {
+	SelectedManifest                                                  *fixture.ImageManifestIdentity `json:",omitempty"`
 	RunningPresent, PausedPresent                                     bool
 	ConfiguredExternalBindings, PublishedExternalBindings             []brokerPortBinding
 	RunID, Role, ContainerID, Name, ImageID, ImageReference, Endpoint string
@@ -79,6 +80,7 @@ type ownedBroker struct {
 	run                             fixture.Executor
 	probe                           brokerProbe
 	calibration                     bool
+	linkedImage                     *fixture.State
 }
 
 // openOwnedBroker accepts only source/destination resources described by a valid
@@ -121,6 +123,13 @@ func openBrokerWithProbe(ctx context.Context, state fixture.State, role string, 
 		return nil, empty, errors.New("broker role must be source or destination")
 	}
 	b := &ownedBroker{runID: state.RunID, role: role, name: name, endpoint: endpoint, origin: time.Now(), run: run, probe: probe, calibration: calibration}
+	if state.Proxy != nil {
+		if _, err := fixture.ValidatedLinkImage(state, false); err != nil {
+			return nil, empty, err
+		}
+		owned := state
+		b.linkedImage = &owned
+	}
 	snapshot, err := b.inspect(ctx, name)
 	if err != nil {
 		return nil, snapshot, err
@@ -310,8 +319,9 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 		return snapshot, errors.New("owned broker inspect exceeds evidence limit")
 	}
 	var info struct {
-		ID, Name, Image string
-		Config          struct {
+		ID, Name, Image         string
+		ImageManifestDescriptor *fixture.ImageManifestIdentity
+		Config                  struct {
 			Image  string
 			Labels map[string]string
 		}
@@ -329,11 +339,16 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 	if err = json.Unmarshal(out, &info); err != nil {
 		return snapshot, errors.New("invalid owned broker inspect JSON")
 	}
-	facts := &brokerFacts{RunID: info.Config.Labels[brokerOwnerLabel], Role: b.role, ContainerID: info.ID, Name: info.Name, ImageID: info.Image, ImageReference: info.Config.Image, Endpoint: b.endpoint}
+	facts := &brokerFacts{RunID: info.Config.Labels[brokerOwnerLabel], Role: b.role, ContainerID: info.ID, Name: info.Name, ImageID: info.Image, ImageReference: info.Config.Image, Endpoint: b.endpoint, SelectedManifest: info.ImageManifestDescriptor}
 	snapshot.Facts = facts
 	facts.RunningPresent, facts.PausedPresent = info.State.Running != nil, info.State.Paused != nil
 	facts.ConfiguredExternalBindings = append([]brokerPortBinding(nil), info.HostConfig.PortBindings["19092/tcp"]...)
 	facts.PublishedExternalBindings = append([]brokerPortBinding(nil), info.NetworkSettings.Ports["19092/tcp"]...)
+	if b.linkedImage != nil {
+		if err := fixture.ValidateLinkContainerImage(*b.linkedImage, false, info.Image, info.ImageManifestDescriptor); err != nil {
+			return snapshot, err
+		}
+	}
 	if !brokerContainerID(info.ID) || (b.id != "" && info.ID != b.id) || info.Name != "/"+b.name || facts.RunID != b.runID || info.Config.Image != fixture.Image || !strings.HasPrefix(info.Image, "sha256:") || !brokerContainerID(strings.TrimPrefix(info.Image, "sha256:")) {
 		return snapshot, errors.New("owned broker container ID, name, label or image mismatch")
 	}

@@ -5,9 +5,10 @@ The selected runner is `kaferry-lab-mac-mini-20261025`, repository runner21 for
 `/Users/pg/services/github-runners/kaferry-lab-mac-20261025`. It has only the
 custom label `kaferry-lab-mac-custody-20261025`. Four unrelated runners must not
 be changed. The host is Darwin/arm64. The owned OrbStack ARM64 machine was
-previously stopped. Its current API reports starting after bounded start/stop
-client timeouts; termination is unconfirmed. It is not used by the custody
-calibration. See PROGRESS.md for current substrate observations.
+previously unresponsive. After the user restored OrbStack on2026-10-28, it was
+observed stopped and then started normally for coordinator native development.
+It is not used by the custody calibration. See PROGRESS.md for measured native
+checks, release identity, failed link calibration and current resources.
 
 The active workflow is `Mac local retention calibration`. Its fixed Python
 calibration is distinct from Go harness CI, release execution and M0–M6
@@ -68,3 +69,26 @@ The user-approved original Go retry succeeded; a renewed denial must still stop
 its operation, and other recorded refusals cannot be bypassed. Full qualification still requires the complete roadmap, a
 matching pinned published release, independently reached faults/recovery,
 complete membership/bytes/routing/saved-prefix audits and offline rechecks.
+
+## Standalone guest caller admission (not yet CI wiring)
+
+`scripts/admit-linked-caller.py` checks an already returned native ARM64 linked
+driver using explicit repository/run/head/attempt inputs. It executes no driver,
+Go, Docker or transport. The guest foreground parent must first write the actual
+return status after its direct Wait; the admission reader cannot manufacture or
+independently discover that event. Its final process return must also be observed
+by its caller. An Orb client return is a separate host observation.
+
+The implementation binds fixed native build paths, actual binary bytes/AArch64
+ELF and retained Go build metadata, the existing driver marker, terminal child
+wait/tree/EOF facts and the foreground result. Exit0 means admitted calibration
+pass, exit2 means admitted quiescent FAILED calibration, and exit1 means
+incomplete/rejected. No result means Kaferry qualification. Exact errors use the
+one inherited caller-reserved private FD; no alternate sink is attempted.
+
+The63 literal refusal/closure controls in `scripts/test-linked-caller.py` exercise
+that exact implementation. Native development exercised its quiescent-failure
+path after image admission failed; no delay fault passed. Source review, trusted
+native job/hooks, complete bounded local guest-to-Mac retention, actual runtime
+controls and final-head CI remain separate requirements. The active installed
+no-child hook contract is unchanged and cannot accept a native evidence tree.

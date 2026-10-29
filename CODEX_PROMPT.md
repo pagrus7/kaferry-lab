@@ -29,17 +29,24 @@ Keep all evidence private locally and remove active encryption/artifact/cache
 uploads. Preserve old originals/ciphertext/keys/proposals and the incomplete
 historical transfers. Normal dependency, source and runner control operations
 remain authorized; they do not clear old failures or authorize fallback after a
-new denial. Packet capture, global process enumeration and previously denied
-attestation-cache operations retain their separate stops; no alternative cache,
-verifier, UID, service, VM, capture or safeguard route may hide a refusal.
+new denial. Packet capture and global process enumeration retain their separate stops. The
+original Mac attestation retry was separately authorized and passed unchanged; no
+alternative cache/verifier/UID/service/VM/capture or safeguard route may hide a
+new refusal.
 The owned Mac runner currently runs only the reviewed fixed custody calibration.
 Port and measure the native ARM64 harness/campaign deliberately; never run a
 Linux release as a macOS process or call emulation native. Preserve historical
 AMD64 offline-checking support and results, with no ARM64 runtime claims from
-those records. The shared OrbStack backend is currently unresponsive; normal
-lab-machine start/stop and backend queries timed out. Global OrbStack restart
-would affect unrelated resources and requires the separately requested user
-approval. Continue independent source/checker work while that answer is pending.
+those records. The user restored OrbStack on2026-10-28. The owned machine now runs native ARM64;
+coordinator full Go checks and fresh release verification passed. The separately
+approved original Mac attestation retry also passed with unchanged default cache;
+that prior stop is resolved. Capture/global-process stops remain. The first native
+linked development calibration failed before a testchild/fault because Docker's
+containerd-store image identity differs from the legacy config-ID assumption;
+retain its STOPPED/failure/originals and fix the strict identity contract before a
+NEW run. Native CI/caller/local custody and all required M2–M6 cases remain
+incomplete. Read PROGRESS.md for actual resources, worker ownership and nextstep.
+No global/shared OrbStack restart was performed by the coordinator.
 
 Use independent observations and offline checking for record fidelity, membership, routing, saved progress and recovery. Missing observations, unreached conditions, incomplete scans and product violations never become passing results. Separate calibration histories and faulty stand-ins from release evidence. Local AMD64 emulation is development evidence; final required qualification runs natively on Linux ARM64 in the approved OrbStack environment.
 

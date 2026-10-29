@@ -43,12 +43,14 @@ func selectedLinkCalibrationProxy(s fixture.State) (platform, image, imageID str
 	if err != nil {
 		return
 	}
-	imageID, err = fixture.LinkProxyImageID(s.DockerPlatform)
-	if err != nil {
+	identity, identityErr := fixture.ValidatedLinkImage(s, true)
+	if identityErr != nil {
+		err = identityErr
 		return
 	}
+	imageID = identity.RuntimeImageID
 	if s.Image != fixture.Image || s.Proxy == nil || s.Proxy.Image != image || s.Proxy.ImageID != imageID {
-		err = errors.New("linked calibration requires the selected native proxy reference and exact config")
+		err = errors.New("linked calibration requires the selected native proxy reference and exact image identity")
 	}
 	return
 }
@@ -305,8 +307,9 @@ func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p link
 		return "", errors.New("latency cleanup plan image differs from native fixture")
 	}
 	var f struct {
-		ID, Name, Image string
-		Config          struct {
+		ID, Name, Image         string
+		ImageManifestDescriptor *fixture.ImageManifestIdentity
+		Config                  struct {
 			Image           string
 			Labels          map[string]string
 			Cmd, Entrypoint []string
@@ -332,6 +335,9 @@ func validateLinkCalibrationLatencyContainer(raw []byte, s fixture.State, p link
 	}
 	if decodeErr := json.Unmarshal(raw, &f); decodeErr != nil {
 		return "", decodeErr
+	}
+	if err := fixture.ValidateLinkContainerImage(s, true, f.Image, f.ImageManifestDescriptor); err != nil {
+		return "", err
 	}
 	if len(f.ID) != 64 || !calibrationHex(f.ID) || retained != "" && f.ID != retained || f.Name != "/"+p.Name || f.Image != imageID || f.Config.Image != image || f.Config.Labels[brokerOwnerLabel] != s.RunID || f.Config.Labels["io.kaferry-lab.role"] != "latency-calibration" {
 		return "", errors.New("latency cleanup immutable ownership mismatch")

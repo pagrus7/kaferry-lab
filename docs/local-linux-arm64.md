@@ -22,10 +22,12 @@ The ARM64 archive is `kaferry-v0.6.0-linux-arm64.tar.gz`,7858654bytes,
 SHA256e79718f78eb5619e51a4505e3a87ddc37c38dd7049292bfe4b6037cbe5102bf2.
 The executable is22085756bytes,
 SHA256389aa874f084389b35f22a00002ee1ba8e66e3b563ee46e963f18e88dca97a92.
-Retained data inspection binds ELF64 little-endian ET_EXEC/AArch64. It never ran
-the subject. Decoded provenance was unverified; fresh release/tag/asset/checksum,
-cryptographic provenance and native version evidence remain mandatory.
-No retained download, self-hash, adjacent JSON or source build is a fallback.
+The earlier retained data inspection bound ELF64 little-endian ET_EXEC/AArch64
+without executing that copy. On2026-10-28 a fresh native verification at source
+e0600cb passed release/tag/assets/checksums, cryptographic provenance and native
+version observation. It reported the exact tuple above and v0.6.0/commitd7d485b;
+this is release identity/version evidence, not fault qualification. No retained
+download, self-hash, adjacent JSON or source build is a fallback.
 
 ## Native substrate and dependencies
 
@@ -39,13 +41,21 @@ On reactivation its start client exceeded35seconds and the machine remained
 `starting`; a bounded stop exceeded30seconds. Shared `orb status` and Docker
 native-info queries also exceeded15seconds. Machine logs were retained but old
 shutdown text does not establish current termination. No global restart, force,
-prune, deletion or safeguard change followed. User approval for a shared restart
-is pending because unrelated projects may be affected. Actual state and next
+prune, deletion or safeguard change followed. At that stage a shared restart required user approval because unrelated projects
+would be affected. Actual state and next
 commands are in PROGRESS.md. A timed-out client is not a stopped resource.
+Those timeouts remain historical: the user restored OrbStack on2026-10-28. Fresh
+status showed the exact owned machine stopped, then an ordinary owned-machine
+start succeeded. Native kernel/toolchain/resource observations are recorded in
+PROGRESS.md. The coordinator never restarted the shared backend.
 
 Official dependency metadata and static inspection bind the Go1.26.0 LinuxARM64
 SDK archive63655921bytes/SHA256bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd.
-It is retained as data, not installed or executed. The successful host Go was
+It was initially retained as data; on2026-10-28 its same verified bytes were
+installed at /usr/local/go in the owned native machine and Go1.26.0/LinuxARM64
+was measured. The full native format/vet/race/unit check passed at e0600cb;
+live-link/Kafka opt-ins were skipped. These are coordinator development checks,
+not final-head native CI or released fault acceptance. The successful host Go was
 Go1.27.2/DarwinARM64, using its ordinary existing caches. The native SDK selection
 matches go.mod and the earlier waiting-parent source audit; it is not a cache
 redirect, product source build or native measurement.
@@ -60,15 +70,23 @@ OS/architecture to its recorded engine profile before creating networks or
 containers. The linked driver checks its native caller against the completed
 fixture before launching its live child; that caller check is not a pre-creation
 fixture gate. Scenario subject/backend admission precedes its runtime mutations.
-Metadata is not an image pull, container identity or reached runtime capability.
+Static metadata alone is not an image pull, container identity or reached
+runtime capability. The first native linked development attempt pulled these
+images but failed before any test child/fault: Docker29.1.3's containerd store
+reported target index/manifest IDs instead of configuration IDs. Its original
+STOPPED and failed cleanup verdict remain. Strict target/selectedmanifest/config
+proof and every owned-container predicate need repair before a new calibration.
+Separate unstarted identity specimens measured those fields and were removed;
+they establish no broker/proxy behavior.
 The affected raw-readback repair is scoped to the already reserved linked private
 executor. Legacy nonlinked setup has no such private authority; do not invent an
 invalid-State fallback or claim complete failure custody for it.
 
 ## Remaining acceptance
 
-Measure the exact native kernel/toolchain, permitted verifier and process/wait
-capabilities, then native fixture/runtime and complete local custody. Port public
+The exact native kernel/toolchain, permitted verifier and ordinary process/wait
+controls now have narrow development evidence. Complete strict native fixture
+admission, reached runtime controls, local custody integration and final-head CI. Port public
 ELF/Go metadata with fixed AArch64 entry anchoring. Rework any instruction,
 register, frame and hardware observer against the exact ARM64 executable and
 stock native backend; AMD64 PCs/offsets/guards cannot be reused. Static candidates
@@ -81,9 +99,37 @@ Linux campaign. Before native jobs are selected, integrate original released
 process wait/closure evidence and complete/failed private output retention.
 No active encryption or artifact/cache upload is part of this direction.
 
-Packet capture, global process enumeration and separately recorded verification
-cache refusals retain their limits. Never choose another UID/cache/verifier/
-capture route or change safeguards to make a denied operation pass. A genuine
+Packet capture and global process enumeration remain stopped. The user separately
+authorized the original Mac attestation retry with unchanged cache/safeguards;
+it passed, followed by fresh native verification. Never choose another
+UID/cache/verifier/capture route or change safeguards to hide a new refusal. A genuine
 new refusal remains evidence and stops its selected operation. Only the complete
 roadmap, reviewed native runs, offline rechecks and final-head CI can complete
 the project; no PR or release qualification follows from this platform port.
+
+## Containerd-store admission repair (source under review)
+
+The new path keeps the runtime image target, selected platform manifest and
+configuration digest distinct. Classic stores still require their exact pinned
+configuration ID. The observed modern store is supported only for the fixed
+ARM64 Kafka/proxy tuples; unknown combinations fail closed. Before creating
+networks/containers, it checks generic and explicit-platform inspection plus the
+selected manifest/configuration/layer commitments in a bounded stock image-save
+archive. Every owned modern container must also report the exact selected native
+manifest; its runtime `Image` field alone is insufficient.
+
+The save controller records an actual direct wait, terminal status, pipe EOFs and
+archive close. Archive bytes stay under owner-only `.cache/image-identity-data/`
+with a512MiB bound. Existing private fixture authority retains bounded exact
+errors, selected raw manifest/configuration and lifecycle/proof records. No
+existing diagnostic bound is increased. Failed/partial save or changed proof
+stops that facility; it is not retried through another route. Raw successful
+container-inspection candidates are retained before semantic admission and do
+not themselves mean acceptance. The pure reader has256-entry/64KiB-selectedJSON
+bounds and rejects corrupt, truncated, duplicate or escaping members.
+
+The nonlinked setup path currently lacks this private authority and refuses the
+modern proof before resource creation. This source does not silently provision a
+new M0 authority. These implementations passed host controls but still require
+independent source review, native archive/controller/custody measurements and a
+new reached stock-link calibration. No failed history is upgraded by the repair.

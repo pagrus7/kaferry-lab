@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""SYNTHETIC data-only controls of the exact workflow PYPROOF controller.
+"""SYNTHETIC data-only controls of standalone linked-caller admission.
 
 No driver, Go, Docker, crypto, network or uploaded notice is executed/read.
 Literal receipts model driver facts; they cannot establish real writer closure.
 """
-import ast
+import importlib.util
 import contextlib
 import copy
 import hashlib
@@ -20,7 +20,10 @@ from unittest import mock
 
 RUN = "links-123456-2"
 HEAD = "a" * 40
-TEST_SHA = "b" * 64
+TEST_IMAGE = b"\x7fELF\x02\x01\x01" + bytes(9) + b"\x02\x00\xb7\x00" + bytes(44)
+DRIVER_IMAGE = TEST_IMAGE + b"literal synthetic driver image"
+TEST_SHA = hashlib.sha256(TEST_IMAGE).hexdigest()
+DRIVER_SHA = hashlib.sha256(DRIVER_IMAGE).hexdigest()
 SENTINEL = "PRIVATE_SYNTHETIC_CALLER_FIELD=must-never-be-public"
 SCOPE = "Reviewed driver final marker after actual wait/tree closure and primary sink sync/close; no ACK or Kaferry qualification."
 
@@ -33,19 +36,6 @@ def write_json(path, value):
     with path.open("x") as stream:
         json.dump(value, stream, sort_keys=True)
         stream.write("\n")
-
-
-def extract_proof(workflow):
-    # Exact unique workflow heredoc, without a YAML dependency or logic copy.
-    lines = workflow.decode().splitlines(keepends=True)
-    starts = [i for i, line in enumerate(lines) if line == "          python3 - <<'PYPROOF'\n"]
-    assert len(starts) == 1, "workflow must contain one exact PYPROOF"
-    start = starts[0] + 1
-    end = lines.index("          PYPROOF\n", start)
-    assert all(line.startswith("          ") for line in lines[start:end])
-    body = "".join(line[10:] for line in lines[start:end])
-    ast.parse(body)
-    return body
 
 
 def literal_fixture(repository):
@@ -91,23 +81,28 @@ def literal_fixture(repository):
         "namespace": "calibration/linked-build", "run_id": RUN, "job": "links",
         "attempt": "2", "source_head": HEAD, "built_after_utc": "2026-10-25T11:59:00Z",
         "executables": {
-            "campaign.test": {"sha256": TEST_SHA, "bytes": 100, "mode": "0555",
+            "campaign.test": {"sha256": TEST_SHA, "bytes": len(TEST_IMAGE), "mode": "0555",
                               "package": "github.com/pagrus7/kaferry-lab/internal/campaign.test",
-                              "source_head": HEAD, "source_clean": True, "goos": "linux", "goarch": "amd64"},
-            "link-calibration": {"sha256": "c" * 64, "bytes": 100, "mode": "0555",
+                              "source_head": HEAD, "source_clean": True, "goos": "linux", "goarch": "arm64"},
+            "link-calibration": {"sha256": DRIVER_SHA, "bytes": len(DRIVER_IMAGE), "mode": "0555",
                                  "package": "github.com/pagrus7/kaferry-lab/cmd/link-calibration",
-                                 "source_head": HEAD, "source_clean": True, "goos": "linux", "goarch": "amd64"},
+                                 "source_head": HEAD, "source_clean": True, "goos": "linux", "goarch": "arm64"},
         },
         "release_qualified": False, "runtime_requested": True,
+        "kernel_system": "Linux", "kernel_machine": "aarch64",
     }
-    return {"marker": marker, "build": build, "foreground": "0\n", "cancelled": "false", "extra": []}
+    return {"marker": marker, "build": build, "foreground": "0\n", "cancelled": "false", "extra": [],
+            "kernel": ("Linux", "guest", "test", "test", "aarch64"), "test_image": TEST_IMAGE,
+            "driver_image": DRIVER_IMAGE, "metadata_arch": "arm64", "metadata_extra": "", "fault": None, "partial_proof": False, "built_after_file": "2026-10-25T11:59:00Z\n"}
 
 
 def expected_public():
     # Literal complete public projection: extra input fields must never appear.
     return {
         "namespace": "calibration/linked-caller", "run_id": RUN, "source_head": HEAD,
-        "job": "links", "attempt": "2", "foreground_return_observed": True,
+        "job": "links", "attempt": "2", "identity_source": "explicit-caller",
+        "kernel_system": "Linux", "kernel_machine": "aarch64", "goos": "linux", "goarch": "arm64",
+        "driver_sha256": DRIVER_SHA, "test_sha256": TEST_SHA, "foreground_return_observed": True,
         "foreground_exit_code": 0, "caller_cancelled_at_admission": False,
         "writers_quiescent": True, "private_capture_complete": True, "setup_returned": True,
         "cleanup_attempted": True, "cleanup_returned": True, "resources_cleaned": True,
@@ -145,27 +140,21 @@ def unknown_fields(fixture):
 def run():
     os.umask(0o077)
     repository = Path(__file__).resolve().parent.parent
-    workflow_path = repository / ".github/workflows/ci.yml"
-    workflow = workflow_path.read_bytes()
-    body = extract_proof(workflow)
-    code = compile(body, str(workflow_path) + ":PYPROOF", "exec")
-    parent = repository / ".cache/m2/linked-caller-controls"
+    implementation = repository / "scripts/admit-linked-caller.py"
+    spec = importlib.util.spec_from_file_location("linked_caller", implementation)
+    c = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(c)
+    parent = repository / ".cache/m2/native-return-20261028/caller-slice"
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = parent.lstat()
-    assert stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
-    root = Path(tempfile.mkdtemp(prefix="run-", dir=parent))
-    source_paths = [Path(__file__).resolve(), workflow_path,
-                    repository / "internal/campaign/link_calibration_driver.go",
-                    repository / "internal/campaign/link_calibration_tree_linux.go",
-                    repository / "cmd/link-calibration/main.go"]
+    root = Path(tempfile.mkdtemp(prefix="controls-", dir=parent))
+    source_paths = [Path(__file__).resolve(), implementation]
     source_hashes = {str(path.relative_to(repository)): digest(path.read_bytes()) for path in source_paths}
     report = {"scope": "SYNTHETIC data-only caller sensitivity; no actual process/tree/writer proof",
-              "status": "INCOMPLETE", "source_sha256": source_hashes,
-              "exact_workflow_PYPROOF_sha256": digest(body.encode()), "controls": [],
-              "limits": ["Exact extracted workflow code executes on independently literal synthetic files only.",
-                         "No real driver, wait, ECHILD, cancellation, sink close or resource cleanup occurs.",
-                         "No Docker/Go/network/crypto/raw notice/upload/publication authorization.",
-                         "Unknown runtime/publication remain disabled; native source/evidence reviews remain separate."]}
+              "status": "INCOMPLETE", "source_sha256": source_hashes, "controls": [],
+              "limits": ["Actual standalone main reads literal synthetic files; only uname is mocked.",
+                         "No real driver, native platform, wait, ECHILD, cancellation or resource cleanup occurs.",
+                         "ELF specimens and retained Go metadata are literal synthetic data, never executed.",
+                         "No Docker/Go/network/crypto/upload/publication authorization."]}
     cases = [("valid-complete-terminal-proof", lambda f: None, expected_public()),
              ("unknown-raw-fields-stay-out-of-public-projection", unknown_fields, expected_public())]
     failed_expected = expected_public()
@@ -222,7 +211,26 @@ def run():
         ("raw-identity-cannot-be-public", lambda f: f["marker"].update(ReviewedHead=SENTINEL)),
         ("false-release-qualification", lambda f: f["marker"].update(ReleaseQualified=True)),
     ]]
-    assert len(cases) <= 64
+    cases += [(name, mutate, None) for name, mutate in [
+        ("mac-kernel-refused", lambda f: f.update(kernel=("Darwin", "guest", "test", "test", "arm64"))),
+        ("amd64-kernel-refused", lambda f: f.update(kernel=("Linux", "guest", "test", "test", "x86_64"))),
+        ("build-kernel-mismatch", lambda f: f["build"].update(kernel_machine="x86_64")),
+        ("amd64-test-build-refused", lambda f: f["build"]["executables"]["campaign.test"].update(goarch="amd64")),
+        ("amd64-driver-build-refused", lambda f: f["build"]["executables"]["link-calibration"].update(goarch="amd64")),
+        ("wrong-driver-source", lambda f: f["build"]["executables"]["link-calibration"].update(source_head="f" * 40)),
+        ("dirty-driver-source", lambda f: f["build"]["executables"]["link-calibration"].update(source_clean=False)),
+        ("wrong-driver-image", lambda f: f.update(driver_image=DRIVER_IMAGE + b"altered")),
+        ("wrong-test-bytes", lambda f: f.update(test_image=TEST_IMAGE + b"altered")),
+        ("wrong-retained-Go-target", lambda f: f.update(metadata_arch="amd64")),
+        ("conflicting-retained-Go-target", lambda f: f.update(metadata_extra="\tbuild\tGOARCH=amd64\n")),
+        ("wrong-build-timestamp-binding", lambda f: f.update(built_after_file="2026-10-25T11:58:00Z\n")),
+        ("exact-private-read-error", lambda f: f.update(fault="read")),
+        ("read-and-close-originals-both-retained", lambda f: f.update(fault="read-close")),
+        ("proof-sync-error-cannot-admit", lambda f: f.update(fault="sync", partial_proof=True)),
+        ("negative-guest-foreground", lambda f: f.update(foreground="-1\n")),
+        ("boolean-guest-foreground", lambda f: f.update(foreground="true\n")),
+    ]]
+    assert len(cases) <= 80
     started = time.monotonic()
     try:
         for index, (name, mutate, expected) in enumerate(cases):
@@ -242,39 +250,84 @@ def run():
                 (cache / "links/foreground.exit").write_text(fixture["foreground"])
             for extra in fixture["extra"]:
                 write_json(public / extra, {})
-            output = case / "github-output"
-            environment = {"CALLER_CANCELLED": fixture["cancelled"], "LAB_RUN_ID": RUN,
-                           "GITHUB_SHA": HEAD, "GITHUB_JOB": "links", "GITHUB_RUN_ID": "123456",
-                           "GITHUB_RUN_ATTEMPT": "2", "GITHUB_WORKSPACE": str(case), "GITHUB_OUTPUT": str(output)}
+            build_dir = cache / "link-calibration-build" / RUN
+            build_dir.mkdir(mode=0o700, parents=True)
+            build_dir.parent.chmod(0o700)
+            (build_dir / "BuiltAfterUTC").write_text(fixture["built_after_file"])
+            for name, body, package, metadata in [
+                    ("campaign.test", fixture["test_image"], "github.com/pagrus7/kaferry-lab/internal/campaign.test", "test-buildinfo.txt"),
+                    ("link-calibration", fixture["driver_image"], "github.com/pagrus7/kaferry-lab/cmd/link-calibration", "driver-buildinfo.txt")]:
+                (build_dir / name).write_bytes(body)
+                (build_dir / name).chmod(0o555)
+                (build_dir / metadata).write_text("\tpath\t" + package + "\n" + "".join(
+                    "\tbuild\t" + setting + "\n" for setting in (
+                        "GOOS=linux", "GOARCH=" + fixture["metadata_arch"], "vcs.revision=" + HEAD, "vcs.modified=false")) + fixture["metadata_extra"])
+            error_path = case / "caller-errors.json"
+            error_fd = os.open(error_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             stdout, stderr = io.StringIO(), io.StringIO()
-            previous = Path.cwd()
-            returned = 0
-            try:
-                os.chdir(case)
-                # When: run the exact compiled workflow body on actual bounded
-                # files; only environment/cwd/output capture are test-local.
-                with mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                    try:
-                        exec(code, {"__name__": "__main__"})
-                    except SystemExit as error:
-                        returned = error.code
-            finally:
-                os.chdir(previous)
+            argv = ["--repository", str(case), "--run-id", RUN, "--source-head", HEAD,
+                    "--attempt", "2", "--caller-cancelled", fixture["cancelled"], "--error-fd", str(error_fd)]
+            # When: execute the actual standalone CLI body with literal files.
+            # Mock uname is explicitly synthetic and never establishes native evidence.
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(c.os, "uname", return_value=os.uname_result(fixture["kernel"])))
+                stack.enter_context(contextlib.redirect_stdout(stdout))
+                stack.enter_context(contextlib.redirect_stderr(stderr))
+                if fixture["fault"] == "read":
+                    stack.enter_context(mock.patch.object(c, "read", side_effect=PermissionError(13, SENTINEL, "/synthetic/private")))
+                if fixture["fault"] == "read-close":
+                    original_fdopen = c.os.fdopen
+                    class ReadCloseFailure:
+                        def __init__(self, fd, mode):
+                            self.stream = original_fdopen(fd, mode)
+                        def fileno(self):
+                            return self.stream.fileno()
+                        def read(self, maximum):
+                            raise OSError(5, SENTINEL + " read")
+                        def close(self):
+                            self.stream.close()
+                            raise OSError(9, SENTINEL + " close")
+                    stack.enter_context(mock.patch.object(c.os, "fdopen", side_effect=ReadCloseFailure))
+                if fixture["fault"] == "sync":
+                    stack.enter_context(mock.patch.object(c.os, "fsync", side_effect=[OSError(5, SENTINEL), None]))
+                returned = c.main(argv)
+
             proof = cache / "links/caller-proof.json"
             stdout_body, stderr_body = stdout.getvalue(), stderr.getvalue()
             published = proof.read_bytes() if proof.exists() else b""
-            outputs = output.read_text() if output.exists() else ""
+            errors = error_path.read_bytes()
             # Then: independent exact public map or rejection without any flag.
-            safe = SENTINEL not in stdout_body + stderr_body + published.decode() + outputs
+            safe = SENTINEL not in stdout_body + stderr_body + published.decode()
             if expected is None:
-                passed = returned == 1 and not proof.exists() and outputs == "" and safe
+                passed = returned == 1 and proof.exists() == fixture["partial_proof"] and bool(errors) and safe
             else:
-                desired_flags = "writers_stopped=true\ncalibration_passed=" + str(expected["calibration_passed"]).lower() + "\n"
-                passed = returned == 0 and json.loads(published) == expected and outputs == desired_flags and safe
+                desired_exit = 0 if expected["calibration_passed"] else 2
+                passed = returned == desired_exit and json.loads(published) == expected and errors == b"" and safe
+            if name == "absent-foreground-return":
+                raw_error = json.loads(errors)
+                passed = passed and raw_error == {
+                    "action": "linked caller admission", "type": "FileNotFoundError", "errno": 2,
+                    "exact_text": str(FileNotFoundError(2, "No such file or directory", str(cache / "links/foreground.exit"))),
+                    "filename": str(cache / "links/foreground.exit"), "filename2": None}
+            if fixture["fault"] == "read":
+                passed = passed and json.loads(errors) == {
+                    "action": "linked caller admission", "type": "PermissionError", "errno": 13,
+                    "exact_text": str(PermissionError(13, SENTINEL, "/synthetic/private")),
+                    "filename": "/synthetic/private", "filename2": None}
+            if fixture["fault"] == "read-close":
+                passed = passed and json.loads(errors) == {"complete": True, "failures": [
+                    {"action": "read/validate build.json", "type": "OSError", "errno": 5,
+                     "exact_text": str(OSError(5, SENTINEL + " read")), "filename": None, "filename2": None},
+                    {"action": "close build.json", "type": "OSError", "errno": 9,
+                     "exact_text": str(OSError(9, SENTINEL + " close")), "filename": None, "filename2": None}]}
+            if fixture["fault"] == "sync":
+                passed = passed and json.loads(errors) == {"complete": True, "failures": [{
+                    "action": "write/sync caller-proof.json", "type": "OSError", "errno": 5,
+                    "exact_text": str(OSError(5, SENTINEL)), "filename": None, "filename2": None}]}
             assert len(stdout_body) + len(stderr_body) <= 16384
             report["controls"].append({"case": name, "passed": passed, "expected_admission": expected is not None,
                                        "actual_exit": returned, "public_projection_created": proof.exists(),
-                                       "no_synthetic_private_leak": safe, "step_flags_exact": outputs == ("" if expected is None else desired_flags),
+                                       "no_synthetic_private_leak": safe, "private_error_retained": bool(errors),
                                        "stdout_bytes": len(stdout_body.encode()), "stderr_bytes": len(stderr_body.encode())})
             assert time.monotonic() - started <= 20, "bounded caller control budget exceeded"
         assert source_hashes == {str(path.relative_to(repository)): digest(path.read_bytes()) for path in source_paths}, "source changed during controls"
