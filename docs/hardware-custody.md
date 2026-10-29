@@ -2,7 +2,7 @@
 
 `scripts/run-hardware-calibration.py` implements a small direct-child caller for
 the four existing synthetic GDB wrappers at hardware source
-`72058c46b8ef19c538f49d9a40822eb81b8520e9`. It uses private regular output files
+`82f176f7a6020a0e688f12af49f60a1626ba2ef1`. It uses private regular output files
 and `Popen.wait`. It does not build, install, run Git, invoke GDB directly, copy
 evidence, select a released Kaferry image or run multiple cases. The hardware
 controller continues to own inner process identities, exact original/adopted
@@ -25,17 +25,21 @@ no exec-run command in the retained trace and scoped absence checks for the
 three recorded PIDs support no remaining live process reconciliation for this
 prelaunch failure; they do not establish hardware capability.
 
-No permission denial was observed in that attempt. A prospective repair must
-retain fatal stderr handling and strict notification validation, use the actual
-existing default home without cache redirects, and obtain fresh controls and
-reviews before a new run. Three cancellation cases remain unrun; no next case
+No permission denial was observed in that attempt. Hardware82f176f repairs
+the startup environment and notification handling, requires initial prompt
+evidence before inferior setup, and accounts for thread-only claims during
+prelaunch cleanup. Native full checks passed in14.809s and all three affected
+source reviews passed, after retained negative controls and a failed fixture
+repair. Fatal stderr handling and the actual existing default home remain;
+there is no cache redirect. These passing source/control checks require a new
+actual debugger attempt to establish runtime capability. Three cancellation cases remain unrun; no next case
 starts automatically. No calibration or passing harness control qualifies
 Kaferry or completes M2.
 
 ## Exact inputs before launch
 
-The coordinator prepares a fresh reviewed720 checkout per case at
-`/home/labrunner/kaferry-hardware-72058c4-RUN/source`. The caller checks canonical
+The coordinator prepares a fresh reviewed82f checkout per case at
+`/home/labrunner/kaferry-hardware-82f176f-RUN/source`. The caller checks canonical
 paths, actual uid501 and Linux/aarch64 uname for the selected owned guest
 `kaferry-lab-arm64-20261026`, kernel
 `7.0.14-orbstack-00380-ga7e0a2dc9535`. OrbStack machine ID
@@ -44,17 +48,17 @@ the actual external ownership descriptor. Uname does not prove that control-plan
 ID, physical hardware or kernel-source provenance.
 
 Already-built inputs live under `.cache/hardware-build/`. The coordinator's
-native Go1.26 build occurred once in the normal-case source root; its exact
+new native Go1.26 build occurred once in the normal-c source root; its exact
 artifact bytes may be hash-verified private copies in the other three fresh
 checkouts. Do not call those copies fresh builds: rebuilding at a different
 absolute path may change DWARF/build bytes. The fixed artifacts are:
 
 | File | Bytes | SHA256 |
 |---|---:|---|
-|`hardwarecalibration.test`|5879822|`7e2500432e7407fce86077d635b1315f787803e314fb3bd85de02a5079fdfadf`|
-|`hardware-wait-specimen`|3992561|`200c014fbd497c54c1fb956b7ec0aa8cf5bd3208be100f8f792c2ea170c03591`|
+|`hardwarecalibration.test`|6025379|`b9d767fc3b992cfacd1fed8f5edd32bfcb4091bdbf7e64d62b0976a733e462ea`|
+|`hardware-wait-specimen`|3992553|`388fd05f5ab000c636667ddaea133e9b218cd7ef0c8e87368940b26bac491ae5`|
 
-The caller pins these whole bytes and ten720 source/build-input files. It also
+The caller pins these whole bytes and ten82f source/build-input files. It also
 pins the whole `build-binding.json` receipt, caller script, existing GDB plan
 and independently issued source-audit receipt. The build receipt's checked
 fields are SourceHead, GoVersion=go1.26.0, GOOS=linux, GOARCH=arm64,
