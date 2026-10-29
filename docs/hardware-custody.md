@@ -32,8 +32,17 @@ prelaunch cleanup. Native full checks passed in14.809s and all three affected
 source reviews passed, after retained negative controls and a failed fixture
 repair. Fatal stderr handling and the actual existing default home remain;
 there is no cache redirect. These passing source/control checks require a new
-actual debugger attempt to establish runtime capability. Three cancellation cases remain unrun; no next case
-starts automatically. No calibration or passing harness control qualifies
+actual debugger attempt to establish runtime capability.
+
+The subsequent `hardware-native-20261029-normal-c` attempt passed startup,
+all20 guard readbacks and both signal policies, then failed on the
+`breakpoint-created` notification emitted by its fixed CLI `catch fork` command.
+It never issued exec-run or launched an inferior; no hardware hit or permission
+denial was observed. GDB stderr was empty. Actual GDB wait, closed channels,
+scoped absence checks and independent failed-evidence readback support bounded
+prelaunch reconciliation. Overall failure and the incomplete snapshot remain
+unchanged. The selected notification handling needs repair before another run.
+Three cancellation cases remain unrun; no next case starts automatically. No calibration or passing harness control qualifies
 Kaferry or completes M2.
 
 ## Exact inputs before launch
