@@ -426,15 +426,20 @@ type linkCalibrationOutput struct {
 	observed int64
 	overflow chan struct{}
 	once     sync.Once
+	limit    int // zero preserves the original link-only64KiB profile
 }
 
 func (b *linkCalibrationOutput) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.observed += int64(len(p))
-	keep := min(len(p), linkCalibrationOutputLimit-len(b.bytes))
+	limit := b.limit
+	if limit == 0 {
+		limit = linkCalibrationOutputLimit
+	}
+	keep := min(len(p), limit-len(b.bytes))
 	b.bytes = append(b.bytes, p[:keep]...)
-	if b.observed > linkCalibrationOutputLimit {
+	if b.observed > int64(limit) {
 		b.once.Do(func() { close(b.overflow) })
 	}
 	return len(p), nil
@@ -448,8 +453,22 @@ func (b *linkCalibrationOutput) snapshot() ([]byte, int64) {
 // The cmd parameter is a purpose-specific process seam for native owned-helper
 // controls; production supplies only the pinned open image and fixed args/env.
 func waitLinkCalibrationCommand(ctx context.Context, cmd *exec.Cmd, group *linkCalibrationGroup) (r LinkCalibrationWait, stdout, stderr []byte, cleanupDeadline time.Time, err error) {
+	r, stdout, stderr, cleanupDeadline, err = waitOwnedHarnessCommand(ctx, cmd, group, linkCalibrationOutputLimit)
+	r.TestsPassed = err == nil && r.Reaped && r.StartTicks != "" && r.ExitCode == 0 && r.OutputComplete && group.result.Closed && group.result.NoChildren && linkCalibrationPassed(stdout)
+	if !r.TestsPassed {
+		err = errors.Join(err, errors.New("fixed tests did not both complete successfully"))
+	}
+	return
+}
+
+// Shared only by the fixed link calibration and fixed native check. This owns
+// process/copy/tree facts; each caller applies its own command-specific oracle.
+func waitOwnedHarnessCommand(ctx context.Context, cmd *exec.Cmd, group *linkCalibrationGroup, limit int) (r LinkCalibrationWait, stdout, stderr []byte, cleanupDeadline time.Time, err error) {
 	r.ExitCode = -1
-	out, diagnostic := &linkCalibrationOutput{overflow: make(chan struct{})}, &linkCalibrationOutput{overflow: make(chan struct{})}
+	if limit != linkCalibrationOutputLimit && limit != nativeCheckOutputLimit {
+		return r, nil, nil, cleanupDeadline, errors.New("unsupported fixed harness output profile")
+	}
+	out, diagnostic := &linkCalibrationOutput{overflow: make(chan struct{}), limit: limit}, &linkCalibrationOutput{overflow: make(chan struct{}), limit: limit}
 	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = out, diagnostic, time.Second
 	launch := time.Now()
 	r.LaunchAt = launch.UTC()
@@ -532,16 +551,12 @@ func waitLinkCalibrationCommand(ctx context.Context, cmd *exec.Cmd, group *linkC
 			}
 		}
 		var exit *exec.ExitError
-		r.OutputComplete = (waitErr == nil || errors.As(waitErr, &exit)) && r.StdoutBytes <= linkCalibrationOutputLimit && r.StderrBytes <= linkCalibrationOutputLimit && !errors.Is(waitErr, exec.ErrWaitDelay)
+		r.OutputComplete = (waitErr == nil || errors.As(waitErr, &exit)) && r.StdoutBytes <= int64(limit) && r.StderrBytes <= int64(limit) && !errors.Is(waitErr, exec.ErrWaitDelay)
 	}
 	treeCtx, stop := context.WithTimeout(context.Background(), 20*time.Second)
 	_, treeErr := group.close(treeCtx, !r.Started || (r.WaitReturned && r.Reaped && r.StreamCopiesJoined))
 	stop()
 	err = errors.Join(err, waitErr, treeErr)
-	r.TestsPassed = err == nil && r.Reaped && r.StartTicks != "" && r.ExitCode == 0 && r.OutputComplete && group.result.Closed && group.result.NoChildren && linkCalibrationPassed(stdout)
-	if !r.TestsPassed {
-		err = errors.Join(err, errors.New("fixed tests did not both complete successfully"))
-	}
 	return
 }
 
