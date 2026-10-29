@@ -91,8 +91,11 @@ No wire field, generic stage language, writer or loader was added.
 `internal/evidence/m3_source_save_test.go` supplies independent asymmetric
 histories and seven controls for data, order, ownership, unreached probes,
 settled violations and deterministic writer/load rechecks. The targeted host
-check passed in2.276s; native checks and independent reviews of this checker
-increment remain pending. These data controls do not execute a broker or release.
+check passed in2.276s. The exact10702eff3b7be2880130de1c929ae90b74328c33
+native full check passed in83.888s, and its independent docs, test/oracle and
+simplicity reviews passed within this preparation scope. Validation and reviews
+of the combined main head are separate requirements. These data controls do not
+execute a broker or release.
 
 `internal/campaign/kafka_save_staging_test.go` contains synthetic fake-producer
 controls that decode whole producer messages into complete three-partition
@@ -102,8 +105,10 @@ producer call, foreign/repeated/misordered stage identities, and failure
 controls for loss, byte corruption, misrouting, future input, missing/duplicate
 partitions, truncated or moving scans and inconsistent acknowledged coordinates.
 They are harness controls, not release qualification evidence. The coordinator's targeted portable controls passed all six top-level tests in1.987s; no
-broker or released process ran. Native checks, required CI and independent
-source/evidence reviews remain required before acceptance.
+broker or released process ran. The exact50437c23c9bbdbf01dfc1099430ef70d30568a3f
+native full check passed in54.869s and its three independent review scopes passed
+before integration. Those measured controls do not supply the missing live
+source-save mechanism, required campaign or final integrated CI.
 
 There is deliberately no call from `scenario.go`. Integration depends on the
 current periodic-save witness, original-parent/process custody and actual
