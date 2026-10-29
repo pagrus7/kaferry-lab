@@ -279,10 +279,19 @@ STOPPED record and failed verdict remain. Exact local image target, selected
 manifest, configuration, platform and owned-container identities must be proved
 separately before this backend is admitted; an index alone cannot pass.
 
-The standalone linked caller has63 data-only refusal/closure controls, including
+The repaired standalone linked caller has67 data-only refusal/closure controls, including
 wrong native metadata, missing foreground return, dropped output and quiescent
 failed outcomes. These controls are separate from native fault calibration and
 Kaferry qualification. Native execution/custody, current review and final CI are
 required independently. Unstarted disposable image-identity specimens may measure
 the backend's identity fields with exact ownership and removal; they do not
 establish broker/proxy behavior or a reached Kaferry fault.
+
+The first source review found four contradictory passing histories that the
+caller admitted, plus case-name shadowing that skipped the exact missing-file
+assertion. The repaired controls first reproduced those four admissions, then
+required rejection; all67 distinctly named controls passed after the gate fix.
+A separate Linux-only save-controller control is authored for an actual exited
+producer whose owned descendant holds both pipes open. It must reach the drain
+deadline, refuse false EOF/completion, preserve STOP/no-retry and observe actual
+bounded descendant wait/reap. Authoring is not a native passing observation.

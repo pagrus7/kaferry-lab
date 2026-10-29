@@ -57,8 +57,9 @@ was measured. The full native format/vet/race/unit check passed at e0600cb;
 live-link/Kafka opt-ins were skipped. These are coordinator development checks,
 not final-head native CI or released fault acceptance. The successful host Go was
 Go1.27.2/DarwinARM64, using its ordinary existing caches. The native SDK selection
-matches go.mod and the earlier waiting-parent source audit; it is not a cache
-redirect, product source build or native measurement.
+matches go.mod and the earlier waiting-parent source audit. The earlier SDK
+selection was metadata-only; its later installation and native Go execution were
+measured. Neither is a cache redirect or a source build of the product.
 
 Primary OCI metadata binds same-version Toxiproxy2.12.0 ARM64 manifest
 5ab4b4e8f476fd5452eb9584a608dd7cf8c11135878a8f7953722a9fcb9b3d87 and
@@ -114,7 +115,7 @@ configuration digest distinct. Classic stores still require their exact pinned
 configuration ID. The observed modern store is supported only for the fixed
 ARM64 Kafka/proxy tuples; unknown combinations fail closed. Before creating
 networks/containers, it checks generic and explicit-platform inspection plus the
-selected manifest/configuration/layer commitments in a bounded stock image-save
+exact local selected manifest/configuration bytes in a bounded stock image-save
 archive. Every owned modern container must also report the exact selected native
 manifest; its runtime `Image` field alone is insufficient.
 
@@ -125,8 +126,11 @@ errors, selected raw manifest/configuration and lifecycle/proof records. No
 existing diagnostic bound is increased. Failed/partial save or changed proof
 stops that facility; it is not retried through another route. Raw successful
 container-inspection candidates are retained before semantic admission and do
-not themselves mean acceptance. The pure reader has256-entry/64KiB-selectedJSON
-bounds and rejects corrupt, truncated, duplicate or escaping members.
+not themselves mean acceptance. The pure reader has256-entry/64KiB-selectedJSON bounds, consumes the entire
+bounded stream, and rejects corrupt selected metadata, truncation, duplicate or
+escaping members. Other payloads remain opaque; it does not qualify filesystem
+layers or unrelated export metadata. Reuse checks retained raw proof and the
+whole archive hash/identity without repeating tar or layer semantic decoding.
 
 The nonlinked setup path currently lacks this private authority and refuses the
 modern proof before resource creation. This source does not silently provision a

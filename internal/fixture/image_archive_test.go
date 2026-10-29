@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -78,8 +81,31 @@ func (s archiveSpecimen) bytes(t *testing.T) []byte {
 			h.Mode = 0700
 			h.Size = 0
 		}
+		// The stdlib writer refuses regular names ending in '/'. Emit its
+		// ordinary USTAR header first, then construct the literal invalid name
+		// with a correct raw checksum so this control reaches the reader.
+		patchName := member.kind == tar.TypeReg && strings.HasSuffix(member.name, "/")
+		if patchName {
+			if member.format != tar.FormatUSTAR || len(member.name) >= 100 {
+				t.Fatal("malformed-name fixture requires short USTAR name")
+			}
+			h.Name = strings.TrimSuffix(member.name, "/")
+		}
 		if err := w.WriteHeader(h); err != nil {
 			t.Fatal(err)
+		}
+		if patchName {
+			header := out.Bytes()[out.Len()-512:]
+			clear(header[:100])
+			copy(header[:100], member.name)
+			for i := 148; i < 156; i++ {
+				header[i] = ' '
+			}
+			sum := 0
+			for _, value := range header {
+				sum += int(value)
+			}
+			copy(header[148:156], fmt.Sprintf("%06o\x00 ", sum))
 		}
 		if h.Size > 0 {
 			if _, err := w.Write(member.body); err != nil {
@@ -130,18 +156,66 @@ func (s *archiveSpecimen) replaceConfig(t *testing.T, body []byte) {
 }
 
 func TestImageArchiveCompleteLiteral(t *testing.T) {
-	// Given known bytes with an extra unselected hash-verified blob, when the
+	// Given known selected bytes and an extra opaque blob, when the
 	// whole archive is read, then exact selected bytes and whole-stream facts agree.
 	s := newArchiveSpecimen(t)
-	extra := []byte("unselected but integrity-checked blob")
+	extra := []byte("unselected opaque blob")
 	s.members = append(s.members, archiveMember{archiveBlob(archiveDigest(extra)), extra, tar.TypeReg, tar.FormatUSTAR})
 	body := s.bytes(t)
 	r, err := readImageArchive(bytes.NewReader(body), s.expected)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Complete || r.ArchiveBytes != int64(len(body)) || r.ArchiveSHA256 != strings.TrimPrefix(archiveDigest(body), "sha256:") || r.Entries != 9 || r.Blobs != 4 || len(r.Layers) != 1 || r.ManifestDescriptor != s.expected.Manifest || r.ConfigDescriptor != s.expected.Config || archiveDigest(r.Manifest) != s.expected.Manifest.Digest || archiveDigest(r.Config) != s.expected.Config.Digest {
+	if !r.Complete || r.ArchiveBytes != int64(len(body)) || r.ArchiveSHA256 != strings.TrimPrefix(archiveDigest(body), "sha256:") || r.Entries != 9 || r.Blobs != 4 || r.ManifestDescriptor != s.expected.Manifest || r.ConfigDescriptor != s.expected.Config || archiveDigest(r.Manifest) != s.expected.Manifest.Digest || archiveDigest(r.Config) != s.expected.Config.Digest {
 		t.Fatalf("incorrect complete facts: %+v", r)
+	}
+}
+
+func TestImageArchiveFixedDirectoryHeaders(t *testing.T) {
+	// Given the two exact directory names in stock save, When a directory
+	// header has one trailing slash, Then it denotes the same fixed directory.
+	for _, names := range [][2]string{{"blobs/", "blobs/sha256/"}, {"blobs", "blobs/sha256/"}, {"blobs/", "blobs/sha256"}} {
+		s := newArchiveSpecimen(t)
+		s.members[0].name, s.members[1].name = names[0], names[1]
+		if result, err := readImageArchive(bytes.NewReader(s.bytes(t)), s.expected); err != nil || !result.Complete {
+			t.Fatalf("fixed directory spelling refused: %q %v", names, err)
+		}
+	}
+}
+
+func TestImageArchiveUnselectedBodiesAreOpaque(t *testing.T) {
+	// Given an accepted selected metadata pair, changes to unrelated members
+	// do not become another image qualification. Whole archive SHA still records
+	// every changed byte for the separate retained-archive reuse predicate.
+	original := newArchiveSpecimen(t)
+	body := original.bytes(t)
+	baseline, err := readImageArchive(bytes.NewReader(body), original.expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*archiveSpecimen)
+	}{
+		{"unrelated-layer-bytes", func(s *archiveSpecimen) { s.members[2].body[0] ^= 1 }},
+		{"missing-layer", func(s *archiveSpecimen) { s.members = append(s.members[:2], s.members[3:]...) }},
+		{"unselected-blob-name-not-content-digest", func(s *archiveSpecimen) {
+			s.members = append(s.members, archiveMember{archiveBlob(archiveDigest([]byte("right"))), []byte("other"), tar.TypeReg, tar.FormatUSTAR})
+		}},
+		{"opaque-export-index", func(s *archiveSpecimen) { s.members[5].body = []byte("not an index oracle") }},
+		{"opaque-legacy-export", func(s *archiveSpecimen) { s.members[6].body = []byte("not a legacy image oracle") }},
+		{"missing-layout", func(s *archiveSpecimen) { s.members = s.members[:7] }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newArchiveSpecimen(t)
+			tc.mutate(&s)
+			changed := s.bytes(t)
+			result, err := readImageArchive(bytes.NewReader(changed), s.expected)
+			if err != nil || !result.Complete || result.ArchiveSHA256 == baseline.ArchiveSHA256 || !bytes.Equal(result.Manifest, baseline.Manifest) || !bytes.Equal(result.Config, baseline.Config) {
+				t.Fatalf("opaque member affected selected metadata proof: %+v %v", result, err)
+			}
+		})
 	}
 }
 
@@ -150,14 +224,19 @@ func TestImageArchiveRefusalControls(t *testing.T) {
 		name   string
 		mutate func(*archiveSpecimen)
 	}{
-		{"corrupted-layer-bytes", func(s *archiveSpecimen) { s.members[2].body[0] ^= 1 }},
 		{"corrupted-config-bytes", func(s *archiveSpecimen) { s.members[3].body[0] ^= 1 }},
-		{"unselected-corruption", func(s *archiveSpecimen) {
-			s.members = append(s.members, archiveMember{archiveBlob(archiveDigest([]byte("right"))), []byte("wrong"), tar.TypeReg, tar.FormatUSTAR})
-		}},
-		{"missing-layer", func(s *archiveSpecimen) { s.members = append(s.members[:2], s.members[3:]...) }},
+		{"corrupted-manifest-bytes", func(s *archiveSpecimen) { s.members[4].body[0] ^= 1 }},
 		{"missing-selected-manifest", func(s *archiveSpecimen) { s.members = append(s.members[:4], s.members[5:]...) }},
 		{"duplicate-member", func(s *archiveSpecimen) { s.members = append(s.members, s.members[2]) }},
+		{"duplicate-directory-alias", func(s *archiveSpecimen) {
+			s.members = append(s.members, archiveMember{"blobs/", nil, tar.TypeDir, tar.FormatUSTAR})
+		}},
+		{"duplicate-sha-directory-alias", func(s *archiveSpecimen) {
+			s.members = append(s.members, archiveMember{"blobs/sha256/", nil, tar.TypeDir, tar.FormatUSTAR})
+		}},
+		{"directory-spelling-as-file", func(s *archiveSpecimen) { s.members[0].name, s.members[0].kind = "blobs/", tar.TypeReg }},
+		{"double-directory-slash", func(s *archiveSpecimen) { s.members[0].name = "blobs//" }},
+		{"selected-file-trailing-slash", func(s *archiveSpecimen) { s.members[3].name += "/" }},
 		{"path-escape", func(s *archiveSpecimen) { s.members[0].name = "../blobs" }},
 		{"absolute-path", func(s *archiveSpecimen) { s.members[0].name = "/blobs" }},
 		{"alias-path", func(s *archiveSpecimen) { s.members[2].name = "blobs/sha256/../" + strings.Repeat("a", 64) }},
@@ -181,20 +260,10 @@ func TestImageArchiveRefusalControls(t *testing.T) {
 		{"malformed-config-json", func(s *archiveSpecimen) { s.replaceConfig(t, []byte(`{"os":`)) }},
 		{"wrong-config-commitment", func(s *archiveSpecimen) { s.expected.Config.Digest = "sha256:" + strings.Repeat("1", 64) }},
 		{"wrong-manifest-size", func(s *archiveSpecimen) { s.expected.Manifest.Size++ }},
-		{"wrong-layer-size", func(s *archiveSpecimen) {
-			s.replaceManifest(t, func(m map[string]any) { m["layers"].([]any)[0].(map[string]any)["size"] = 999 })
-		}},
 		{"wrong-config-descriptor", func(s *archiveSpecimen) {
 			s.replaceManifest(t, func(m map[string]any) { m["config"].(map[string]any)["digest"] = "sha256:" + strings.Repeat("2", 64) })
 		}},
-		{"wrong-layer-media", func(s *archiveSpecimen) {
-			s.replaceManifest(t, func(m map[string]any) {
-				m["layers"].([]any)[0].(map[string]any)["mediaType"] = "application/vnd.in-toto+json"
-			})
-		}},
 		{"wrong-schema", func(s *archiveSpecimen) { s.replaceManifest(t, func(m map[string]any) { m["schemaVersion"] = 1 }) }},
-		{"missing-layout", func(s *archiveSpecimen) { s.members = s.members[:7] }},
-		{"bad-layout", func(s *archiveSpecimen) { s.members[7].body = []byte(`{"imageLayoutVersion":"2.0.0"}`) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,7 +271,29 @@ func TestImageArchiveRefusalControls(t *testing.T) {
 			// partial result can present Complete or selected bytes as an accepted result.
 			s := newArchiveSpecimen(t)
 			tc.mutate(&s)
-			r, err := readImageArchive(bytes.NewReader(s.bytes(t)), s.expected)
+			body := s.bytes(t)
+			if tc.name == "directory-spelling-as-file" || tc.name == "selected-file-trailing-slash" {
+				// Independently confirm the crafted USTAR checksum and regular
+				// type are accepted by archive/tar before the lab path predicate.
+				want := s.members[0].name
+				if tc.name == "selected-file-trailing-slash" {
+					want = s.members[3].name
+				}
+				reader := tar.NewReader(bytes.NewReader(body))
+				for {
+					header, err := reader.Next()
+					if err != nil {
+						t.Fatalf("malformed-name fixture did not reach intended header: %v", err)
+					}
+					if header.Name == want {
+						if header.Typeflag != tar.TypeReg {
+							t.Fatal("malformed-name fixture lost regular type")
+						}
+						break
+					}
+				}
+			}
+			r, err := readImageArchive(bytes.NewReader(body), s.expected)
 			if err == nil || r.Complete || r.Manifest != nil || r.Config != nil || r.ArchiveSHA256 != "" {
 				t.Fatalf("accepted invalid archive: result=%+v err=%v", r, err)
 			}
@@ -282,5 +373,63 @@ func TestImageArchiveDecodeErrorOriginal(t *testing.T) {
 	var syntax *json.SyntaxError
 	if err == nil || !errors.As(err, &syntax) || syntax.Offset == 0 || result.Complete {
 		t.Fatalf("concrete JSON syntax error lost: %v", err)
+	}
+}
+
+func TestImageArchiveProofReuseKeepsWholeArchiveBinding(t *testing.T) {
+	// Given literal same-run save facts and a selected-metadata proof, when an
+	// unrelated archive byte changes after collection, then reuse still refuses.
+	// These literal lifecycle facts do not establish a real process wait/EOF.
+	t.Chdir(t.TempDir())
+	s := State{RunID: "synthetic-image-proof"}
+	if err := reserveLinkEvidence(s.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(imageDataDirectory(s), 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newArchiveSpecimen(t)
+	body := fixture.bytes(t)
+	if err := os.WriteFile(savedImageArchivePath(s), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	argv := []string{"docker", "image", "save", "--platform=linux/arm64", Image, arm64ProxyImage}
+	exit := 0
+	receipt := imageSaveReceipt{RunID: s.RunID, Argv: argv, ExecutedArgv: argv, ExecutablePath: "/synthetic/docker", Started: true, WaitReturned: true, TerminalWait: true, StdoutEOF: true, StderrEOF: true, PipesClosed: true, ArchiveClosed: true, Complete: true, ArchiveBytes: int64(len(body)), ObservedArchiveBytes: int64(len(body)), ExitCode: &exit}
+	if _, err := writeLinkPrivate(linkPrivateDirectory(s.RunID), "image-save-complete.json", receipt); err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.TrimPrefix(archiveDigest(body), "sha256:")
+	if err := verifySavedImageDigest(s, int64(len(body)), sha); err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]byte(nil), body...)
+	changed[1536] ^= 1
+	if err := os.WriteFile(savedImageArchivePath(s), changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySavedImageDigest(s, int64(len(body)), sha); err == nil {
+		t.Fatal("changed unrelated archive bytes admitted on reuse")
+	}
+	if err := os.WriteFile(savedImageArchivePath(s), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(savedImageArchivePath(s), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySavedImageDigest(s, int64(len(body)), sha); err == nil {
+		t.Fatal("nonprivate archive admitted on reuse")
+	}
+	if err := os.Chmod(savedImageArchivePath(s), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(savedImageArchivePath(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySavedImageDigest(s, int64(len(body)), sha); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing archive cause lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "image-save-complete.json")); err != nil {
+		t.Fatal("literal retained lifecycle was changed", err)
 	}
 }

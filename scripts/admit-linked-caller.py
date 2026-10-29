@@ -216,7 +216,9 @@ def admit(repository, run, head, attempt, cancelled):
     require(r["Status"] in ("INCOMPLETE", "CALIBRATION_PASSED_NOT_QUALIFICATION"))
     passed = r["Status"] == "CALIBRATION_PASSED_NOT_QUALIFICATION"
     require((code == 0) == passed)
-    require(not passed or (boolean(w["TestsPassed"]) and boolean(r["ResourcesCleaned"])
+    require(not passed or (boolean(w["Started"]) and w["ExitCode"] == 0
+                          and w["SignalNumber"] == 0 and boolean(tree["AnchorStarted"])
+                          and boolean(w["TestsPassed"]) and boolean(r["ResourcesCleaned"])
                           and boolean(r["FixtureCleanupSucceeded"]) and attempted and returned))
     return {"namespace": "calibration/linked-caller", "identity_source": "explicit-caller",
             "run_id": run, "source_head": head, "job": "links", "attempt": attempt,

@@ -177,6 +177,10 @@ def run():
         ("writer-proof-false", lambda f: f["marker"].update(WritersQuiescent=False)),
         ("capture-incomplete", lambda f: f["marker"].update(PrivateCaptureComplete=False)),
         ("setup-unreturned", lambda f: f["marker"].update(SetupReturned=False)),
+        ("passed-nonzero-child-exit", lambda f: f["marker"]["Wait"].update(ExitCode=23)),
+        ("passed-signalled-child", lambda f: f["marker"]["Wait"].update(ExitCode=-1, SignalNumber=15)),
+        ("passed-no-child", lambda f: f["marker"]["Wait"].update(Started=False, WaitReturned=False, Reaped=False, StreamCopiesJoined=False, PID=0, StartTicks="", WaitElapsedNS=0, StdoutBytes=0, CapturedStdoutBytes=0)),
+        ("passed-no-anchor", lambda f: f["marker"]["Tree"].update(AnchorStarted=False, AnchorWaitReturned=False, AnchorReaped=False, AnchorPID=0, AnchorStartTicks="", AnchorStatus=0)),
         ("test-wait-unreturned", lambda f: f["marker"]["Wait"].update(WaitReturned=False)),
         ("test-unreaped", lambda f: f["marker"]["Wait"].update(Reaped=False)),
         ("copier-unjoined", lambda f: f["marker"]["Wait"].update(StreamCopiesJoined=False)),
@@ -231,6 +235,7 @@ def run():
         ("boolean-guest-foreground", lambda f: f.update(foreground="true\n")),
     ]]
     assert len(cases) <= 80
+    assert len({case_name for case_name, _, _ in cases}) == len(cases), "control identities must be unique"
     started = time.monotonic()
     try:
         for index, (name, mutate, expected) in enumerate(cases):
@@ -254,11 +259,11 @@ def run():
             build_dir.mkdir(mode=0o700, parents=True)
             build_dir.parent.chmod(0o700)
             (build_dir / "BuiltAfterUTC").write_text(fixture["built_after_file"])
-            for name, body, package, metadata in [
+            for executable_name, body, package, metadata in [
                     ("campaign.test", fixture["test_image"], "github.com/pagrus7/kaferry-lab/internal/campaign.test", "test-buildinfo.txt"),
                     ("link-calibration", fixture["driver_image"], "github.com/pagrus7/kaferry-lab/cmd/link-calibration", "driver-buildinfo.txt")]:
-                (build_dir / name).write_bytes(body)
-                (build_dir / name).chmod(0o555)
+                (build_dir / executable_name).write_bytes(body)
+                (build_dir / executable_name).chmod(0o555)
                 (build_dir / metadata).write_text("\tpath\t" + package + "\n" + "".join(
                     "\tbuild\t" + setting + "\n" for setting in (
                         "GOOS=linux", "GOARCH=" + fixture["metadata_arch"], "vcs.revision=" + HEAD, "vcs.modified=false")) + fixture["metadata_extra"])
@@ -331,6 +336,7 @@ def run():
                                        "stdout_bytes": len(stdout_body.encode()), "stderr_bytes": len(stderr_body.encode())})
             assert time.monotonic() - started <= 20, "bounded caller control budget exceeded"
         assert source_hashes == {str(path.relative_to(repository)): digest(path.read_bytes()) for path in source_paths}, "source changed during controls"
+        assert [row["case"] for row in report["controls"]] == [case_name for case_name, _, _ in cases], "reported control identities changed"
         report["status"] = "PASS" if all(row["passed"] for row in report["controls"]) else "FAIL"
     finally:
         report["elapsed_seconds"] = time.monotonic() - started

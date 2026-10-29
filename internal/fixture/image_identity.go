@@ -2,6 +2,8 @@ package fixture
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,14 +208,74 @@ func imageProofPath(s State, fixed fixedModernImage) string {
 }
 
 func validateImageProof(s State, fixed fixedModernImage, proof imageProof) error {
-	if proof.RunID != s.RunID || proof.Reference != fixed.reference || proof.RuntimeImageID != fixed.runtime || proof.ArchivePath != savedImageArchivePath(s) || !proof.Complete || proof.ManifestDescriptor != fixed.manifest || proof.ConfigDescriptor != fixed.config || int64(len(proof.Manifest)) != fixed.manifest.Size || "sha256:"+linkDigest(proof.Manifest) != fixed.manifest.Digest || int64(len(proof.Config)) != fixed.config.Size || "sha256:"+linkDigest(proof.Config) != fixed.config.Digest {
+	if proof.RunID != s.RunID || proof.Reference != fixed.reference || proof.RuntimeImageID != fixed.runtime || proof.ArchivePath != savedImageArchivePath(s) || !proof.Complete || proof.ManifestDescriptor != fixed.manifest || proof.ConfigDescriptor != fixed.config {
 		return errors.New("private image proof binding rejected")
 	}
-	result, err := parseSavedImage(s, fixed)
-	if err != nil || !result.Complete || result.ArchiveBytes != proof.ArchiveBytes || result.ArchiveSHA256 != proof.ArchiveSHA256 {
+	if err := validateImageMetadata(proof.Manifest, proof.Config, imageArchiveExpected{fixed.manifest, fixed.config, "linux", "arm64"}); err != nil {
+		return err
+	}
+	if err := verifySavedImageDigest(s, proof.ArchiveBytes, proof.ArchiveSHA256); err != nil {
 		return errors.Join(errors.New("saved image archive missing, changed or incomplete"), err)
 	}
 	return nil
+}
+
+// Reuse binds the compact selected metadata/lifecycle proof and unchanged raw
+// archive bytes. It does not repeat tar, layer or export-index interpretation.
+func verifySavedImageDigest(s State, expectedBytes int64, expectedSHA string) error {
+	save, err := validatedImageSaveReceipt(s)
+	if err != nil {
+		return err
+	}
+	if expectedBytes <= 0 || expectedBytes > imageArchiveLimit || expectedBytes != save.ArchiveBytes || !linkID(expectedSHA) {
+		return errors.New("saved image archive proof size or hash rejected")
+	}
+	directory, err := os.Lstat(imageDataDirectory(s))
+	if err != nil {
+		return err
+	}
+	owner, ok := directory.Sys().(*syscall.Stat_t)
+	if !ok || !directory.IsDir() || directory.Mode().Perm() != 0700 || owner.Uid != uint32(os.Geteuid()) {
+		return errors.New("saved image directory identity rejected")
+	}
+	path := savedImageArchivePath(s)
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	file, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || !before.Mode().IsRegular() || before.Mode().Perm() != 0600 || file.Uid != uint32(os.Geteuid()) || file.Nlink != 1 || before.Size() != expectedBytes {
+		return errors.New("saved image archive identity rejected")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	opened, openErr := f.Stat()
+	if openErr != nil || !sameImageArchiveFile(before, opened) {
+		return errors.Join(openErr, errors.New("saved archive changed before read"), f.Close())
+	}
+	digest := sha256.New()
+	count, readErr := io.Copy(digest, io.LimitReader(f, imageArchiveLimit+1))
+	after, statErr := f.Stat()
+	closeErr := f.Close()
+	current, pathErr := os.Lstat(path)
+	if err = errors.Join(readErr, statErr, closeErr, pathErr); err != nil {
+		return err
+	}
+	if count != expectedBytes || !sameImageArchiveFile(before, after) || !sameImageArchiveFile(after, current) || hex.EncodeToString(digest.Sum(nil)) != expectedSHA {
+		return errors.New("saved image archive changed during proof reuse")
+	}
+	return nil
+}
+
+func sameImageArchiveFile(a, b os.FileInfo) bool {
+	if a == nil || b == nil || !os.SameFile(a, b) || a.Mode() != b.Mode() || a.Size() != b.Size() || a.ModTime() != b.ModTime() {
+		return false
+	}
+	x, xok := a.Sys().(*syscall.Stat_t)
+	y, yok := b.Sys().(*syscall.Stat_t)
+	return xok && yok && x.Uid == y.Uid && x.Nlink == y.Nlink
 }
 
 func loadImageProof(s State, fixed fixedModernImage) (LinkImageIdentity, error) {

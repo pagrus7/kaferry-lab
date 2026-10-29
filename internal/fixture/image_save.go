@@ -273,8 +273,8 @@ func parseSavedImage(s State, fixed fixedModernImage) (imageArchiveResult, error
 	return result, nil
 }
 
-// Reuse requires the retained command lifecycle as well as a fresh complete
-// archive parse. A proof's Complete label cannot replace this independent check.
+// Reuse requires the retained command lifecycle and a fresh bounded archive
+// hash/identity check. A proof's Complete label cannot replace these checks.
 func validatedImageSaveReceipt(s State) (imageSaveReceipt, error) {
 	var receipt imageSaveReceipt
 	body, err := readImagePrivateFile(filepath.Join(linkPrivateDirectory(s.RunID), "image-save-complete.json"), 256<<10)

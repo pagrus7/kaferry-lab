@@ -16,7 +16,8 @@ acceptance. No uploaded artifact, cache, ciphertext or private network transfer
 is part of the new path. Only source and fixed status text reach GitHub. The user approved ordinary Go builds/tests with unchanged caches and native
 Linux ARM64 qualification in OrbStack. The original host build succeeded without
 a workaround. The current workflow remains custody-only until native execution
-and retention are integrated. Separate capture/verification-cache stops remain;
+and retention are integrated. Capture/global-process stops remain; the separately authorized original
+attestation retry passed unchanged;
 the ARM64 source port still needs native evidence.
 
 ## Provisioning contract
@@ -86,7 +87,7 @@ pass, exit2 means admitted quiescent FAILED calibration, and exit1 means
 incomplete/rejected. No result means Kaferry qualification. Exact errors use the
 one inherited caller-reserved private FD; no alternate sink is attempted.
 
-The63 literal refusal/closure controls in `scripts/test-linked-caller.py` exercise
+The67 literal refusal/closure controls in `scripts/test-linked-caller.py` exercise
 that exact implementation. Native development exercised its quiescent-failure
 path after image admission failed; no delay fault passed. Source review, trusted
 native job/hooks, complete bounded local guest-to-Mac retention, actual runtime

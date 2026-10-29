@@ -8,8 +8,9 @@ Execution is moving to the Mac mini with private local evidence and no active
 encryption or artifact uploads. The current workflow calibrates local retention
 only; it does not run Go or qualify Kaferry. See [local runner setup](docs/local-runners.md).
 The user approved native Linux ARM64 qualification in OrbStack and ordinary Go
-builds/tests using unchanged caches. Packet capture and separately recorded
-verification-cache stops remain; do not route around a renewed denial.
+builds/tests using unchanged caches. The separately authorized original Mac
+attestation retry and fresh native release verification passed. Packet capture
+and global process enumeration remain stopped; do not route around a new denial.
 
 The purpose is to test how Kaferry handles failures during data copies, preserves records and saved progress, and recovers after faults are removed. Independent observers and combined failure scenarios provide evidence beyond its core suite. Successful copies are controls. Parser tests, rejection of old syntax, broad migration tests, and replicas of existing component tests are outside scope.
 
