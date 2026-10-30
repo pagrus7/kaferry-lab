@@ -6,6 +6,7 @@ Only the image is streamed up to 512MiB; all receipt transport is <=32MiB.
 These are admission/read guards, not disk quotas or reserved capacity.
 """
 import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -150,6 +151,32 @@ def close(f, errors, path):
             errors.record(path, error)
 
 
+class ReceiptWriter:
+    """The one tar outlet: every requested write consumes fixed headroom.
+
+    Charge before calling write: an exception can leave an unknown prefix.
+    A failed/short write latches this route, including later close framing.
+    """
+    def __init__(self, file):
+        require(os.fstat(file.fileno()).st_size == file.tell() == 0, "receipt outlet must start empty")
+        self.file, self.admitted, self.stopped = file, 0, False
+
+    def write(self, raw):
+        require(not self.stopped, "receipt archive write route stopped")
+        if len(raw) > ARCHIVE_LIMIT - self.admitted:
+            self.stopped = True
+            raise ValueError("receipt archive physical write exceeds fixed guard")
+        self.admitted += len(raw)
+        try:
+            count = self.file.write(raw)
+            if type(count) is not int or count != len(raw):
+                raise OSError(errno.EIO, "short receipt archive write")
+        except BaseException:
+            self.stopped = True
+            raise
+        return count
+
+
 def fixed_paths(run):
     parent = "parent-private/"
     go = "source/.cache/direct-fixture-calibration-private/" + run + "/"
@@ -272,12 +299,14 @@ def snapshot(run, head, expected):
     target.mkdir(mode=0o700)  # exclusive attempt; no reuse, cleanup or fallback
     errors = Errors(create(target / "errors.jsonl"))
     files, identities, rows, missing, directories = {}, {}, [], [], {}
-    archive_started = False
+    archive_started, receipt_writer = False, None
     packet, foreground, image, image_readback, capture = None, None, None, None, False
     try:
         for name in OUTPUTS[1:]:
             files[name] = create(target / name)
             identities[name] = signature(os.fstat(files[name].fileno()))[:6]
+            if name == "receipts.tar":
+                receipt_writer = ReceiptWriter(files[name])
         native_outlet(outlet)
         for path in (base, base / "source", base / "source/.cache", base / "controller"):
             directories[path] = directory(path)
@@ -285,7 +314,7 @@ def snapshot(run, head, expected):
         selected, receipt_directories = select_paths(base, run, errors)
         directories.update(receipt_directories)
         archive_started = True
-        with tarfile.open(fileobj=files["receipts.tar"], mode="w|", format=tarfile.USTAR_FORMAT) as archive:
+        with tarfile.open(fileobj=receipt_writer, mode="w|", format=tarfile.USTAR_FORMAT) as archive:
             for name in selected:
                 try:
                     raw, before = read_small(base / name)
@@ -294,11 +323,18 @@ def snapshot(run, head, expected):
                             "small-original transport aggregate exceeds fixed guard")
                     item = tarfile.TarInfo(name)
                     item.mode, item.size = 0o600, len(raw)
-                    archive.addfile(item, io.BytesIO(raw))
-                    rows.append({"Path": name, "Bytes": len(raw), "SHA256": sha(raw), "SourceSignature": before})
                 except BaseException as error:
                     missing.append(name)
                     errors.record(base / name, error)
+                    continue
+                try:
+                    archive.addfile(item, io.BytesIO(raw))
+                except BaseException as error:
+                    missing.append(name)
+                    errors.record(base / name, error)
+                    receipt_writer.stopped = True
+                    break  # no further member; close cannot write past latch
+                rows.append({"Path": name, "Bytes": len(raw), "SHA256": sha(raw), "SourceSignature": before})
         close(files.pop("receipts.tar"), errors, target / "receipts.tar")
         image_path = base / "source/.cache/image-identity-data" / run / "images.tar"
         try:
@@ -323,11 +359,11 @@ def snapshot(run, head, expected):
         errors.record(base, error)
     finally:
         missing = sorted(set(missing) | (fixed_paths(run)[3] - {row["Path"] for row in rows}))
-        if not archive_started and "receipts.tar" in files:
+        if not archive_started and receipt_writer is not None:
             try:
                 # Admission failed before archive writing: retain a valid empty
                 # archive in its original reserved outlet, never rewrite one.
-                with tarfile.open(fileobj=files["receipts.tar"], mode="w|", format=tarfile.USTAR_FORMAT):
+                with tarfile.open(fileobj=receipt_writer, mode="w|", format=tarfile.USTAR_FORMAT):
                     pass
             except BaseException as error:
                 errors.record(target / "receipts.tar", error)

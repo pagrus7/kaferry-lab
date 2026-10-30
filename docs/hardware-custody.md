@@ -168,9 +168,29 @@ exact owned vfork/fork inferior scope in all seven inventory rows and the two
 already returned hardware descriptors. Its literal negative control fails on
 unchangedAF5; native targeted/full checks pass, with live GDB opt-ins skipped.
 No new query, guard, command budget, hit, wait or cleanup criterion was relaxed.
-Descriptors and scope annotations do not prove hardware hits. Fresh runtime
-admission and one new case are still required; normal-g/h identifiers cannot
-be reused.
+Descriptors and scope annotations do not prove hardware hits. Those source
+checks required separate fresh runtime admission; the normal-i outcome follows.
+Normal-g/h identifiers remain ineligible for reuse.
+
+The subsequent normal-i attempt passed its fresh source/helper/parent admission
+and reached one recorded hardware-point stop at0x1135f0. It then failed: command
+`70-exec-continue` returned `70^running`, followed by
+`70^error,msg="Writing to memory is not allowed (addr 0x91a98, len 4)"`.
+The controller's generic stale/duplicate-result error is not that refusal's
+reason. All33 available originals and the failed snapshot were retained and
+independently verified privately on the Mac. Full hit coverage, completion,
+writer closure and cleanup success remain false. Actual original/adopted waits,
+four channel EOFs and scoped absence of the five recorded PIDs are separate
+observations; they cannot turn the failed control into a pass.
+
+The selected debugger route is stopped after this actual safeguard refusal.
+No retry, guard, observer, UID or safeguard change follows it. Exact stock source
+supports a displaced-step scratch-write explanation at entry+8, matching the
+refused address/length. The old audit incorrectly assumed UI `non-stop off`
+excluded that path; it does not establish the target's internal mode. This is
+source-supported inference, with no runtime stack/live mode query. The earlier
+audit cannot establish safe continuation at this boundary. Independent fixture/custody work
+continues. This failed calibration neither qualifies Kaferry nor completes M2.
 
 Stage the reviewed caller bytes as `.cache/run-hardware-calibration.py` and
 provide `.cache/hardware-gdb-caller-input.json`0600 with exactly these fields:

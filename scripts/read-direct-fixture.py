@@ -49,6 +49,43 @@ def load_snapshot(packet):
     return module
 
 
+def check_fixed_ustar(file, size, indexed):
+    """Validate physical framing emitted by this snapshot, using stdlib headers.
+
+    Default tar iteration may stop before physical EOF. Require every listed
+    header/body/pad, two zero blocks, and only the final zero record padding.
+    """
+    observed = set()
+    while True:
+        block = file.read(512)
+        require(len(block) == 512, "fixed USTAR missing/truncated terminator")
+        if block == bytes(512):
+            require(file.read(512) == bytes(512), "fixed USTAR second zero block missing")
+            remaining = size - file.tell()
+            require(0 <= remaining < tarfile.RECORDSIZE and size % tarfile.RECORDSIZE == 0,
+                    "fixed USTAR trailing record length differs")
+            require(not any(file.read(remaining)) and file.tell() == size, "fixed USTAR nonzero trailing padding")
+            require(observed == set(indexed), "fixed USTAR listed members missing")
+            return
+        require(block[257:265] == tarfile.POSIX_MAGIC, "fixed USTAR header magic differs")
+        try:
+            member = tarfile.TarInfo.frombuf(block, "ascii", "strict")
+        except (tarfile.HeaderError, UnicodeError) as error:
+            raise ValueError("fixed USTAR header rejected") from error
+        require(member.type == tarfile.REGTYPE and member.name in indexed and member.name not in observed
+                and member.mode == 0o600 and member.uid == member.gid == member.mtime == 0
+                and not member.uname and not member.gname and not member.linkname
+                and member.size == indexed[member.name]["Bytes"]
+                and member.tobuf(format=tarfile.USTAR_FORMAT, encoding="ascii", errors="strict") == block,
+                "fixed USTAR foreign/duplicate/noncanonical member header")
+        padding = (-member.size) % 512
+        require(member.size >= 0 and file.tell() + member.size + padding <= size - 1024,
+                "fixed USTAR truncated body/padding/terminator")
+        file.seek(member.size, os.SEEK_CUR)
+        require(file.read(padding) == bytes(padding), "fixed USTAR nonzero member padding")
+        observed.add(member.name)
+
+
 def verify(directory, binding_sha, wait_sha):
     require(directory.is_absolute() and directory.resolve(strict=True) == directory, "canonical private local directory required")
     s = directory.lstat()
@@ -108,6 +145,8 @@ def verify(directory, binding_sha, wait_sha):
     original_total, observed, bodies = 0, set(), {}
     archive_file, archive_before = m.open_original(directory / "receipts.tar", m.ARCHIVE_LIMIT)
     with archive_file:
+        check_fixed_ustar(archive_file, archive_before[6], indexed)
+        archive_file.seek(0)
         with tarfile.open(fileobj=archive_file, mode="r:") as archive:
             for member in archive:
                 require(len(observed) < m.MAX_FILES and member.name in indexed and member.name not in observed

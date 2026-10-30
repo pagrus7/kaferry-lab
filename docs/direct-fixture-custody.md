@@ -118,6 +118,10 @@ manifest/errors/result and two external records fit inside the separate32MiB
 all-small profile. Source signatures are rechecked after capture. These are
 admission/read/write guards, not quotas, allocated capacity or power-loss proof.
 Late close failure rejects actual return even if an earlier candidate exists.
+Every tar backend write, including footer/padding, reserves its allowance before
+writing to the exclusive empty original. Partial, short or refused writes latch
+that outlet and stop later members; uncertain bytes cannot disappear from the
+size accounting. No retry, seek/reset or replacement writer is available.
 
 `scripts/read-direct-fixture.py` verifies a private local copy of the five
 snapshot outputs plus exact custody-input and external snapshot-foreground
@@ -129,15 +133,27 @@ publishes evidence. Independent review must authenticate the supplied packet,
 code and foreground provenance before the result can support a runtime verdict.
 
 Readback checks exact membership, identity/modes, streamed image bytes and all
-receipt members/hashes. It can verify retained bytes of a failed run while
+receipt members/hashes. The fixed USTAR profile also requires canonical headers,
+zero body padding, two real terminator blocks and the exact zero record padding
+through physical EOF. Concatenated archives and truncated/hidden tails refuse.
+It can verify retained bytes of a failed run while
 keeping SourceCaptureComplete:false; successful custody is separate from
 lifecycle success. Image-proof tuple agreement is only a comparison with the
 controller claim, not a fresh image parser or Kafka readiness oracle.
 ReleaseQualified and PublicationAuthorized remain false.
 
-The13 filesystem controls passed on the host in.458 seconds, including actual
-mutation, partial-write, corruption, missing/linked originals and first-sink
-refusal controls. They use literal foreground/ELF/image data and test seams,
-not actual process Wait, Docker, Btrfs or fixture observations. The new controls
-are wired into check.sh. Native frozen checks, source reviews, manual transfer
-provenance and a complete actual fixture retention/readback chain remain pending.
+The first13 filesystem controls passed on the host in.458 seconds. Independent
+review then found uncounted tar partial writes and incomplete physical-tail
+validation. Six new controls all failed on the unchanged old source in.354s:
+two reached nonempty partial/short tar writes followed by later writes, and four
+observed acceptance of rebound malformed archive envelopes. These failures are
+retained. Actual over-limit growth was not measured by those small controls.
+
+The repaired20-control target passed in.567s. It includes those six sensitivities
+and an actual finite inert Python child whose final-close fault retains its
+serialized success candidate but returns2; offline readback keeps capture false.
+Other foreground/ELF/image values are literal fixture data with portable platform
+seams. None establishes Docker/Btrfs/native fixture or product observations.
+Controls are wired into check.sh. Final frozen reviews/native checks, manual
+transport provenance and a complete actual fixture retention/readback chain
+remain pending.

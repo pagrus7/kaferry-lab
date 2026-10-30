@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Filesystem/transport controls with literal DATA, no actual fixture/Wait.
 
-No controller, Kafka, Docker, native parent, platform admission or OS Wait is
-performed by these tests. All foreground records are visibly inert claims.
+No controller, Kafka, Docker, native parent or platform admission is performed.
+Only the final-close control waits for a finite inert Python snapshot child;
+the other foreground records remain visibly literal calibration claims.
 """
 import importlib.util
 import errno
 import io
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -96,17 +98,40 @@ class DirectCustodyControls(unittest.TestCase):
              mock.patch.object(m, "__file__", str(self.base / "source/scripts/snapshot-direct-fixture.py")):
             return m.snapshot(self.run, self.head, m.sha(self.packet_raw))
 
-    def transfer(self, snapshot_return):
+    def transfer(self, snapshot_return, snapshot_pid=456):
         local = self.home / "mac-private-copy"
         local.mkdir(mode=0o700)
         for name in m.OUTPUTS:
             self.write(local / name, (self.target / name).read_bytes())
         self.write(local / "custody-input.json", self.packet_raw)
-        external = {"Version": "1", "RunID": self.run, "SourceHead": self.head, "SnapshotPID": 456,
+        external = {"Version": "1", "RunID": self.run, "SourceHead": self.head, "SnapshotPID": snapshot_pid,
                     "Waited": True, "ReturnCode": snapshot_return, "ResultSHA256": m.sha((local / "result.json").read_bytes()),
                     "ErrorsSHA256": m.sha((local / "errors.jsonl").read_bytes()), "ReleaseQualified": False}
         self.write(local / "snapshot-foreground.json", m.encode(external))
         return local, m.sha(m.encode(external))
+
+    def rebind_archive(self, local, raw):
+        # Deliberately rebind the outer envelope: the independent member and
+        # physical-framing checks must still reject a bad archive's contents.
+        path = local / "receipts.tar"
+        self.write(path, raw)
+        result = m.decode((local / "result.json").read_bytes())
+        result["Files"]["receipts.tar"] = m.stream(path, m.ARCHIVE_LIMIT)
+        self.write(local / "result.json", m.encode(result))
+        foreground = m.decode((local / "snapshot-foreground.json").read_bytes())
+        foreground["ResultSHA256"] = m.sha(m.encode(result))
+        self.write(local / "snapshot-foreground.json", m.encode(foreground))
+        return m.sha(m.encode(foreground))
+
+    def assert_framing_refused(self, local, wait_sha):
+        try:
+            accepted = r.verify(local, m.sha(self.packet_raw), wait_sha)
+        except ValueError as error:
+            self.write(self.home / "physical-framing-observation.json", m.encode({"ReaderReturned": False, "Exception": repr(error)}))
+            self.assertIn("fixed USTAR", str(error))
+        else:
+            self.write(self.home / "physical-framing-observation.json", m.encode({"ReaderReturned": True, "ActualReaderResult": accepted}))
+            self.fail("reader accepted physically invalid archive after the outer envelope was rebound")
 
     def test_given_fixed_originals_when_copied_then_image_is_separate_and_bytes_verify(self):
         self.assertEqual(self.capture(), 0)
@@ -202,15 +227,40 @@ class DirectCustodyControls(unittest.TestCase):
         raw = path.read_bytes()
         needle = b"INERT ORIGINAL DATA ONLY"
         self.assertIn(needle, raw)
-        self.write(path, raw.replace(needle, b"CHANGED ORIGINAL BYTES! ", 1))
-        result = m.decode((local / "result.json").read_bytes())
-        result["Files"]["receipts.tar"] = m.stream(path, m.ARCHIVE_LIMIT)
-        self.write(local / "result.json", m.encode(result))
-        foreground = m.decode((local / "snapshot-foreground.json").read_bytes())
-        foreground["ResultSHA256"] = m.sha(m.encode(result))
-        self.write(local / "snapshot-foreground.json", m.encode(foreground))
+        wait_sha = self.rebind_archive(local, raw.replace(needle, b"CHANGED ORIGINAL BYTES! ", 1))
         with self.assertRaisesRegex(ValueError, "archive original corruption"):
-            r.verify(local, m.sha(self.packet_raw), m.sha(m.encode(foreground)))
+            r.verify(local, m.sha(self.packet_raw), wait_sha)
+
+    def test_given_appended_second_archive_when_envelope_rebound_then_physical_eof_refuses(self):
+        self.assertEqual(self.capture(), 0)
+        local, _ = self.transfer(0)
+        raw = (local / "receipts.tar").read_bytes()
+        wait_sha = self.rebind_archive(local, raw + raw)
+        self.assert_framing_refused(local, wait_sha)
+
+    def test_given_nonzero_tail_when_envelope_rebound_then_zero_padding_refuses(self):
+        self.assertEqual(self.capture(), 0)
+        local, _ = self.transfer(0)
+        raw = (local / "receipts.tar").read_bytes()
+        self.assertEqual(raw[-512:], bytes(512))
+        wait_sha = self.rebind_archive(local, raw[:-1] + b"!")
+        self.assert_framing_refused(local, wait_sha)
+
+    def test_given_truncated_record_padding_when_envelope_rebound_then_refused(self):
+        self.assertEqual(self.capture(), 0)
+        local, _ = self.transfer(0)
+        raw = (local / "receipts.tar").read_bytes()
+        wait_sha = self.rebind_archive(local, raw[:-512])
+        self.assert_framing_refused(local, wait_sha)
+
+    def test_given_missing_terminator_when_envelope_rebound_then_physical_eof_refuses(self):
+        self.assertEqual(self.capture(), 0)
+        local, _ = self.transfer(0)
+        raw = (local / "receipts.tar").read_bytes()
+        with tarfile.open(local / "receipts.tar") as archive:
+            end = max(member.offset_data + ((member.size + 511) // 512) * 512 for member in archive)
+        wait_sha = self.rebind_archive(local, raw[:end])
+        self.assert_framing_refused(local, wait_sha)
 
     def test_given_reused_snapshot_when_called_again_then_originals_are_not_replaced(self):
         self.assertEqual(self.capture(), 0)
@@ -249,6 +299,112 @@ class DirectCustodyControls(unittest.TestCase):
         self.assertFalse(result["ImageSourceCaptured"] or result["SourceCaptureComplete"])
         self.assertEqual((local / "images.tar").read_bytes(), self.image.read_bytes()[:1])
         self.assertIn(b"SYNTHETIC private image write failed after prefix", (local / "errors.jsonl").read_bytes())
+
+    def receipt_write_fault(self, short_return):
+        actual_create, actual_add = m.create, tarfile.TarFile.addfile
+        writes, late_members, prefix, failed = [], [], [], []
+        class Failed:
+            def __init__(self, file): self.file = file
+            def __getattr__(self, name): return getattr(self.file, name)
+            def write(self, raw):
+                writes.append(len(raw))
+                if not failed:
+                    failed.append(True)
+                    prefix.append(raw[:512])
+                    count = self.file.write(prefix[0])  # real retained bytes
+                    if short_return:
+                        return count
+                    raise OSError(errno.EIO, "SYNTHETIC receipt append failed after prefix")
+                return self.file.write(raw)
+        def create(path):
+            file = actual_create(path)
+            return Failed(file) if path.name == "receipts.tar" else file
+        def add(archive, member, *args, **kwargs):
+            if failed:
+                late_members.append(member.name)
+            return actual_add(archive, member, *args, **kwargs)
+        with mock.patch.object(m, "create", create), mock.patch.object(tarfile.TarFile, "addfile", add):
+            code = self.capture()
+        retained = (self.target / "receipts.tar").read_bytes()
+        small = sum((self.target / name).stat().st_size for name in m.OUTPUTS if name != "images.tar")
+        self.write(self.home / "receipt-write-observation.json", m.encode({"ActualSnapshotFunctionReturn": code,
+                   "InjectedShortReturn": short_return, "UnderlyingRequestedWriteBytes": writes, "LaterMemberNames": late_members,
+                   "RetainedArchiveBytes": len(retained), "RetainedArchiveSHA256": m.sha(retained), "ArchiveGuard": m.ARCHIVE_LIMIT,
+                   "SmallAggregateBytes": small, "SmallAggregateGuard": m.SMALL_LIMIT,
+                   "InjectedPrefixBytes": len(prefix[0]) if prefix else 0, "InjectedPrefixSHA256": m.sha(prefix[0]) if prefix else None}))
+        self.assertEqual(code, 2)
+        self.assertEqual(len(failed), 1)  # actual backend write was reached
+        self.assertTrue(retained and retained.startswith(prefix[0]))
+        self.assertEqual(late_members, [], "no member after uncertain append")
+        self.assertEqual(len(writes), 1, "no backend/footer write after failure")
+        self.assertEqual(retained, prefix[0])
+        self.assertLessEqual(len(retained), m.ARCHIVE_LIMIT)
+        self.assertLessEqual(small, m.SMALL_LIMIT)
+        self.assertFalse(m.decode((self.target / "manifest.json").read_bytes())["CaptureComplete"])
+        self.assertFalse(m.decode((self.target / "result.json").read_bytes())["CaptureComplete"])
+        first = m.decode((self.target / "errors.jsonl").read_bytes().splitlines()[0])
+        self.assertIn("short receipt archive write" if short_return else "SYNTHETIC receipt append failed after prefix", first["Exception"])
+
+    def test_given_receipt_append_exception_after_prefix_then_no_later_member_or_write(self):
+        self.receipt_write_fault(False)
+
+    def test_given_receipt_short_write_after_prefix_then_no_later_member_or_write(self):
+        self.receipt_write_fault(True)
+
+    def test_given_final_close_failure_after_candidate_then_actual_wait2_rejects_upgrade(self):
+        # A finite inert Python process owns the actual snapshot call and file
+        # close. Root/platform/source-location seams remain explicitly test-only.
+        child_source = """import importlib.util,os,pathlib,sys
+source=pathlib.Path(SOURCE)
+spec=importlib.util.spec_from_file_location('inert_snapshot_close_control',source)
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+home=pathlib.Path(HOME);base=home/BASE;target=home/OUTLET/'snapshot'
+actual=m.create
+class CloseFailed:
+ def __init__(self,file):self.file=file
+ def __getattr__(self,name):return getattr(self.file,name)
+ def close(self):
+  raw=(target/'result.json').read_bytes()
+  m.require(m.decode(raw)['CaptureComplete'] is True,'success candidate not reached')
+  with actual(home/'candidate-before-close.json') as saved:m.write(saved,raw)
+  self.file.close()
+  raise OSError(5,'SYNTHETIC final private error close failed')
+def create(path):
+ file=actual(path)
+ return CloseFailed(file) if path.name=='errors.jsonl' else file
+m.create=create;m.HOME=home;m.native_outlet=lambda _:None
+m.__file__=str(base/'source/scripts/snapshot-direct-fixture.py')
+code=m.snapshot(RUN,HEAD,BINDING)
+with actual(home/'actual-snapshot-function-return.json') as saved:m.write(saved,m.encode({'PID':os.getpid(),'ReturnCode':code}))
+sys.exit(code)
+"""
+        values = {"SOURCE": str(ROOT / "snapshot-direct-fixture.py"), "HOME": str(self.home),
+                  "BASE": self.base.name, "OUTLET": self.outlet.name, "RUN": self.run, "HEAD": self.head, "BINDING": m.sha(self.packet_raw)}
+        # Fixed Python literal assignments, never a shell command or input code.
+        helper = "\n".join(name + "=" + repr(value) for name, value in values.items()) + "\n" + child_source
+        with (self.home / "final-close-child.stdout").open("xb") as stdout, (self.home / "final-close-child.stderr").open("xb") as stderr:
+            os.fchmod(stdout.fileno(), 0o600); os.fchmod(stderr.fileno(), 0o600)
+            child = subprocess.Popen([sys.executable, "-I", "-S", "-B", "-c", helper], stdout=stdout, stderr=stderr,
+                                     env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            try:
+                code = child.wait(timeout=5)
+            except BaseException:
+                child.kill(); child.wait(timeout=3)
+                raise
+        self.write(self.home / "final-close-child-wait.json", m.encode({"PID": child.pid, "Waited": True, "ReturnCode": code,
+                   "Observation": "actual subprocess.Popen.wait returned", "InertPythonOnly": True}))
+        self.assertEqual(code, 2)
+        actual_return = m.decode((self.home / "actual-snapshot-function-return.json").read_bytes())
+        self.assertEqual(actual_return, {"PID": child.pid, "ReturnCode": code})
+        candidate = (self.home / "candidate-before-close.json").read_bytes()
+        self.assertTrue(m.decode(candidate)["CaptureComplete"])
+        self.assertEqual((self.target / "result.json").read_bytes(), candidate)
+        local, wait_sha = self.transfer(code, snapshot_pid=child.pid)
+        result = r.verify(local, m.sha(self.packet_raw), wait_sha)
+        self.assertTrue(result["CustodyBytesVerified"])
+        self.assertFalse(result["SourceCaptureComplete"])
+        self.assertEqual(result["SnapshotForegroundExternalClaim"]["ReturnCode"], 2)
+        self.assertEqual((local / "errors.jsonl").read_bytes(), b"")  # no replacement after final close
 
 
 if __name__ == "__main__":
