@@ -74,9 +74,70 @@ production waiter, custody checks and timeouts were unchanged. These controls
 now run in `scripts/check.sh`; actual Linux pidfd/held-pipe observations remain
 required on the frozen native source.
 
-The producer retains its existing image bound512MiB. A separate local profile
-for that one raw image plus at most32MiB receipts is planned, not implemented by
-this controller. The current256MiB CI store guard is unchanged. Actual guest/Mac
-headroom, separately streamed image hashing and immutable original readback must
-be admitted before any runtime. Qualification/campaign work cannot start from a
-unit pass or this component's completion candidate.
+The producer retains its existing image bound512MiB. The separate fixed custody
+tools described below implement source for that raw image and at most32MiB
+small originals. The Go controller and parent do not implement this external
+transport, so their corresponding false/planned flags remain unchanged. The
+current256MiB CI store guard is unchanged. Actual guest/Mac headroom, manual
+transport, original returns, complete readback and independent review still
+precede runtime admission. A unit pass or component candidate cannot qualify a
+release or start a campaign.
+
+## Separate image and fixed receipt custody
+
+`scripts/snapshot-direct-fixture.py` accepts a run ID, source head and separately
+authenticated custody-input hash. Source is only
+`/home/labrunner/kaferry-direct-RUN`; outlet is the preowned Btrfs directory
+`/home/labrunner/kaferry-direct-custody-RUN`, bound by its actual device/inode.
+Native LinuxARM64/UID501 and Btrfs statfs are checked without changing the
+filesystem, UID, namespace or safeguards. The tool reserves an exclusive
+snapshot directory and its first private error sink before input reads.
+
+The custody packet binds source/parent/input hashes and an external foreground
+original. That original must record the actual Python-parent Wait and separate
+stdout/stderr, plus independently reviewed producer quiescence. These remain
+external claims needing authenticated caller evidence. A parent return, hash
+or Boolean cannot prove that an inner producer stopped. Missing Wait/quiescence
+refuses producer capture; no process scan, kill, retry or replacement sink exists.
+Outer parent stdout/stderr retain early pre-sink failures separately from the
+parent's own captured Go streams.
+
+The selected originals are the fixed parent/build/input files, seven parent
+private files, eight Go result files with optional interrupted result, typed
+fixture state and broker-only private proof/command families. Only their literal
+numeric command/operation naming patterns are selected. Unknown, missing,
+linked, refused or changed originals retain bounded exact notices and force
+incomplete capture. No arbitrary source tree, executable, Git directory or
+unrelated resource is selected.
+
+The same-run images.tar streams once from its exact nofollow stable source to
+a separate output with a1MiB buffer and512MiB guard. The output closes/fsyncs,
+then receives a separate streamed length/hash readback. Images never enter the
+receipt tar or a whole-image Python object. Receipts.tar has a30MiB guard;
+manifest/errors/result and two external records fit inside the separate32MiB
+all-small profile. Source signatures are rechecked after capture. These are
+admission/read/write guards, not quotas, allocated capacity or power-loss proof.
+Late close failure rejects actual return even if an earlier candidate exists.
+
+`scripts/read-direct-fixture.py` verifies a private local copy of the five
+snapshot outputs plus exact custody-input and external snapshot-foreground
+records. The latter binds the actual snapshot Wait, return and final error/result
+hashes. The reader uses only the fixed snapshot sibling's pure read/path helpers,
+loaded from hash-bound bytes under a non-main namespace. It never invokes that
+script's native admission or capture, extracts archives, launches processes or
+publishes evidence. Independent review must authenticate the supplied packet,
+code and foreground provenance before the result can support a runtime verdict.
+
+Readback checks exact membership, identity/modes, streamed image bytes and all
+receipt members/hashes. It can verify retained bytes of a failed run while
+keeping SourceCaptureComplete:false; successful custody is separate from
+lifecycle success. Image-proof tuple agreement is only a comparison with the
+controller claim, not a fresh image parser or Kafka readiness oracle.
+ReleaseQualified and PublicationAuthorized remain false.
+
+The13 filesystem controls passed on the host in.458 seconds, including actual
+mutation, partial-write, corruption, missing/linked originals and first-sink
+refusal controls. They use literal foreground/ELF/image data and test seams,
+not actual process Wait, Docker, Btrfs or fixture observations. The new controls
+are wired into check.sh. Native frozen checks, source reviews, manual transfer
+provenance and a complete actual fixture retention/readback chain remain pending.
