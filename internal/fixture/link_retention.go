@@ -443,6 +443,12 @@ func exactLinkAbsence(args []string, raw []byte) bool {
 	if args[0] == "container" && string(raw) == "\nError response from daemon: No such container: "+args[2]+"\n" {
 		return true
 	}
+	// The retained native network-ID inspect has the same single leading LF,
+	// but its daemon spelling is different. Admit only that complete framing
+	// for the exact selected immutable ID, not names or other leading-LF errors.
+	if args[0] == "network" && linkID(args[2]) && string(raw) == "\nError response from daemon: network "+args[2]+" not found\n" {
+		return true
+	}
 	for _, expected := range linkAbsenceMessages(args[0], args[2]) {
 		if string(raw) == expected || string(raw) == expected+"\n" {
 			return true

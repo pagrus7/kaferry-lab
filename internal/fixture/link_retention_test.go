@@ -328,38 +328,90 @@ func TestLinkedAbsenceNeverGuessesFromControlNoticeOrTypedPermission(t *testing.
 	}
 }
 
-func TestLinkedExactLeadingLFContainerAbsenceRetainsOriginalFraming(t *testing.T) {
+func TestLinkedExactLeadingLFAbsenceRetainsOriginalFraming(t *testing.T) {
 	// Given the exact combined stdout/stderr observed from an already removed
-	// owned container, when inspected, then absence is retained without a retry,
+	// owned target, when inspected, then absence is retained without a retry,
 	// another target or discarded formatting bytes.
-	s := linkRetentionState(t)
-	raw := []byte("\nError response from daemon: No such container: " + s.Proxy.Container + "\n")
-	calls := 0
-	run, err := LinkExecutor(s, func(_ context.Context, args ...string) ([]byte, error) {
-		calls++
-		if !reflect.DeepEqual(args, []string{"container", "inspect", s.Proxy.Container, "--format", "{{json .}}"}) {
-			t.Fatal("unexpected absence route")
-		}
-		return raw, errors.New("exit 1")
-	})
-	if err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"container", "network"} {
+		t.Run(kind, func(t *testing.T) {
+			s := linkRetentionState(t)
+			target := s.Proxy.Container
+			raw := []byte("\nError response from daemon: No such container: " + target + "\n")
+			if kind == "network" {
+				target = s.Proxy.NetworkID
+				raw = []byte("\nError response from daemon: network " + target + " not found\n")
+			}
+			argv := []string{kind, "inspect", target, "--format", "{{json .}}"}
+			calls := 0
+			run, err := LinkExecutor(s, func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				if !reflect.DeepEqual(args, argv) {
+					t.Fatal("unexpected absence route")
+				}
+				return raw, errors.New("exit 1")
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := run(context.Background(), argv...)
+			var absent *linkDockerFailure
+			if !errors.As(err, &absent) || !absent.ExactAbsence || absent.PersistenceFailed || calls != 1 || !bytes.Equal(got, raw) {
+				t.Fatal("exact retained leading-LF absence was not admitted")
+			}
+			_, body := readLinkPrivateFailure(t, err)
+			var receipt struct {
+				Argv                                          []string
+				Combined                                      []byte
+				ExactAbsence, CombinedComplete, CauseComplete bool
+			}
+			if e := json.Unmarshal(body, &receipt); e != nil || !receipt.ExactAbsence || !receipt.CombinedComplete || !receipt.CauseComplete || !bytes.Equal(receipt.Combined, raw) || !reflect.DeepEqual(receipt.Argv, append([]string{"docker"}, argv...)) {
+				t.Fatal("original absence framing or complete receipt lost")
+			}
+			if _, e := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "STOPPED.json")); !errors.Is(e, os.ErrNotExist) {
+				t.Fatal("complete exact absence retained a stop")
+			}
+		})
 	}
-	got, err := run(context.Background(), "container", "inspect", s.Proxy.Container, "--format", "{{json .}}")
-	var absent *linkDockerFailure
-	if !errors.As(err, &absent) || !absent.ExactAbsence || absent.PersistenceFailed || calls != 1 || !bytes.Equal(got, raw) {
-		t.Fatal("exact retained leading-LF absence was not admitted")
-	}
-	_, body := readLinkPrivateFailure(t, err)
-	var receipt struct {
-		Combined     []byte
-		ExactAbsence bool
-	}
-	if e := json.Unmarshal(body, &receipt); e != nil || !receipt.ExactAbsence || !bytes.Equal(receipt.Combined, raw) {
-		t.Fatal("original absence framing lost")
-	}
-	if _, e := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "STOPPED.json")); !errors.Is(e, os.ErrNotExist) {
-		t.Fatal("complete exact absence retained a stop")
+}
+
+func TestLinkedLeadingLFNetworkAbsenceRequiresExactInspectArgv(t *testing.T) {
+	// Given the observed network notice, When the command shape or immutable
+	// target differs, Then it remains a stopped failed command, not absence.
+	for _, fault := range []string{"network-name", "extra-argument", "other-format", "other-action", "other-kind"} {
+		t.Run(fault, func(t *testing.T) {
+			s := linkRetentionState(t)
+			target := s.Proxy.NetworkID
+			if fault == "network-name" {
+				target = s.Network
+			}
+			argv := []string{"network", "inspect", target, "--format", "{{json .}}"}
+			switch fault {
+			case "extra-argument":
+				argv = append(argv, "extra")
+			case "other-format":
+				argv[4] = "{{.Id}}"
+			case "other-action":
+				argv[1] = "rm"
+			case "other-kind":
+				argv[0] = "container"
+			}
+			calls := 0
+			run, err := LinkExecutor(s, func(context.Context, ...string) ([]byte, error) {
+				calls++
+				return []byte("\nError response from daemon: network " + target + " not found\n"), errors.New("exit 1")
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := run(context.Background(), argv...)
+			var failure *linkDockerFailure
+			if got != nil || !errors.As(err, &failure) || failure.ExactAbsence || calls != 1 {
+				t.Fatal("another command shape or name admitted leading-LF absence", got, err)
+			}
+			if _, err = LinkExecutor(s, func(context.Context, ...string) ([]byte, error) { t.Fatal("stop bypassed"); return nil, nil }); err == nil {
+				t.Fatal("nonmatching command failed to retain facility stop")
+			}
+		})
 	}
 }
 

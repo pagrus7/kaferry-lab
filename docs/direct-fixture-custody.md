@@ -3,7 +3,8 @@
 This source component calibrates two disposable brokers. It does not launch
 Kaferry, a test binary or a proxy, and cannot qualify a release. The fixed CLI
 accepts repository, run ID, reviewed source head and input hash. It builds
-nothing. A runnable setup/retention recipe is still incomplete.
+nothing. Complete manual retention and a successful native lifecycle remain
+required; the first native attempt described below failed.
 
 Given a separately admitted native prebuilt controller and source-only export,
 the controller reserves its private error outlet before further admissions. It
@@ -40,9 +41,10 @@ retained after failure.
 The source includes literal lifecycle/identity controls and real private-file
 absence-reader controls. The first host target passed in5.558 seconds across
 fixture/campaign packages; it is a harness test, not native fixture execution.
-Fresh native setup, Kafka-only stock save, readiness, cleanup, outer parent
-return, failed-prefix transport and Mac readback remain unmeasured. No old link
-archive, literal image fixture or historical proof can authorize the new run.
+The first native attempt now records setup, Kafka-only stock save, broker
+readiness, returned cleanup and actual parent/controller returns. Successful
+final absence and complete image/receipt custody remain unmeasured. No old link
+archive, literal image fixture or historical proof can authorize a new run.
 
 `scripts/direct-fixture-guest-parent.py` implements the separate fixed parent.
 It admits only `/home/labrunner/kaferry-direct-RUN/parent-input.json` and its
@@ -156,7 +158,9 @@ Other foreground/ELF/image values are literal fixture data with portable platfor
 seams. None establishes Docker/Btrfs/native fixture or product observations.
 Controls are wired into check.sh. Final frozen reviews/native checks, manual
 transport provenance and a complete actual fixture retention/readback chain
-remain pending.
+remain required for the actual fixture. Exact6d7 source reviews and its native
+85-Python/full-Go check subsequently passed in90.213 seconds; those harness
+checks do not establish fixture or release success.
 
 A further review found a test-only exceptional cleanup edge: a denied Wait
 could enter the same kill/re-Wait branch as a timeout. The fixture now records
@@ -167,3 +171,33 @@ keeping the original failed record unchanged. Ordinary CPython finalization is
 outside that explicit-call proof. The21-control host target passed in.747s;
 no actual new platform denial occurred. The preceding479 native84-control pass
 remains labelled479 and does not validate this successor's new refusal branch.
+
+## Native attempt and exact network-absence framing
+
+Given a fresh source-only6d7 export, independently admitted prebuilt controller,
+bound inputs and reviewed original-wait/custody setup, when the one native
+DIRECT control ran, then startup, typed image identity and cleanup returned,
+but final network absence remained unproved. The outer return was2 after8.369
+seconds; the original parent returned2 and its controller returned1. The
+controller retained INCOMPLETE, false ResourcesAbsent/NativeDirectFixturePassed
+and its STOP. No Kaferry executable ran.
+
+The final Docker network inspect returned exit1 and the exact complete combined
+response `\nError response from daemon: network ID not found\n`, with ID equal
+to the selected64-hex network ID. The old classifier accepted the corresponding
+container leading-LF response and the network response without that leading LF,
+but rejected this network framing. Subsequent empty ownership-label queries
+are separate reconciliation observations; they cannot upgrade the failed run.
+Original waits, receipts and the217422848-byte saved-image claim remain retained;
+complete failed-image custody/readback is still required.
+
+The repair admits only that literal complete network response, including one
+leading and one terminal LF, for the selected immutable64-hex ID and fixed
+network-inspect argv. It strips no whitespace and leaves refusal, cancellation,
+capture-completeness, cause-completeness, persistence and existing STOP checks
+unchanged. An explicit calibration overlay using the unchanged old lab
+classifier with the new tests failed at both network-positive controls in2.525
+seconds. The candidate targeted controls passed in14.495 seconds, including
+wrong identity/framing/argv, incomplete capture/cause, typed refusal,
+cancellation and failed outcome persistence. These inert host controls neither
+repair the old run nor establish a successful fresh native lifecycle.
