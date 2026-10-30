@@ -59,8 +59,9 @@ must be measured/admitted before it can support completion. Existing controller
 component overflow rather than silently truncating a successful claim. Shared
 normal caches, OS metadata and page cache are not this logical-file bound.
 
-Copy the exact AF5 test/specimen and build provenance from the retained normal-f
-build; do not rebuild or pretend they were compiled in the new directory. Keep
+Copy the exact664fbbf test/specimen and build provenance from its dedicated
+build, as pinned in [the custody contract](hardware-custody.md); do not rebuild
+or pretend they were compiled in the new directory. Keep
 the original build receipt/buildinfo and record copy source/target identities,
 whole hashes, modes and closed-readback facts. DWARF may name the original build
 path. The original hardware gate must still independently observe exact live

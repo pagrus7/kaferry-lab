@@ -47,20 +47,21 @@ class CallerControls(unittest.TestCase):
         self.run = "inert-unit-control"
 
     def test_reviewed_source_directory_reaches_pins_and_stale_prefix_does_not(self):
-        # Literal fixed workspace for AF5; do not
+        # Literal fixed workspace for664; do not
         # derive its prefix from the production expression being exercised.
-        valid = Path("/run/user/501/kaferry-hardware-af5e4b2-inert-unit-control/source")
+        valid = Path("/run/user/501/kaferry-hardware-664fbbf-inert-unit-control/source")
         stale = Path("/run/user/501/kaferry-hardware-eb0fd52-inert-unit-control/source")
-        wrong_run = Path("/run/user/501/kaferry-hardware-af5e4b2-other-run/source")
-        old_home = Path("/home/labrunner/kaferry-hardware-af5e4b2-inert-unit-control/source")
+        old_af5 = Path("/run/user/501/kaferry-hardware-af5e4b2-inert-unit-control/source")
+        wrong_run = Path("/run/user/501/kaferry-hardware-664fbbf-other-run/source")
+        old_home = Path("/home/labrunner/kaferry-hardware-664fbbf-inert-unit-control/source")
         class ReachedSourcePin(Exception):
             pass
-        for root, admitted in ((valid, True), (stale, False), (wrong_run, False), (old_home, False)):
+        for root, admitted in ((valid, True), (stale, False), (old_af5, False), (wrong_run, False), (old_home, False)):
             with self.subTest(root=str(root)):
                 manifest = {"RunID": self.run, "Case": "normal", "RepoRoot": str(root),
                             "SourceHead": caller.HEAD, "GuestName": "kaferry-lab-arm64-20261026",
                             "GuestMachineID": "01M5XVQQ4GRX6H79K1SE76R0X1",
-                            "TestBytes": 6567549, "SpecimenBytes": 3993074}
+                            "TestBytes": 6582220, "SpecimenBytes": 3993134}
                 for field in ("CallerSHA256", "TestSHA256", "SpecimenSHA256", "BuildSHA256", "PlanSHA256", "AuditSHA256"):
                     manifest[field] = "a" * 64
                 raw = caller.encode(manifest)

@@ -8,6 +8,7 @@ if [ -n "$unformatted" ]; then
 fi
 python3 scripts/test-hardware-calibration-caller.py -v
 python3 scripts/test-native-check-guest-parent.py -v
+python3 scripts/test-direct-fixture-guest-parent.py -v
 go vet ./...
 mkdir -p .cache/unit
 go test -v -race -covermode=atomic -coverpkg=./... -coverprofile=.cache/unit/coverage.out -count=1 -timeout=3m ./...

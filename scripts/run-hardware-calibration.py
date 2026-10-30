@@ -16,7 +16,7 @@ import sys
 import time
 import traceback
 
-HEAD = "af5e4b2b62099ea53a45be935ebdee9be4f90378"
+HEAD = "664fbbf5dbff0f2a8ed17b20967c1889d8521e54"
 SDK = "bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd"
 GDB = "0a7a6c0c020f1bb52054f89444aba5f2ba813b0ef4a1ff01f72ef97f7185d93c"
 LIMIT, JSON_LIMIT = 2 << 20, 256 << 10
@@ -31,10 +31,10 @@ SOURCE = {
     "go.mod": "dbc200c448b9db988753c9e543b881f135555400a8f23f0c5e1e188d7baae88e",
     "go.sum": "5056407e3b8b9a63063af7ee77c4962d5db7aa7b35dadf20fc22b629245552ad",
     "cmd/hardware-wait-specimen/main.go": "430a34a7f3bf779a7a49730bd16e32e6cb81a474b512da273ef68099eecb72ed",
-    "internal/hardwarecalibration/gdb_controller_linux.go": "aadceeaf3da7930b0f6886bd9f310ec2dd1ac30cf4d89904ba653ed1ef118a2b",
+    "internal/hardwarecalibration/gdb_controller_linux.go": "e9cd476586869f312314b0aa81370c10c0f380217fff06ecfea7a27b19c9a796",
     "internal/hardwarecalibration/gdb_controller_linux_test.go": "50896e7384e102abd63c65d1d0312068b92db6b33af4751118b8c54ce6c55cc8",
-    "internal/hardwarecalibration/gdb_presentation_linux.go": "a0ee866878cbc41946f8b4368bcd571aa6fca91329b7c778227dd2c502e551fb",
-    "internal/hardwarecalibration/gdb_presentation_linux_test.go": "2c8449567241f5e557926e313c9c5fe52ffea2a55bbfbc6cf4770199eab9a9c7",
+    "internal/hardwarecalibration/gdb_presentation_linux.go": "c0a2ce754778be8af4e017a6518a4ccb414d4568a9ec32eae4bf95ee1786c83b",
+    "internal/hardwarecalibration/gdb_presentation_linux_test.go": "e0eb920eb33b43b44f18f743b8d6bc93fd212ed884d1a0d70d9d729bc7f60a21",
     "internal/hardwarecalibration/wait_parent_linux.go": "8143eee406c75766e4007d8a4f4c93ae1424ae4a6075216cf023568213369ede",
     "internal/hardwarecalibration/wait_parent_other.go": "61cd89fd8395f7dcb13c0dbe3ea091ff53234c04275da23c6f4a795b326611f0",
     "internal/hardwarecalibration/wait_parent_test.go": "4fe4231e71b59a18fd7c8a196b3d5f43a1eb3ac4b03e7cdc86b1d06f9fb99389",
@@ -155,8 +155,8 @@ def bind_inputs(root, run, expected):
         require(type(m[prefix + "Bytes"]) is int and len(body) == m[prefix + "Bytes"] > 64
                 and body[:6] == b"\x7fELF\x02\x01" and int.from_bytes(body[18:20], "little") == 183
                 and path.stat().st_mode & 0o111)
-    require(m["TestSHA256"] == "00bd5b076d6b7cca613c0befe75223e22fb58634467b0b5b039fa27dbf1bf2c7" and m["TestBytes"] == 6567549
-            and m["SpecimenSHA256"] == "a74db3f833905f1a550ae1346e844cc5f6369a7f2ad04a1ac1544b743035923c" and m["SpecimenBytes"] == 3993074)
+    require(m["TestSHA256"] == "d1b22517cd90ecc1a58291ca0106892b2a29a02eeb634fdf85f23c90e8b17a9f" and m["TestBytes"] == 6582220
+            and m["SpecimenSHA256"] == "29e4625a8061f78319114469cd3770fe5fe2767560a8664c8ab786d2fb1c5384" and m["SpecimenBytes"] == 3993134)
     build = decode(bodies[".cache/hardware-build/build-binding.json"])
     require(all(build.get(k) == v for k, v in {"SourceHead": HEAD, "GoVersion": "go1.26.0", "GOOS": "linux",
             "GOARCH": "arm64", "SDKArchiveSHA256": SDK, "TestSHA256": m["TestSHA256"], "SpecimenSHA256": m["SpecimenSHA256"]}.items()))

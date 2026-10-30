@@ -2,7 +2,7 @@
 
 `scripts/run-hardware-calibration.py` implements a small direct-child caller for
 the four existing synthetic GDB wrappers at hardware source
-`af5e4b2b62099ea53a45be935ebdee9be4f90378`. It uses private regular output files
+`664fbbf5dbff0f2a8ed17b20967c1889d8521e54`. It uses private regular output files
 and `Popen.wait`. It does not build, install, run Git, invoke GDB directly, copy
 evidence, select a released Kaferry image or run multiple cases. The hardware
 controller continues to own inner process identities, exact original/adopted
@@ -115,8 +115,8 @@ for the separate capacity, volatile-lifetime and persistent-copy requirements.
 
 ## Exact inputs before launch
 
-The coordinator prepares a fresh reviewedaf5e4b2 checkout per case at
-`/run/user/501/kaferry-hardware-af5e4b2-RUN/source`. The caller checks canonical
+The coordinator prepares a fresh reviewed664fbbf checkout per case at
+`/run/user/501/kaferry-hardware-664fbbf-RUN/source`. The caller checks canonical
 paths, actual uid501 and Linux/aarch64 uname for the selected owned guest
 `kaferry-lab-arm64-20261026`, kernel
 `7.0.14-orbstack-00380-ga7e0a2dc9535`. OrbStack machine ID
@@ -125,17 +125,17 @@ the actual external ownership descriptor. Uname does not prove that control-plan
 ID, physical hardware or kernel-source provenance.
 
 Already-built inputs live under `.cache/hardware-build/`. The coordinator's
-new native Go1.26 build occurred once in the normal-f source root; its exact
+new native Go1.26 build occurred once in the dedicated664 build source root; its exact
 artifact bytes may be hash-verified private copies in the other three fresh
 checkouts. Do not call those copies fresh builds: rebuilding at a different
 absolute path may change DWARF/build bytes. The fixed artifacts are:
 
 | File | Bytes | SHA256 |
 |---|---:|---|
-|`hardwarecalibration.test`|6567549|`00bd5b076d6b7cca613c0befe75223e22fb58634467b0b5b039fa27dbf1bf2c7`|
-|`hardware-wait-specimen`|3993074|`a74db3f833905f1a550ae1346e844cc5f6369a7f2ad04a1ac1544b743035923c`|
+|`hardwarecalibration.test`|6582220|`d1b22517cd90ecc1a58291ca0106892b2a29a02eeb634fdf85f23c90e8b17a9f`|
+|`hardware-wait-specimen`|3993134|`29e4625a8061f78319114469cd3770fe5fe2767560a8664c8ab786d2fb1c5384`|
 
-The caller pins these whole bytes and twelveaf5e4b2 source/build-input files. It also
+The caller pins these whole bytes and twelve664fbbf source/build-input files. It also
 pins the whole `build-binding.json` receipt, caller script, existing GDB plan
 and independently issued source-audit receipt. The build receipt's checked
 fields are SourceHead, GoVersion=go1.26.0, GOOS=linux, GOARCH=arm64,
@@ -143,6 +143,34 @@ SDKArchiveSHA256=`bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704
 TestSHA256 and SpecimenSHA256. Its actual build commands/waits, clean source
 mapping and copied artifact identities need independent review; a manifest
 does not authenticate its own claims. No build or source fallback exists.
+
+The dedicated build returned0 in1.794s; all nine Git/Go children have actual
+wait4 statuses0 and complete stdout/stderr capture. The two compiler PIDs were
+98889 and98988. Source was clean before and after at664fbbf, Go1.26.0/LinuxARM64,
+CGO_ENABLED=0, with the normal HOME and caches. Actual Python startup used
+`env -i` and four explicit environment keys; it did not use isolated/non-user-site
+startup flags. Those flags are not claimed. The8707-byte build-binding has
+SHA256`918071bfda02e6bd35182cc6027031c646c0b86d1491cb2b6694c805d34c5bbf`.
+Five closed original artifacts and command receipts were read back privately
+on the Mac. Only the admitted Mac binary copies changed0700→0600; guest originals
+remain0700. This is compilation/custody evidence, not hardware or product execution.
+Independent stdlib ELF/DWARF readers observed marker ranges
+0x1135f0–0x113610 and0x113610–0x113620, source lines911/914 and formal names
+`value`/`~r0`. Both markers moved64 bytes fromAF5. A new native data-only
+production-reader control agreed with those observations in.915s. Its dedicated
+unit clone has one explicit test overlay; the original build source stays clean.
+No specimen or debugger was executed by these metadata checks.
+
+The preceding normal-h attempt reached strict mapped-file admission and returned
+two hardware descriptors, then failed on stock inventory text `inf 1, 2`.
+All retained failure/cleanup flags remain unchanged. Source664 validates the
+exact owned vfork/fork inferior scope in all seven inventory rows and the two
+already returned hardware descriptors. Its literal negative control fails on
+unchangedAF5; native targeted/full checks pass, with live GDB opt-ins skipped.
+No new query, guard, command budget, hit, wait or cleanup criterion was relaxed.
+Descriptors and scope annotations do not prove hardware hits. Fresh runtime
+admission and one new case are still required; normal-g/h identifiers cannot
+be reused.
 
 Stage the reviewed caller bytes as `.cache/run-hardware-calibration.py` and
 provide `.cache/hardware-gdb-caller-input.json`0600 with exactly these fields:
