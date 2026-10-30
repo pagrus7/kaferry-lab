@@ -198,7 +198,7 @@ func validateLinkPlan(s State) error {
 		return e
 	}
 	prefix := "kaferry-lab-" + s.RunID
-	if s.Image != Image || s.Network != prefix || len(s.Containers) != 2 || s.Containers[0] != prefix+"-source" || s.Containers[1] != prefix+"-dest" || s.Proxy == nil {
+	if s.Image != Image || s.Network != prefix || len(s.Containers) != 2 || s.Containers[0] != prefix+"-source" || s.Containers[1] != prefix+"-dest" || s.Proxy == nil || s.Direct != nil {
 		return errors.New("invalid linked fixture identity")
 	}
 	if len(s.ClusterIDs) != 2 || s.ClusterIDs[0] == "" || s.ClusterIDs[0] == s.ClusterIDs[1] {
@@ -650,58 +650,60 @@ func inspectLinkNetwork(ctx context.Context, s State, run Executor) (linkNetwork
 	return n, true, nil
 }
 func inspectLinkImage(ctx context.Context, run Executor, s State, reference string) (string, error) {
-	profile, err := fixedImageProfile(s.DockerPlatform)
+	id, err := inspectFixtureImage(ctx, run, s, reference)
 	if err != nil {
 		return "", err
+	}
+	if s.Proxy == nil {
+		return "", errors.New("linked image identity requires linked state")
+	}
+	profile, _ := fixedImageProfile(s.DockerPlatform)
+	proxy := reference == profile.proxyImage
+	saved := s.Proxy.BrokerImageIdentity
+	if proxy {
+		saved = s.Proxy.ImageIdentity
+	}
+	if saved != nil && (saved.Mode != id.Mode || saved.RuntimeImageID != id.RuntimeImageID || saved.ConfigDigest != id.ConfigDigest || saved.ProofSHA256 != id.ProofSHA256 || (id.Mode == manifestImageMode && !sameManifest(saved.Manifest, id.Manifest)) || (id.Mode == classicImageMode && saved.Manifest != nil)) {
+		return "", errors.New("retained image identity domain changed")
+	}
+	// Classic historical journals do not gain a new saved field.
+	if id.Mode == manifestImageMode {
+		if proxy {
+			s.Proxy.ImageIdentity = &id
+		} else {
+			s.Proxy.BrokerImageIdentity = &id
+		}
+	}
+	return id.RuntimeImageID, nil
+}
+
+func inspectFixtureImage(ctx context.Context, run Executor, s State, reference string) (LinkImageIdentity, error) {
+	profile, err := fixedImageProfile(s.DockerPlatform)
+	if err != nil {
+		return LinkImageIdentity{}, err
 	}
 	expected := profile.brokerConfig
 	proxy := reference == profile.proxyImage
 	if proxy {
 		expected = profile.proxyConfig
 	} else if reference != Image {
-		return "", errors.New("unreviewed fixture image reference")
+		return LinkImageIdentity{}, errors.New("unreviewed fixture image reference")
 	}
 	raw, err := run(ctx, "image", "inspect", reference, "--format", "{{json .}}")
 	if err != nil {
-		return "", err
+		return LinkImageIdentity{}, err
 	}
 	var image imageInspectIdentity
 	if len(raw) > linkOutputLimit || decodeImageArchiveJSON(raw, &image) != nil || image.OS != "linux" || image.Architecture != profile.architecture {
-		return "", errors.New("pinned fixture image native platform mismatch")
+		return LinkImageIdentity{}, errors.New("pinned fixture image native platform mismatch")
 	}
 	if image.ID == expected {
 		if image.Descriptor != nil {
-			return "", errors.New("classic config image has unreviewed manifest descriptor")
+			return LinkImageIdentity{}, errors.New("classic config image has unreviewed manifest descriptor")
 		}
-		if s.Proxy != nil {
-			saved := s.Proxy.BrokerImageIdentity
-			if proxy {
-				saved = s.Proxy.ImageIdentity
-			}
-			classic := LinkImageIdentity{Mode: classicImageMode, RuntimeImageID: image.ID, ConfigDigest: expected}
-			if saved != nil && *saved != classic {
-				return "", errors.New("retained image identity domain changed")
-			}
-		}
-		return image.ID, nil
+		return LinkImageIdentity{Mode: classicImageMode, RuntimeImageID: image.ID, ConfigDigest: expected}, nil
 	}
-	id, err := admitModernImage(ctx, run, s, reference, raw)
-	if err != nil {
-		return "", err
-	}
-	saved := s.Proxy.BrokerImageIdentity
-	if proxy {
-		saved = s.Proxy.ImageIdentity
-	}
-	if saved != nil && (saved.Mode != id.Mode || saved.RuntimeImageID != id.RuntimeImageID || saved.ConfigDigest != id.ConfigDigest || saved.ProofSHA256 != id.ProofSHA256 || !sameManifest(saved.Manifest, id.Manifest)) {
-		return "", errors.New("retained modern image identity changed")
-	}
-	if proxy {
-		s.Proxy.ImageIdentity = &id
-	} else {
-		s.Proxy.BrokerImageIdentity = &id
-	}
-	return id.RuntimeImageID, nil
+	return admitModernImage(ctx, run, s, reference, raw)
 }
 func inspectLinkContainer(ctx context.Context, s State, run Executor, index int, networkID, imageID string, setup bool) (linkFacts, bool, error) {
 	name, role, reference, target := s.Proxy.Container, "proxy", s.Proxy.Image, s.Proxy.ContainerID

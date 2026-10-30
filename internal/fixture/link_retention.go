@@ -1,7 +1,7 @@
 package fixture
 
-// This file is the private evidence boundary for optional linked fixtures only.
-// Raw Docker bytes are never public diagnostics or publishable link receipts.
+// The two compiled fixture topologies share this bounded private boundary.
+// Raw Docker bytes are never public diagnostics or publishable receipts.
 import (
 	"context"
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,10 +75,13 @@ func linkPrivateDirectory(id string) string {
 // raw material, separate from the public selected-fact link receipts. It must
 // never be uploaded by a public artifact allowlist without explicit review.
 func reserveLinkEvidence(id string) error {
+	return reservePrivateFixtureEvidence(id, linkPrivateDirectory(id))
+}
+
+func reservePrivateFixtureEvidence(id, root string) error {
 	if _, err := StatePath(id); err != nil {
 		return err
 	}
-	root := linkPrivateDirectory(id)
 	if err := os.MkdirAll(filepath.Dir(root), 0700); err != nil {
 		return errors.New("private link evidence parent unavailable; no Docker action permitted")
 	}
@@ -192,10 +196,19 @@ func LinkExecutor(s State, run Executor) (Executor, error) {
 	return linkExecutor(s.RunID, run)
 }
 func linkExecutor(id string, run Executor) (Executor, error) {
+	return privateFixtureExecutor(id, linkPrivateDirectory(id), run)
+}
+
+// Only the two compiled fixture wrappers select root; no caller-supplied path.
+func privateFixtureExecutor(id, root string, run Executor) (Executor, error) {
 	if run == nil {
 		return nil, errors.New("linked Docker executor missing")
 	}
-	root := linkPrivateDirectory(id)
+	if root == directPrivateDirectory(id) {
+		if err := validateDirectReservation(id); err != nil {
+			return nil, err
+		}
+	}
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
 		return nil, errors.New("private link evidence directory unavailable or not owner-only")
@@ -217,6 +230,12 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 	return func(ctx context.Context, args ...string) ([]byte, error) {
 		if stopped != nil {
 			return nil, stopped
+		}
+		if root == directPrivateDirectory(id) {
+			if err := validateDirectReservation(id); err != nil {
+				stopped = err
+				return nil, stopped
+			}
 		}
 		argvBytes := 0
 		for _, arg := range args {
@@ -279,6 +298,15 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 				// This classifies capture only. The campaign must independently
 				// prove exact immutable ownership before requesting these logs.
 				kind = "linked-docker-container-log-readback"
+			}
+			if root == directPrivateDirectory(id) {
+				if kind == "" && len(args) == 5 && args[0] == "network" && args[1] == "inspect" && args[3] == "--format" && args[4] == "{{json .}}" && (args[2] == "kaferry-lab-"+id || linkID(args[2])) {
+					kind = "direct-docker-network-candidate-inspect"
+				}
+				if kind == "" && len(args) == 4 && args[0] == "logs" && args[1] == "--tail" && args[2] == "200" && linkID(args[3]) {
+					kind = "direct-docker-container-log-readback"
+				}
+				kind = strings.Replace(kind, "linked-docker-", "direct-docker-", 1)
 			}
 			if kind != "" {
 				// A successful command says nothing about the caller's later semantic
@@ -346,12 +374,19 @@ func linkExecutor(id string, run Executor) (Executor, error) {
 		// Public summaries contain only fixed classification, references, hashes,
 		// lengths and typed codes. No raw action argv, Env, cause or log text.
 		if persistErr == nil {
-			persistErr = linkReceipt(State{RunID: id}, "docker-failure", struct {
+			summary := struct {
 				Classification, PrivateReference, CombinedSHA256, CauseSHA256 string
 				CombinedBytes, CauseBytes                                     int
 				CombinedComplete, CauseComplete, ExactAbsence                 bool
 				Cause                                                         linkDockerCause
-			}{"PRIVATE RAW BYTES WITHHELD; review before publication", reference, linkDigest(raw), linkDigest(causeBytes), len(raw), len(causeBytes), complete, causeComplete, absent, safeCause})
+			}{"PRIVATE RAW BYTES WITHHELD; review before publication", reference, linkDigest(raw), linkDigest(causeBytes), len(raw), len(causeBytes), complete, causeComplete, absent, safeCause}
+			if root == directPrivateDirectory(id) {
+				// Direct fixtures have no public linked receipt directory. Retain
+				// the selected summary in their existing exclusive private root.
+				_, persistErr = writeLinkPrivate(root, "", summary)
+			} else {
+				persistErr = linkReceipt(State{RunID: id}, "docker-failure", summary)
+			}
 			if persistErr != nil {
 				failure.PersistenceFailed = true
 			}
@@ -436,7 +471,15 @@ func retainPrivateLinkLogs(s State, id string, logs []byte) (string, error) {
 // A mandatory non-command receipt failure is fatal too. Record only a safe
 // operation status here; never retry the failed receipt through another path.
 func stopLinkOperation(id, operation string) error {
-	root := linkPrivateDirectory(id)
+	return stopPrivateFixtureOperation(id, linkPrivateDirectory(id), operation)
+}
+
+func stopPrivateFixtureOperation(id, root, operation string) error {
+	if root == directPrivateDirectory(id) {
+		if err := validateDirectReservation(id); err != nil {
+			return err
+		}
+	}
 	stop := filepath.Join(root, "STOPPED.json")
 	if _, err := os.Stat(stop); err == nil {
 		return nil

@@ -34,6 +34,14 @@ func imageDataDirectory(s State) string {
 }
 func savedImageArchivePath(s State) string { return filepath.Join(imageDataDirectory(s), "images.tar") }
 
+func imageSaveArgv(s State) []string {
+	args := []string{"docker", "image", "save", "--platform=linux/arm64", Image}
+	if s.Proxy != nil {
+		args = append(args, arm64ProxyImage)
+	}
+	return args
+}
+
 type imageSaveWriter struct {
 	writer                   io.Writer
 	limit, observed, written int64
@@ -76,7 +84,7 @@ func executeImageSave(ctx context.Context, s State, f *os.File, makeCommand imag
 	child, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	receipt.RunID = s.RunID
-	receipt.Argv = []string{"docker", "image", "save", "--platform=linux/arm64", Image, arm64ProxyImage}
+	receipt.Argv = imageSaveArgv(s)
 	receipt.StartedAt = time.Now().UTC()
 	outR, outW, e := os.Pipe()
 	if e != nil {
@@ -171,7 +179,7 @@ func ensureSavedImages(ctx context.Context, s State) (err error) {
 	if _, e := os.Lstat(completePath); e == nil {
 		_, err = validatedImageSaveReceipt(s)
 		if err != nil {
-			err = errors.Join(err, stopLinkOperation(s.RunID, "retained image save lifecycle invalid"))
+			err = errors.Join(err, stopImageOperation(s, "retained image save lifecycle invalid"))
 		}
 		return err
 	} else if !errors.Is(e, os.ErrNotExist) {
@@ -179,7 +187,7 @@ func ensureSavedImages(ctx context.Context, s State) (err error) {
 	}
 	control, err := os.CreateTemp(root, "image-save-control-*.json")
 	if err != nil {
-		return errors.Join(err, stopLinkOperation(s.RunID, "image save diagnostic reservation failed"))
+		return errors.Join(err, stopImageOperation(s, "image save diagnostic reservation failed"))
 	}
 	defer finishImageControl(control, s, "native image save incomplete", &err)
 	// The stop is reserved BEFORE filesystem or command mutations; a crash,
@@ -277,14 +285,14 @@ func parseSavedImage(s State, fixed fixedModernImage) (imageArchiveResult, error
 // hash/identity check. A proof's Complete label cannot replace these checks.
 func validatedImageSaveReceipt(s State) (imageSaveReceipt, error) {
 	var receipt imageSaveReceipt
-	body, err := readImagePrivateFile(filepath.Join(linkPrivateDirectory(s.RunID), "image-save-complete.json"), 256<<10)
+	body, err := readImagePrivateFile(filepath.Join(imageEvidenceDirectory(s), "image-save-complete.json"), 256<<10)
 	if err != nil {
 		return receipt, err
 	}
 	if err = decodeImageArchiveJSON(body, &receipt); err != nil {
 		return imageSaveReceipt{}, err
 	}
-	argv := []string{"docker", "image", "save", "--platform=linux/arm64", Image, arm64ProxyImage}
+	argv := imageSaveArgv(s)
 	if receipt.RunID != s.RunID || !receipt.Complete || !receipt.Started || !receipt.WaitReturned || !receipt.TerminalWait || !receipt.StdoutEOF || !receipt.StderrEOF || !receipt.PipesClosed || !receipt.ArchiveClosed || receipt.ExitCode == nil || *receipt.ExitCode != 0 || receipt.ArchiveBytes <= 0 || receipt.ArchiveBytes > imageArchiveLimit || receipt.ObservedArchiveBytes != receipt.ArchiveBytes || len(receipt.Stderr) != 0 || receipt.ObservedStderrBytes != 0 || len(receipt.Cause) != 0 || filepath.Base(receipt.ExecutablePath) != "docker" || len(receipt.Argv) != len(argv) || len(receipt.ExecutedArgv) != len(argv) {
 		return imageSaveReceipt{}, errors.New("retained native image save lifecycle is incomplete or conflicting")
 	}
@@ -315,6 +323,6 @@ func finishImageControl(f *os.File, s State, operation string, outcome *error) {
 	}{s.RunID, operation, cause, complete})
 	*outcome = errors.Join(*outcome, encodeErr, persistLinkPrivateReceipt(f, append(body, '\n')))
 	if *outcome != nil {
-		*outcome = errors.Join(*outcome, stopLinkOperation(s.RunID, operation))
+		*outcome = errors.Join(*outcome, stopImageOperation(s, operation))
 	}
 }

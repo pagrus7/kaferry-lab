@@ -1,12 +1,15 @@
 package campaign
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -133,6 +136,196 @@ func openCalibrationBroker(t *testing.T, f *brokerCalibration) *ownedBroker {
 		t.Fatalf("open synthetic broker: %+v %v", snapshot, err)
 	}
 	return b
+}
+
+func reserveDirectBrokerCalibration(t *testing.T, f *brokerCalibration) fixture.State {
+	t.Helper()
+	// Literal plan/receipt fields are calibration data; no Docker image, broker,
+	// private original or native execution is asserted by this helper.
+	s := f.state
+	s.DockerPlatform = "linux/amd64"
+	s.ClusterIDs = []string{"AAAAAAAAAAAAAAAAAAAAAA", "AQEBAQEBAQEBAQEBAQEBAQ"}
+	s.Created = "2026-10-29T01:02:03Z"
+	plan, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := fixture.StatePath(s.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(".cache", "fixtures-private", s.RunID+"-brokers")
+	for _, directory := range []string{filepath.Dir(path), root} {
+		if err = os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = os.WriteFile(path, plan, 0600); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := json.Marshal(struct{ RunID, Classification, Publication string }{s.RunID, "PRIVATE RAW EVIDENCE", "withhold pending explicit redaction review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "PRIVATE.json"), marker, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Direct = &fixture.DirectIdentity{RunID: s.RunID, ManifestSHA256: fmt.Sprintf("%x", sha256.Sum256(plan)), NetworkID: strings.Repeat("d", 64), BrokerIDs: []string{strings.Repeat("c", 64), f.id}, Image: fixture.LinkImageIdentity{Mode: "exact-config-v1", RuntimeImageID: "sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1", ConfigDigest: "sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1"}}
+	writeDirectBrokerCalibrationIdentity(t, s)
+	f.state = s
+	f.mutate = func(row map[string]any) {
+		row["Image"] = s.Direct.Image.RuntimeImageID
+		config := row["Config"].(map[string]any)
+		config["Labels"] = map[string]string{brokerOwnerLabel: s.RunID, "io.kaferry-lab.role": "destination"}
+		config["Env"] = []string{"CLUSTER_ID=" + s.ClusterIDs[1], "KAFKA_LISTENERS=INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092", "KAFKA_ADVERTISED_LISTENERS=INTERNAL://" + f.name + ":9092,EXTERNAL://" + s.Destination, "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT", "SYNTHETIC_PRIVATE_ENV=private-candidate"}
+		host := row["HostConfig"].(map[string]any)
+		host["NetworkMode"], host["Memory"], host["NanoCpus"], host["PidsLimit"] = s.Network, 768<<20, 1500000000, 256
+		host["LogConfig"] = map[string]any{"Type": "json-file", "Config": map[string]string{"max-size": "1m", "max-file": "1"}}
+		row["NetworkSettings"].(map[string]any)["Networks"] = map[string]any{s.Network: map[string]string{"NetworkID": s.Direct.NetworkID}}
+	}
+	return s
+}
+
+func writeDirectBrokerCalibrationIdentity(t *testing.T, s fixture.State) {
+	t.Helper()
+	body, err := json.Marshal(s.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(".cache", "fixtures-private", s.RunID+"-brokers", "identity.json")
+	if err = os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirectBrokerRequiresModernSelectedProofBeforeDiscoveryOrProbe(t *testing.T) {
+	// Given a modern runtime target and literal typed fields, When its selected
+	// proof is missing/foreign, Then real admission issues no discovery, probe,
+	// pause or restart even though the sha256 runtime string looks valid.
+	for _, kind := range []string{"no-identity", "no-proof", "wrong-manifest"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			f := newBrokerCalibration()
+			s := reserveDirectBrokerCalibration(t, f)
+			// Update the exclusive literal plan before reserving these separate
+			// negative calibration facts; no existing production plan is changed.
+			s.DockerPlatform = "linux/arm64"
+			image := &s.Direct.Image
+			image.Mode = "native-arm64-manifest-v1"
+			image.RuntimeImageID = "sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02"
+			image.ConfigDigest = "sha256:5b8b0495077ca724c06b253f7d94ed27a36a3211c6c6e84ff54a758f109d3d0f"
+			image.ProofSHA256 = strings.Repeat("e", 64)
+			image.Manifest = &fixture.ImageManifestIdentity{MediaType: "application/vnd.oci.image.manifest.v1+json", Digest: "sha256:ddc235acd57d0fec5b21eedd46dcaf4e89a7569ff1c9890c5597c6d9561c59b0", Size: 2201}
+			image.Manifest.Platform.OS, image.Manifest.Platform.Architecture = "linux", "arm64"
+			if kind == "wrong-manifest" {
+				image.Manifest.Digest = image.RuntimeImageID
+			}
+			copy := s
+			copy.Direct = nil
+			body, err := json.Marshal(copy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path, _ := fixture.StatePath(s.RunID)
+			if err = os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			s.Direct.ManifestSHA256 = fmt.Sprintf("%x", sha256.Sum256(body))
+			writeDirectBrokerCalibrationIdentity(t, s)
+			if kind == "no-identity" {
+				s.Direct = nil
+			}
+			if b, _, err := openOwnedBroker(context.Background(), s, "destination", f.execute); err == nil || b != nil {
+				t.Fatal("missing modern authority admitted", kind, err)
+			}
+			if len(f.calls) != 0 || f.probes != 0 {
+				t.Fatal("modern authority failure reached discovery/probe", kind)
+			}
+		})
+	}
+}
+
+func TestDirectBrokerUsesSameIdentityBeforeMutationAndRetainsForeignCandidate(t *testing.T) {
+	// Given a plan-bound direct classic identity and one private fixture executor,
+	// When candidate ownership/image/network changes after admission, Then each
+	// requested mutation refuses before probe/request and retains the raw row.
+	for _, kind := range []string{"owner", "runtime", "manifest", "network", "role", "port"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			f := newBrokerCalibration()
+			s := reserveDirectBrokerCalibration(t, f)
+			run, err := fixture.FixtureExecutor(s, f.execute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, snapshot, err := openBrokerWithProbe(context.Background(), s, "destination", run, f.probe, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			public, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(public), "SYNTHETIC_PRIVATE_ENV") || strings.Contains(string(public), `"Config"`) || strings.Contains(string(public), `"Env"`) {
+				t.Fatal("public ownership leaked private config")
+			}
+			valid := f.mutate
+			var refused []byte
+			f.mutate = func(row map[string]any) {
+				valid(row)
+				switch kind {
+				case "owner":
+					row["Config"].(map[string]any)["Labels"].(map[string]string)[brokerOwnerLabel] = "foreign"
+				case "role":
+					row["Config"].(map[string]any)["Labels"].(map[string]string)["io.kaferry-lab.role"] = "source"
+				case "runtime":
+					row["Image"] = "sha256:" + strings.Repeat("e", 64)
+				case "manifest":
+					row["ImageManifestDescriptor"] = &fixture.ImageManifestIdentity{Digest: "foreign"}
+				case "network":
+					row["HostConfig"].(map[string]any)["NetworkMode"] = "foreign"
+				case "port":
+					row["HostConfig"].(map[string]any)["PortBindings"] = map[string]any{}
+				}
+				refused, _ = json.Marshal(row)
+			}
+			observation, err := b.Pause(context.Background())
+			if err == nil || observation.Request != nil || observation.Reached || f.probes != 0 || f.mutations() != 0 {
+				t.Fatal("changed direct candidate reached mutation/probe", kind, err)
+			}
+			// STOP is shared by a newly requested executor as well as this handle.
+			before := len(f.calls)
+			if _, err = fixture.FixtureExecutor(s, f.execute); err == nil || len(f.calls) != before {
+				t.Fatal("semantic refusal did not latch direct facility")
+			}
+			found := false
+			root := filepath.Join(".cache", "fixtures-private", s.RunID+"-brokers")
+			err = filepath.WalkDir(root, func(path string, entry os.DirEntry, e error) error {
+				if e != nil {
+					return e
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				body, e := os.ReadFile(path)
+				if e != nil {
+					return e
+				}
+				var row struct {
+					Combined            []byte
+					PrivateReadbackKind string
+				}
+				_ = json.Unmarshal(body, &row)
+				if strings.Contains(row.PrivateReadbackKind, "candidate") && len(refused) > 0 && bytes.Equal(row.Combined, refused) && strings.Contains(string(row.Combined), "SYNTHETIC_PRIVATE_ENV") {
+					found = true
+				}
+				return nil
+			})
+			if err != nil || !found {
+				t.Fatal("private candidate original missing", err)
+			}
+		})
+	}
 }
 
 func TestBrokerCalibrationNormalLifecycleRetainsReachedAndRecoveredEvidence(t *testing.T) {

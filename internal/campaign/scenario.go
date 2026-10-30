@@ -157,6 +157,9 @@ func RunM2Scenario(ctx context.Context, plan ScenarioPlan, state fixture.State, 
 	if run == nil {
 		return report, errors.New("scenario requires a fixture executor")
 	}
+	if run, err = fixture.FixtureExecutor(state, run); err != nil {
+		return report, err
+	}
 	if err = reserveScenarioRuntime(plan.Directory); err != nil {
 		return report, err
 	}

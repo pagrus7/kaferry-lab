@@ -71,13 +71,17 @@ func sameManifest(a, b *ImageManifestIdentity) bool { return a != nil && b != ni
 // IDs. Modern journals require a distinct mode and same-run retained proof.
 func ValidatedLinkImage(s State, proxy bool) (LinkImageIdentity, error) {
 	p, err := fixedImageProfile(s.DockerPlatform)
-	if err != nil || s.Proxy == nil {
+	if err != nil || s.Proxy == nil || s.Direct != nil {
 		return LinkImageIdentity{}, errors.New("linked image state unavailable")
 	}
 	id, want, reference, saved := s.Proxy.BrokerImageID, p.brokerConfig, Image, s.Proxy.BrokerImageIdentity
 	if proxy {
 		id, want, reference, saved = s.Proxy.ImageID, p.proxyConfig, p.proxyImage, s.Proxy.ImageIdentity
 	}
+	return validatedFixtureImage(s, id, want, reference, saved)
+}
+
+func validatedFixtureImage(s State, id, want, reference string, saved *LinkImageIdentity) (LinkImageIdentity, error) {
 	if id == want {
 		classic := LinkImageIdentity{Mode: classicImageMode, RuntimeImageID: id, ConfigDigest: want}
 		if saved != nil && *saved != classic {
@@ -101,6 +105,10 @@ func ValidateLinkContainerImage(s State, proxy bool, runtimeID string, descripto
 	if err != nil {
 		return err
 	}
+	return validateContainerImageIdentity(id, runtimeID, descriptor)
+}
+
+func validateContainerImageIdentity(id LinkImageIdentity, runtimeID string, descriptor *ImageManifestIdentity) error {
 	if runtimeID != id.RuntimeImageID || id.Mode == manifestImageMode && !sameManifest(descriptor, id.Manifest) || id.Mode == classicImageMode && descriptor != nil {
 		return errors.New("container runtime target or native manifest mismatch")
 	}
@@ -147,10 +155,18 @@ func inspectModernImage(raw []byte, fixed fixedModernImage, selected bool) error
 }
 
 func imagePrivateAuthority(s State) (string, error) {
-	if s.Proxy == nil || validateLinkPlan(s) != nil {
-		return "", errors.New("modern image proof requires existing linked private authority; nonlinked M0 integration unavailable")
+	if s.Proxy != nil {
+		if validateLinkPlan(s) != nil || s.Direct != nil {
+			return "", errors.New("modern image proof requires an exact linked plan")
+		}
+	} else if err := validateDirectPlan(s); err != nil {
+		return "", err
+	} else if err := validateDirectReservation(s.RunID); err != nil {
+		return "", err
+	} else if _, err := directPlanBytes(s); err != nil {
+		return "", err
 	}
-	root := linkPrivateDirectory(s.RunID)
+	root := imageEvidenceDirectory(s)
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
 		return "", errors.New("private image authority directory unavailable")
@@ -204,7 +220,18 @@ type imageProof struct {
 }
 
 func imageProofPath(s State, fixed fixedModernImage) string {
-	return filepath.Join(linkPrivateDirectory(s.RunID), "image-"+fixed.role+"-proof.json")
+	return filepath.Join(imageEvidenceDirectory(s), "image-"+fixed.role+"-proof.json")
+}
+
+func imageEvidenceDirectory(s State) string {
+	if s.Proxy == nil {
+		return directPrivateDirectory(s.RunID)
+	}
+	return linkPrivateDirectory(s.RunID)
+}
+
+func stopImageOperation(s State, operation string) error {
+	return stopPrivateFixtureOperation(s.RunID, imageEvidenceDirectory(s), operation)
 }
 
 func validateImageProof(s State, fixed fixedModernImage, proof imageProof) error {
@@ -307,7 +334,7 @@ func admitModernImage(ctx context.Context, run Executor, s State, reference stri
 	}
 	notice, err := os.CreateTemp(root, "image-admission-*.json")
 	if err != nil {
-		return id, errors.Join(err, stopLinkOperation(s.RunID, "image admission diagnostic reservation failed"))
+		return id, errors.Join(err, stopImageOperation(s, "image admission diagnostic reservation failed"))
 	}
 	defer finishImageControl(notice, s, "modern image admission incomplete", &err)
 	if err = inspectModernImage(raw, fixed, false); err != nil {

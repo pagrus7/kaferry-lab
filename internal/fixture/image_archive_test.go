@@ -382,7 +382,7 @@ func TestImageArchiveProofReuseKeepsWholeArchiveBinding(t *testing.T) {
 	// These literal lifecycle facts do not establish a real process wait/EOF.
 	t.Chdir(t.TempDir())
 	s := State{RunID: "synthetic-image-proof"}
-	if err := reserveLinkEvidence(s.RunID); err != nil {
+	if err := reservePrivateFixtureEvidence(s.RunID, directPrivateDirectory(s.RunID)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(imageDataDirectory(s), 0700); err != nil {
@@ -393,10 +393,10 @@ func TestImageArchiveProofReuseKeepsWholeArchiveBinding(t *testing.T) {
 	if err := os.WriteFile(savedImageArchivePath(s), body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	argv := []string{"docker", "image", "save", "--platform=linux/arm64", Image, arm64ProxyImage}
+	argv := []string{"docker", "image", "save", "--platform=linux/arm64", Image}
 	exit := 0
 	receipt := imageSaveReceipt{RunID: s.RunID, Argv: argv, ExecutedArgv: argv, ExecutablePath: "/synthetic/docker", Started: true, WaitReturned: true, TerminalWait: true, StdoutEOF: true, StderrEOF: true, PipesClosed: true, ArchiveClosed: true, Complete: true, ArchiveBytes: int64(len(body)), ObservedArchiveBytes: int64(len(body)), ExitCode: &exit}
-	if _, err := writeLinkPrivate(linkPrivateDirectory(s.RunID), "image-save-complete.json", receipt); err != nil {
+	if _, err := writeLinkPrivate(directPrivateDirectory(s.RunID), "image-save-complete.json", receipt); err != nil {
 		t.Fatal(err)
 	}
 	sha := strings.TrimPrefix(archiveDigest(body), "sha256:")
@@ -429,7 +429,7 @@ func TestImageArchiveProofReuseKeepsWholeArchiveBinding(t *testing.T) {
 	if err := verifySavedImageDigest(s, int64(len(body)), sha); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing archive cause lost: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(linkPrivateDirectory(s.RunID), "image-save-complete.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(directPrivateDirectory(s.RunID), "image-save-complete.json")); err != nil {
 		t.Fatal("literal retained lifecycle was changed", err)
 	}
 }

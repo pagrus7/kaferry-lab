@@ -79,9 +79,9 @@ STOPPED and failed cleanup verdict remain. Strict target/selectedmanifest/config
 proof and every owned-container predicate need repair before a new calibration.
 Separate unstarted identity specimens measured those fields and were removed;
 they establish no broker/proxy behavior.
-The affected raw-readback repair is scoped to the already reserved linked private
-executor. Legacy nonlinked setup has no such private authority; do not invent an
-invalid-State fallback or claim complete failure custody for it.
+The original raw-readback repair covered the reserved linked executor. Direct
+two-broker setup now reserves its own private authority before Docker info; it
+does not gain authority from an invalid or linked State.
 
 ## Remaining acceptance
 
@@ -132,9 +132,23 @@ escaping members. Other payloads remain opaque; it does not qualify filesystem
 layers or unrelated export metadata. Reuse checks retained raw proof and the
 whole archive hash/identity without repeating tar or layer semantic decoding.
 
-The nonlinked setup path currently lacks this private authority and refuses the
-modern proof before resource creation. This source does not silently provision a
-new M0 authority. At source c2ab5fc, the three independent source reviews passed,
+Direct setup now uses a separate `RUN-brokers` private reservation and an
+exclusive identity receipt bound to the initial plan, image proof, network ID
+and both container IDs. Its stock save selects Kafka only; Proxy remains absent.
+Campaign admission and every broker mutation use that same proof and retain raw
+candidates before checking them. Cleanup captures logs, reinspects exact IDs and
+requires an empty owned network before removal. Missing identity, ambiguity or
+a stopped facility leaves resources unresolved. The existing linked topology
+keeps its own two-image save and private route.
+
+The direct controls include an inert archive built from the exact public selected
+Kafka manifest/config bytes; its literal lifecycle fields are calibration data,
+not an observed Docker save or runnable layers. Host fixture/campaign checks
+passed after repairing canonical working-directory alias handling; symlinks
+inside the owned private path still reject. Fresh native direct image-save,
+readiness, cleanup and outer campaign custody remain unmeasured.
+
+At source c2ab5fc, the three independent source reviews passed,
 as did native full harness checks, the retained stock-save archive control and
 the reached descendant-held-pipe failure control. A new stock-link development
 run passed image admission and healthy topology, then failed its initial latency

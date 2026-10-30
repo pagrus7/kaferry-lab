@@ -145,30 +145,25 @@ func TestImageIdentityModernCannotUseAmbiguousJournalOrSelfAssertion(t *testing.
 	}
 }
 
-func TestImageIdentityUnlinkedModernRefusesBeforeCreateOrCleanup(t *testing.T) {
+func TestImageIdentityUnreservedDirectModernRefusesBeforeSelectedInspectOrSave(t *testing.T) {
+	// Given a complete-looking direct plan with no private reservation, When
+	// modern admission is attempted, Then no selected inspect/save/create runs.
 	t.Chdir(t.TempDir())
-	var calls []string
-	s := nativeImageState(t)
+	s := directPlanLiteral("test", "linux/arm64")
 	fixed, _ := modernImage(s, Image)
 	run := func(_ context.Context, args ...string) ([]byte, error) {
-		calls = append(calls, strings.Join(args, " "))
-		switch args[0] {
-		case "info":
-			return []byte("linux/aarch64"), nil
-		case "pull":
-			return nil, nil
-		case "image":
-			return fixedInspectLiteral(fixed, false), nil
-		default:
-			t.Fatalf("mutation after missing authority: %v", args)
-		}
+		t.Fatalf("action after missing direct authority: %v", args)
 		return nil, nil
 	}
-	if _, err := Up(context.Background(), "test", run); err == nil {
-		t.Fatal("modern M0 without private authority admitted")
+	if _, err := admitModernImage(context.Background(), run, s, Image, fixedInspectLiteral(fixed, false)); err == nil {
+		t.Fatal("unreserved direct modern authority admitted")
 	}
-	if len(calls) != 3 {
-		t.Fatal(calls)
+	// Even a valid reservation cannot replace the exclusive complete plan.
+	if err := reservePrivateFixtureEvidence(s.RunID, directPrivateDirectory(s.RunID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admitModernImage(context.Background(), run, s, Image, fixedInspectLiteral(fixed, false)); err == nil {
+		t.Fatal("direct reservation substituted for the immutable plan")
 	}
 }
 

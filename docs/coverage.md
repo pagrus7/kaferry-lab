@@ -140,6 +140,15 @@ PRESERVE/KEY, source-startup and repeated-kill. That evidence does not accept
 M2 or approve later source changes. All required M2 variants need native
 evidence, offline rechecks and independent acceptance reviews.
 
+The direct fixture authority increment adds no product scenario. It connects the
+existing M2 published-process cases above to a broker-only native image proof,
+private raw retention and exact-ID cleanup. Closest tagged crash/signal tests
+remain those in the inventory; the added observation is independently retained
+fixture/image identity, not a new claim about writes, ACK receipt or commits.
+An inert metadata-only archive tests the direct proof readers with literal
+lifecycle fields. Host controls passed; fresh native direct lifecycle and
+published release runs remain pending. Historical linked evidence is separate.
+
 The completion-loop calibration controls in `internal/campaign/scenario_test.go`
 exercise worker exit during a complete audit, repeated old output with unknown
 ownership or saved-zero progress, and unknown→stable-zero→stable-complete

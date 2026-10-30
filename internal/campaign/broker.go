@@ -81,6 +81,7 @@ type ownedBroker struct {
 	probe                           brokerProbe
 	calibration                     bool
 	linkedImage                     *fixture.State
+	directImage                     *fixture.State
 }
 
 // openOwnedBroker accepts only source/destination resources described by a valid
@@ -129,6 +130,17 @@ func openBrokerWithProbe(ctx context.Context, state fixture.State, role string, 
 		}
 		owned := state
 		b.linkedImage = &owned
+	} else if !calibration || state.Direct != nil {
+		if _, err := fixture.ValidatedBrokerImage(state); err != nil {
+			return nil, empty, err
+		}
+		owned := state
+		b.directImage = &owned
+		index := 0
+		if role == "destination" {
+			index = 1
+		}
+		b.id = state.Direct.BrokerIDs[index]
 	}
 	snapshot, err := b.inspect(ctx, name)
 	if err != nil {
@@ -298,6 +310,9 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 	defer func() {
 		snapshot.Interval = b.interval(start, time.Now())
 		if err != nil {
+			if b.directImage != nil {
+				err = errors.Join(err, fixture.StopFixtureEvidence(*b.directImage, "direct campaign broker inspection incomplete"))
+			}
 			snapshot.Error = err.Error()
 		}
 	}()
@@ -317,6 +332,11 @@ func (b *ownedBroker) inspect(ctx context.Context, target string) (snapshot brok
 	}
 	if len(out) > 1<<20 {
 		return snapshot, errors.New("owned broker inspect exceeds evidence limit")
+	}
+	if b.directImage != nil {
+		if err := fixture.ValidateDirectBrokerContainer(*b.directImage, b.role, out); err != nil {
+			return snapshot, err
+		}
 	}
 	var info struct {
 		ID, Name, Image         string

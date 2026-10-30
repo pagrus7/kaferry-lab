@@ -1,13 +1,19 @@
 package fixture
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestCleanupRefusesWrongOwnerAndRetainsDaemonFailures(t *testing.T) {
+	// Given an admitted direct fixture, When fresh cleanup ownership/daemon
+	// evidence refuses, Then no resource is removed and the original is private.
 	for _, tc := range []struct {
 		name, output string
 		err          error
@@ -17,6 +23,12 @@ func TestCleanupRefusesWrongOwnerAndRetainsDaemonFailures(t *testing.T) {
 		{"malformed evidence", `{`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			f := newDirectDockerControl(t)
+			s, err := upDirectControl(context.Background(), f.execute)
+			if err != nil {
+				t.Fatal(err)
+			}
 			calls := 0
 			run := func(_ context.Context, args ...string) ([]byte, error) {
 				calls++
@@ -25,20 +37,37 @@ func TestCleanupRefusesWrongOwnerAndRetainsDaemonFailures(t *testing.T) {
 				}
 				return []byte(tc.output), tc.err
 			}
-			if err := remove(context.Background(), "container", "kaferry-lab-test-source", "test", run); err == nil {
+			if err := Down(context.Background(), s, run); err == nil {
 				t.Fatal("unsafe cleanup reported success")
 			}
 			if calls != 1 {
 				t.Fatal(calls)
 			}
+			found := false
+			for _, body := range privateDirectBodies(t, s.RunID) {
+				var row struct{ Combined []byte }
+				_ = json.Unmarshal(body, &row)
+				found = found || bytes.Equal(row.Combined, []byte(tc.output))
+			}
+			if !found {
+				t.Fatal("refused cleanup original missing")
+			}
 		})
 	}
 }
 func TestCleanupExplicitAbsenceIsIdempotent(t *testing.T) {
-	run := func(_ context.Context, args ...string) ([]byte, error) {
-		return []byte("Error response from daemon: No such container: x"), errors.New("exit 1")
+	// Given actual cleanup through the inert backend, When exact retained IDs
+	// are absent on repeat cleanup, Then retained daemon absence is idempotent.
+	t.Chdir(t.TempDir())
+	f := newDirectDockerControl(t)
+	s, err := upDirectControl(context.Background(), f.execute)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := remove(context.Background(), "container", "x", "test", run); err != nil {
+	if err = Down(context.Background(), s, f.execute); err != nil {
+		t.Fatal(err)
+	}
+	if err = Down(context.Background(), s, f.execute); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -61,36 +90,52 @@ func TestRunIDRejectsTraversalAndShellText(t *testing.T) {
 }
 
 func TestCleanupCapturesEvidenceBeforeRemovingOwnedContainer(t *testing.T) {
+	// Given exact retained IDs, When Down reaches rm, Then bounded logs and
+	// their selected-fact receipt have already survived private persistence.
 	t.Chdir(t.TempDir())
-	var calls []string
-	run := func(_ context.Context, args ...string) ([]byte, error) {
-		calls = append(calls, strings.Join(args, " "))
-		if args[1] == "inspect" {
-			return []byte(`{"Config":{"Labels":{"io.kaferry-lab.run":"test"}}}`), nil
-		}
-		if args[0] == "logs" {
-			return []byte("retained broker evidence"), nil
-		}
-		return nil, nil
-	}
-	if err := remove(context.Background(), "container", "kaferry-lab-test-source", "test", run); err != nil {
+	f := newDirectDockerControl(t)
+	s, err := upDirectControl(context.Background(), f.execute)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 3 || calls[1] != "logs kaferry-lab-test-source" || calls[2] != "container rm -f kaferry-lab-test-source" {
-		t.Fatal(calls)
+	removed := 0
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[0] == "container" && args[1] == "rm" {
+			removed++
+			target := args[len(args)-1]
+			logs, receipt := false, false
+			for _, body := range privateDirectBodies(t, s.RunID) {
+				var row struct {
+					ContainerID         string
+					Bytes               []byte
+					Facts               linkFacts
+					PrivateLogReference string
+				}
+				_ = json.Unmarshal(body, &row)
+				logs = logs || row.ContainerID == target && bytes.Equal(row.Bytes, []byte("SYNTHETIC-PRIVATE-LOG\x00\xff"))
+				receipt = receipt || row.Facts.ID == target && row.PrivateLogReference != ""
+			}
+			if !logs || !receipt {
+				t.Fatal("removal preceded required private log/fact evidence", target)
+			}
+		}
+		return f.execute(ctx, args...)
+	}
+	if err := Down(context.Background(), s, run); err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatal("missing exact removals", removed)
 	}
 }
 
 func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
+	// Given inert owned broker candidates, When direct setup creates its fixed
+	// native brokers, Then independent cluster IDs match the exclusive plan.
 	t.Chdir(t.TempDir())
 	var ids []string
-	run := func(_ context.Context, args ...string) ([]byte, error) {
-		if args[0] == "info" {
-			return []byte("linux/amd64"), nil
-		}
-		if args[0] == "image" && args[1] == "inspect" {
-			return []byte(`{"Id":"sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1","Os":"linux","Architecture":"amd64"}`), nil
-		}
+	f := newDirectDockerControl(t)
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		if strings.Contains(strings.Join(args, " "), "WORKER") || strings.Contains(strings.Join(args, " "), ProxyImage) {
 			t.Fatal("legacy Up added proxy behavior", args)
 		}
@@ -106,9 +151,9 @@ func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
 				}
 			}
 		}
-		return nil, nil
+		return f.execute(ctx, args...)
 	}
-	state, err := Up(context.Background(), "test", run)
+	state, err := upDirectControl(context.Background(), run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,40 +165,59 @@ func TestUpUsesDistinctRecordedClusterIdentities(t *testing.T) {
 	}
 }
 
-func TestFailedSecondStartCleansFirstEvenAfterCancellation(t *testing.T) {
+func TestFailedSecondDirectStartRetainsStoppedPartialSetupWithoutCleanup(t *testing.T) {
+	// Given an admitted image and one started direct broker, When the second
+	// start refuses/cancels, Then the primary original and STOP survive without
+	// guessed-ID cleanup, another executor, or destructive command.
 	t.Chdir(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
-	var removed []string
+	defer cancel()
+	f := newDirectDockerControl(t)
+	var calls []string
 	run := func(c context.Context, args ...string) ([]byte, error) {
-		if args[0] == "info" {
-			return []byte("linux/amd64"), nil
-		}
+		calls = append(calls, strings.Join(args, " "))
 		if args[0] == "run" && strings.Contains(strings.Join(args, " "), "kaferry-lab-test-dest") {
 			cancel()
 			return []byte("injected start failure"), errors.New("start failed")
 		}
-		if args[0] == "image" && args[1] == "inspect" {
-			return []byte(`{"Id":"sha256:41abbd7d7f05d1ea7918ce2539d04a334c597943a53dbc1812a572af136c6df1","Os":"linux","Architecture":"amd64"}`), nil
+		if c.Err() != nil {
+			t.Fatal("new command after cancelled startup", args)
 		}
-		if len(args) > 1 && args[1] == "inspect" {
-			if c.Err() != nil {
-				t.Fatal("cleanup inherited canceled context")
-			}
-			if strings.HasSuffix(args[2], "-dest") {
-				return []byte("No such container"), errors.New("absent")
-			}
-			return []byte(`{"Config":{"Labels":{"io.kaferry-lab.run":"test"}},"Labels":{"io.kaferry-lab.run":"test"}}`), nil
-		}
-		if len(args) > 1 && args[1] == "rm" {
-			removed = append(removed, strings.Join(args, " "))
-		}
-		return nil, nil
+		return f.execute(c, args...)
 	}
-	if _, err := Up(ctx, "test", run); err == nil {
+	if _, err := upDirectControl(ctx, run); err == nil {
 		t.Fatal("failed start reported success")
 	}
-	if len(removed) != 2 || removed[0] != "container rm -f kaferry-lab-test-source" || removed[1] != "network rm kaferry-lab-test" {
-		t.Fatalf("owned partial start leaked: %v", removed)
+	if len(calls) != 6 || !strings.HasPrefix(calls[5], "run ") || !strings.Contains(calls[5], "kaferry-lab-test-dest") {
+		t.Fatal("unexpected startup command sequence", calls)
+	}
+	loaded, err := Load("test")
+	if err != nil {
+		t.Fatal("partial plan unavailable", err)
+	}
+	if loaded.Direct != nil {
+		t.Fatal("failed partial setup asserted complete resource identity")
+	}
+	if err = Down(context.Background(), loaded, func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("partial startup authorized cleanup")
+		return nil, nil
+	}); err == nil {
+		t.Fatal("partial startup cleanup passed")
+	}
+	found := false
+	for _, body := range privateDirectBodies(t, "test") {
+		var row struct {
+			Combined  []byte
+			CauseText []byte
+		}
+		_ = json.Unmarshal(body, &row)
+		found = found || string(row.Combined) == "injected start failure" && strings.Contains(string(row.CauseText), "start failed")
+	}
+	if !found {
+		t.Fatal("original second-start failure lost")
+	}
+	if _, err = os.Stat(filepath.Join(directPrivateDirectory("test"), "STOPPED.json")); err != nil {
+		t.Fatal("failed startup has no durable stop", err)
 	}
 }
 
