@@ -2,8 +2,8 @@
 """Filesystem/transport controls with literal DATA, no actual fixture/Wait.
 
 No controller, Kafka, Docker, native parent or platform admission is performed.
-Only the final-close control waits for a finite inert Python snapshot child;
-the other foreground records remain visibly literal calibration claims.
+The final-close and refusal controls own finite inert Python children; other
+foreground records remain visibly literal calibration claims.
 """
 import importlib.util
 import errno
@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import traceback
 import unittest
 from unittest import mock
 
@@ -36,6 +37,36 @@ class DirectCustodyControls(unittest.TestCase):
     def write(self, path, raw):
         path.write_bytes(raw)
         path.chmod(0o600)
+
+    def wait_inert_child(self, child, name):
+        def failed(error):
+            return {"PID": child.pid, "Waited": False, "ReturnCode": None, "STOP": True,
+                    "Exception": repr(error), "Errno": getattr(error, "errno", None),
+                    "Traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__))[:64 << 10],
+                    "InertPythonOnly": True, "CPythonFinalizationNotControlled": True}
+        with m.create(self.home / (name + "-wait.json")) as report:
+            try:
+                code = child.wait(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                m.write(report, m.encode(failed(error)))
+                # Only the actual bounded timeout authorizes this fixture
+                # cleanup. Any refusal here also stops without another route.
+                with m.create(self.home / (name + "-timeout-cleanup.json")) as cleanup:
+                    try:
+                        child.kill()
+                        cleanup_code = child.wait(timeout=3)
+                    except BaseException as cleanup_error:
+                        m.write(cleanup, m.encode({**failed(cleanup_error), "OriginalWaitUpgraded": False}))
+                        raise
+                    m.write(cleanup, m.encode({"PID": child.pid, "Waited": True, "ReturnCode": cleanup_code,
+                                              "OriginalWaitUpgraded": False, "InertPythonOnly": True}))
+                raise
+            except BaseException as error:
+                m.write(report, m.encode(failed(error)))
+                raise  # no signal, second Wait, or producer read after refusal
+            m.write(report, m.encode({"PID": child.pid, "Waited": True, "ReturnCode": code,
+                                     "Observation": "actual subprocess.Popen.wait returned", "InertPythonOnly": True}))
+            return code
 
     def setUp(self):
         storage = ROOT.parent / ".cache/direct-fixture-custody-controls"
@@ -386,13 +417,7 @@ sys.exit(code)
             os.fchmod(stdout.fileno(), 0o600); os.fchmod(stderr.fileno(), 0o600)
             child = subprocess.Popen([sys.executable, "-I", "-S", "-B", "-c", helper], stdout=stdout, stderr=stderr,
                                      env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-            try:
-                code = child.wait(timeout=5)
-            except BaseException:
-                child.kill(); child.wait(timeout=3)
-                raise
-        self.write(self.home / "final-close-child-wait.json", m.encode({"PID": child.pid, "Waited": True, "ReturnCode": code,
-                   "Observation": "actual subprocess.Popen.wait returned", "InertPythonOnly": True}))
+            code = self.wait_inert_child(child, "final-close-child")
         self.assertEqual(code, 2)
         actual_return = m.decode((self.home / "actual-snapshot-function-return.json").read_bytes())
         self.assertEqual(actual_return, {"PID": child.pid, "ReturnCode": code})
@@ -405,6 +430,74 @@ sys.exit(code)
         self.assertFalse(result["SourceCaptureComplete"])
         self.assertEqual(result["SnapshotForegroundExternalClaim"]["ReturnCode"], 2)
         self.assertEqual((local / "errors.jsonl").read_bytes(), b"")  # no replacement after final close
+
+    def test_given_selected_wait_refusal_then_stop_and_separate_owner_does_not_upgrade(self):
+        waits, signals, producer_reads = [], [], []
+        refusal = PermissionError(errno.EACCES, "SYNTHETIC selected inert child Wait refused")
+        original_error, owner_error, owner_code, original_before, owner_waits = None, None, None, None, 0
+        self.write(self.home / "stale-producer.json", b'{"MustNotReadAfterRefusal":true}\n')
+        with m.create(self.home / "wait-refusal-child.stdout") as stdout, m.create(self.home / "wait-refusal-child.stderr") as stderr:
+            child = subprocess.Popen([sys.executable, "-I", "-S", "-B", "-c", "import time;time.sleep(0.05)"],
+                                     stdout=stdout, stderr=stderr, env={"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            real_wait = child.wait  # separate fixture owner only, never selected fallback
+            def denied(*args, **kwargs):
+                waits.append({"Args": list(args), "Kwargs": kwargs})
+                raise refusal
+            def signal_refused(*args, **kwargs):
+                signals.append({"Args": list(args), "Kwargs": kwargs})
+                raise AssertionError("signal attempted after selected Wait refusal")
+            def stale_read(*args, **kwargs):
+                producer_reads.append(str(args[0]))
+                raise AssertionError("producer read after selected Wait refusal")
+            try:
+                with mock.patch.object(child, "wait", denied), mock.patch.object(child, "kill", signal_refused), \
+                     mock.patch.object(child, "terminate", signal_refused), mock.patch.object(child, "send_signal", signal_refused), \
+                     mock.patch.object(m, "read_small", stale_read):
+                    try:
+                        self.wait_inert_child(child, "wait-refusal-child")
+                        m.read_small(self.home / "stale-producer.json")
+                    except BaseException as error:
+                        original_error = error
+                original_before = (self.home / "wait-refusal-child-wait.json").read_bytes()
+            finally:
+                # Deliberately artificial refusal only: this separately named
+                # owner invokes its saved public Wait once, with no signal.
+                # It cannot rewrite or upgrade the selected owner's STOP.
+                with m.create(self.home / "wait-refusal-fixture-owner.json") as owner:
+                    if original_error is refusal:
+                        owner_waits += 1
+                        try:
+                            owner_code = real_wait(timeout=3)
+                        except BaseException as error:
+                            owner_error = error
+                    else:
+                        owner_error = RuntimeError("synthetic selected refusal not observed; fixture Wait not attempted")
+                    m.write(owner, m.encode({"PID": child.pid, "Waited": owner_error is None, "ReturnCode": owner_code,
+                            "Exception": repr(owner_error) if owner_error else None, "Errno": getattr(owner_error, "errno", None),
+                            "WaitInvocations": owner_waits, "OriginalSelectedWaitUpgraded": False,
+                            "Scope": "separate fixture owner after SYNTHETIC refusal only", "SignalsAttempted": False}))
+        self.write(self.home / "wait-refusal-observation.json", m.encode({"PID": child.pid, "SelectedWaitCalls": waits,
+                   "SelectedSignals": signals, "ProducerReadsAfterRefusal": producer_reads, "OriginalException": repr(original_error),
+                   "FixtureOwnerException": repr(owner_error), "FixtureOwnerReturnCode": owner_code,
+                   "OriginalReportBeforeOwnerSHA256": m.sha(original_before) if original_before is not None else None,
+                   "OriginalReportAfterOwnerSHA256": m.sha((self.home / "wait-refusal-child-wait.json").read_bytes()),
+                   "OriginalWaitUpgraded": False, "CPythonFinalizationNotControlled": True}))
+        self.assertIs(original_error, refusal)
+        self.assertEqual(len(waits), 1)
+        self.assertEqual(signals, [])
+        self.assertEqual(producer_reads, [])
+        self.assertIsNone(owner_error)
+        self.assertEqual(owner_waits, 1)
+        self.assertEqual(owner_code, 0)
+        self.assertEqual((self.home / "wait-refusal-child-wait.json").read_bytes(), original_before)
+        original = m.decode(original_before)
+        self.assertEqual(original["PID"], child.pid)
+        self.assertFalse(original["Waited"])
+        self.assertIsNone(original["ReturnCode"])
+        self.assertTrue(original["STOP"])
+        self.assertEqual(original["Exception"], repr(refusal))
+        self.assertEqual(original["Errno"], errno.EACCES)
+        self.assertFalse((self.home / "wait-refusal-child-timeout-cleanup.json").exists())
 
 
 if __name__ == "__main__":

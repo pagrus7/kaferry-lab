@@ -157,3 +157,13 @@ seams. None establishes Docker/Btrfs/native fixture or product observations.
 Controls are wired into check.sh. Final frozen reviews/native checks, manual
 transport provenance and a complete actual fixture retention/readback chain
 remain pending.
+
+A further review found a test-only exceptional cleanup edge: a denied Wait
+could enter the same kill/re-Wait branch as a timeout. The fixture now records
+refused/unknown Wait as STOP without signals, retry or producer reads; only an
+actual timeout permits separately recorded cleanup. A new synthetic refusal
+control uses a separately named fixture owner for its one saved public Wait,
+keeping the original failed record unchanged. Ordinary CPython finalization is
+outside that explicit-call proof. The21-control host target passed in.747s;
+no actual new platform denial occurred. The preceding479 native84-control pass
+remains labelled479 and does not validate this successor's new refusal branch.
